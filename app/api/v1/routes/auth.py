@@ -30,6 +30,8 @@ async def initiate_clio_auth(
     Initiate Clio OAuth flow.
     Redirects user to Clio authorization page.
     """
+    global _oauth_states
+
     # Generate state for CSRF protection
     state = secrets.token_urlsafe(32)
     _oauth_states[state] = {

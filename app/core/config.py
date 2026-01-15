@@ -20,8 +20,19 @@ class Settings(BaseSettings):
     debug: bool = False
     secret_key: str = "change-me-in-production"
 
-    # Database
+    # Database (raw URL from env, will be transformed)
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/aiwitnessfinder"
+
+    @property
+    def database_url_async(self) -> str:
+        """Get database URL formatted for asyncpg"""
+        url = self.database_url
+        # Railway uses postgres:// or postgresql://, but asyncpg needs postgresql+asyncpg://
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgresql://") and "+asyncpg" not in url:
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return url
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
