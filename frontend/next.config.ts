@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: "standalone",
+  // Keep standard output for Railway Nixpacks
 };
 
 export default nextConfig;
