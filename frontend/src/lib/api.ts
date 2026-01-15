@@ -107,6 +107,21 @@ class ApiClient {
   async getCurrentUser(token: string) {
     return this.request<UserProfile>("/api/v1/auth/me", { token });
   }
+  // Billing
+  async createCheckoutSession(token: string, priceId: string) {
+    const params = new URLSearchParams({ price_id: priceId });
+    return this.request<{ url: string }>(`/api/v1/billing/create-checkout-session?${params}`, {
+      method: "POST",
+      token,
+    });
+  }
+
+  async createPortalSession(token: string) {
+    return this.request<{ url: string }>("/api/v1/billing/portal", {
+      method: "POST",
+      token,
+    });
+  }
 }
 
 // Types

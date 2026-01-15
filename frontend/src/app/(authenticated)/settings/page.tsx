@@ -14,7 +14,30 @@ import { Separator } from "@/components/ui/separator";
 import { useAuthStore } from "@/store/auth";
 
 export default function SettingsPage() {
-  const { userProfile } = useAuthStore();
+  const { userProfile, token } = useAuthStore();
+
+  const handlePortal = async () => {
+    if (!token) return;
+    try {
+      const { url } = await import("@/lib/api").then(m => m.api.createPortalSession(token));
+      window.location.href = url;
+    } catch (e) {
+      console.error(e);
+      // toast.error("Failed to access billing portal");
+    }
+  };
+
+  const handleUpgrade = async () => {
+    if (!token) return;
+    try {
+      // Replace with actual Stripe Price ID from env or constants
+      const priceId = "price_1SpkLsBS2VKrUF7RJJty99ye";
+      const { url } = await import("@/lib/api").then(m => m.api.createCheckoutSession(token, priceId));
+      window.location.href = url;
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -109,10 +132,16 @@ export default function SettingsPage() {
                       : `Full access to all features`}
                   </div>
                 </div>
-                <Button variant="outline">
-                  <ExternalLink className="mr-2 h-4 w-4" />
-                  Manage Billing
-                </Button>
+                {userProfile?.subscription_tier === "free" ? (
+                  <Button onClick={handleUpgrade}>
+                    Upgrade to Pro
+                  </Button>
+                ) : (
+                  <Button variant="outline" onClick={handlePortal}>
+                    <ExternalLink className="mr-2 h-4 w-4" />
+                    Manage Billing
+                  </Button>
+                )}
               </div>
             </div>
             <div className="text-sm text-muted-foreground">

@@ -30,7 +30,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthStore } from "@/store/auth";
-import { api, Matter, MatterListResponse } from "@/lib/api";
+import { api, MatterListResponse } from "@/lib/api";
 import { toast } from "sonner";
 
 export default function MattersPage() {

@@ -31,7 +31,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthStore } from "@/store/auth";
-import { api, Witness, WitnessFilters, WitnessRole, ImportanceLevel, WitnessListResponse } from "@/lib/api";
+import { api, WitnessFilters, WitnessRole, ImportanceLevel, WitnessListResponse } from "@/lib/api";
 
 const roleColors: Record<WitnessRole, string> = {
   plaintiff: "bg-blue-500",
