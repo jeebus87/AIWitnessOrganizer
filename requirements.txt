@@ -23,7 +23,7 @@ extract-msg==0.52.0
 pdf2image==1.17.0
 Pillow==11.1.0
 python-magic==0.4.27
-python-magic-bin==0.4.14  # Windows binary
+# python-magic-bin is Windows-only, not needed on Linux (Railway)
 
 # PDF and Excel Generation
 reportlab==4.2.5
