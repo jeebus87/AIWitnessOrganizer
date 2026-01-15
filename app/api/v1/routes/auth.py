@@ -1,8 +1,10 @@
 """Authentication routes for Clio OAuth and Firebase"""
+import json
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 
+import redis
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,8 +20,33 @@ from app.api.deps import get_current_user, get_current_user_optional
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-# In-memory state storage (use Redis in production)
-_oauth_states = {}
+# Redis client for OAuth state storage
+_redis_client = None
+
+
+def get_redis_client():
+    """Get or create Redis client for OAuth state storage"""
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+    return _redis_client
+
+
+def store_oauth_state(state: str, data: dict, ttl_seconds: int = 600):
+    """Store OAuth state in Redis with TTL (default 10 minutes)"""
+    client = get_redis_client()
+    client.setex(f"oauth_state:{state}", ttl_seconds, json.dumps(data))
+
+
+def get_oauth_state(state: str) -> Optional[dict]:
+    """Get and delete OAuth state from Redis"""
+    client = get_redis_client()
+    key = f"oauth_state:{state}"
+    data = client.get(key)
+    if data:
+        client.delete(key)
+        return json.loads(data)
+    return None
 
 
 @router.get("/clio")
@@ -33,8 +60,6 @@ async def initiate_clio_auth(
     Redirects user to Clio authorization page.
     Pass Firebase token as query param to identify user.
     """
-    global _oauth_states
-
     user_id = None
 
     # Verify Firebase token if provided
@@ -69,17 +94,12 @@ async def initiate_clio_auth(
     else:
         raise HTTPException(status_code=401, detail="Token required")
 
-    # Generate state for CSRF protection
+    # Generate state for CSRF protection and store in Redis
     state = secrets.token_urlsafe(32)
-    _oauth_states[state] = {
+    store_oauth_state(state, {
         "user_id": user_id,
-        "created_at": datetime.utcnow(),
         "redirect_uri": redirect_uri
-    }
-
-    # Clean up old states (older than 10 minutes)
-    cutoff = datetime.utcnow() - timedelta(minutes=10)
-    _oauth_states = {k: v for k, v in _oauth_states.items() if v["created_at"] > cutoff}
+    })
 
     auth_url = get_clio_authorize_url(state=state, redirect_uri=redirect_uri)
     return RedirectResponse(url=auth_url)
@@ -95,8 +115,8 @@ async def clio_callback(
     Handle Clio OAuth callback.
     Exchanges authorization code for tokens and stores them.
     """
-    # Validate state
-    state_data = _oauth_states.pop(state, None)
+    # Validate state from Redis
+    state_data = get_oauth_state(state)
     if not state_data:
         raise HTTPException(
             status_code=400,
