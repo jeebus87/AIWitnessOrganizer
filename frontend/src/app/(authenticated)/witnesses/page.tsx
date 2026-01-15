@@ -31,7 +31,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthStore } from "@/store/auth";
-import { api, Witness, WitnessFilters, WitnessRole, ImportanceLevel } from "@/lib/api";
+import { api, Witness, WitnessFilters, WitnessRole, ImportanceLevel, WitnessListResponse } from "@/lib/api";
 
 const roleColors: Record<WitnessRole, string> = {
   plaintiff: "bg-blue-500",
@@ -59,10 +59,12 @@ export default function WitnessesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filters, setFilters] = useState<WitnessFilters>({});
 
-  const { data: witnesses, isLoading } = useSWR<Witness[]>(
+  const { data: witnessesResponse, isLoading } = useSWR<WitnessListResponse>(
     token ? ["witnesses", token, filters] : null,
     () => api.getWitnesses(token!, filters)
   );
+
+  const witnesses = witnessesResponse?.witnesses;
 
   const filteredWitnesses = witnesses?.filter(
     (witness) =>

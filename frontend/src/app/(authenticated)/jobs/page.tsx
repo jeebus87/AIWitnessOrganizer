@@ -37,7 +37,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthStore } from "@/store/auth";
-import { api, ProcessingJob, JobStatus } from "@/lib/api";
+import { api, ProcessingJob, JobStatus, JobListResponse } from "@/lib/api";
 import { toast } from "sonner";
 
 const statusConfig: Record<JobStatus, { icon: typeof Clock; color: string; label: string }> = {
@@ -62,12 +62,14 @@ export default function JobsPage() {
   const { token } = useAuthStore();
 
   const {
-    data: jobs,
+    data: jobsResponse,
     isLoading,
     mutate,
-  } = useSWR<ProcessingJob[]>(token ? ["jobs", token] : null, () =>
+  } = useSWR<JobListResponse>(token ? ["jobs", token] : null, () =>
     api.getJobs(token!)
   );
+
+  const jobs = jobsResponse?.jobs;
 
   // Auto-refresh for active jobs
   useEffect(() => {

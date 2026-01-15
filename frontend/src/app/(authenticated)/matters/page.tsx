@@ -30,7 +30,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthStore } from "@/store/auth";
-import { api, Matter } from "@/lib/api";
+import { api, Matter, MatterListResponse } from "@/lib/api";
 import { toast } from "sonner";
 
 export default function MattersPage() {
@@ -40,12 +40,14 @@ export default function MattersPage() {
   const [syncing, setSyncing] = useState(false);
 
   const {
-    data: matters,
+    data: mattersResponse,
     isLoading,
     mutate,
-  } = useSWR<Matter[]>(token ? ["matters", token] : null, () =>
+  } = useSWR<MatterListResponse>(token ? ["matters", token] : null, () =>
     api.getMatters(token!)
   );
+
+  const matters = mattersResponse?.matters;
 
   const handleSync = async () => {
     if (!token) return;

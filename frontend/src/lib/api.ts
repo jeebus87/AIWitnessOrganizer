@@ -50,7 +50,7 @@ class ApiClient {
 
   // Matters
   async getMatters(token: string) {
-    return this.request<Matter[]>("/api/v1/matters", { token });
+    return this.request<MatterListResponse>("/api/v1/matters", { token });
   }
 
   async getMatter(id: number, token: string) {
@@ -75,12 +75,12 @@ class ApiClient {
   // Witnesses
   async getWitnesses(token: string, params?: WitnessFilters) {
     const query = params ? "?" + new URLSearchParams(params as Record<string, string>).toString() : "";
-    return this.request<Witness[]>(`/api/v1/witnesses${query}`, { token });
+    return this.request<WitnessListResponse>(`/api/v1/witnesses${query}`, { token });
   }
 
   // Jobs
   async getJobs(token: string) {
-    return this.request<ProcessingJob[]>("/api/v1/jobs", { token });
+    return this.request<JobListResponse>("/api/v1/jobs", { token });
   }
 
   async getJob(id: number, token: string) {
@@ -187,6 +187,27 @@ export interface UserProfile {
   subscription_tier: string;
   clio_connected: boolean;
   created_at: string;
+}
+
+// Paginated response types
+export interface MatterListResponse {
+  matters: Matter[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface WitnessListResponse {
+  witnesses: Witness[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface JobListResponse {
+  jobs: ProcessingJob[];
+  total: number;
 }
 
 export const api = new ApiClient(API_BASE_URL);
