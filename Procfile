@@ -1,2 +1,2 @@
-web: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+web: bash start.sh
 worker: celery -A app.worker.celery_app worker --loglevel=info
