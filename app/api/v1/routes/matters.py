@@ -8,16 +8,17 @@ from sqlalchemy import select, func
 
 from app.core.security import decrypt_token
 from app.db.session import get_db
-from app.db.models import Matter, Document, Witness, ClioIntegration
+from app.db.models import Matter, Document, Witness, ClioIntegration, User
 from app.api.v1.schemas.witnesses import MatterResponse, MatterListResponse, DocumentResponse
 from app.services.clio_client import ClioClient
+from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/matters", tags=["Matters"])
 
 
 @router.get("", response_model=MatterListResponse)
 async def list_matters(
-    user_id: int,  # From authenticated session
+    current_user: User = Depends(get_current_user),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: Optional[str] = None,
@@ -27,7 +28,7 @@ async def list_matters(
     """
     List matters for the current user.
     """
-    query = select(Matter).where(Matter.user_id == user_id)
+    query = select(Matter).where(Matter.user_id == current_user.id)
 
     if search:
         query = query.where(
@@ -91,7 +92,7 @@ async def list_matters(
 @router.get("/{matter_id}", response_model=MatterResponse)
 async def get_matter(
     matter_id: int,
-    user_id: int,  # From authenticated session
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -100,7 +101,7 @@ async def get_matter(
     result = await db.execute(
         select(Matter).where(
             Matter.id == matter_id,
-            Matter.user_id == user_id
+            Matter.user_id == current_user.id
         )
     )
     matter = result.scalar_one_or_none()
@@ -138,7 +139,7 @@ async def get_matter(
 @router.get("/{matter_id}/documents")
 async def list_matter_documents(
     matter_id: int,
-    user_id: int,  # From authenticated session
+    current_user: User = Depends(get_current_user),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db)
@@ -150,7 +151,7 @@ async def list_matter_documents(
     result = await db.execute(
         select(Matter).where(
             Matter.id == matter_id,
-            Matter.user_id == user_id
+            Matter.user_id == current_user.id
         )
     )
     matter = result.scalar_one_or_none()
@@ -202,7 +203,7 @@ async def list_matter_documents(
 
 @router.post("/sync")
 async def sync_matters_from_clio(
-    user_id: int,  # From authenticated session
+    current_user: User = Depends(get_current_user),
     include_archived: bool = False,
     db: AsyncSession = Depends(get_db)
 ):
@@ -212,7 +213,7 @@ async def sync_matters_from_clio(
     # Get Clio integration
     result = await db.execute(
         select(ClioIntegration).where(
-            ClioIntegration.user_id == user_id,
+            ClioIntegration.user_id == current_user.id,
             ClioIntegration.is_active == True
         )
     )
@@ -243,7 +244,7 @@ async def sync_matters_from_clio(
                 # Check if matter exists
                 result = await db.execute(
                     select(Matter).where(
-                        Matter.user_id == user_id,
+                        Matter.user_id == current_user.id,
                         Matter.clio_matter_id == str(matter_data["id"])
                     )
                 )
@@ -259,7 +260,7 @@ async def sync_matters_from_clio(
                 else:
                     # Create new
                     matter = Matter(
-                        user_id=user_id,
+                        user_id=current_user.id,
                         clio_matter_id=str(matter_data["id"]),
                         display_number=matter_data.get("display_number"),
                         description=matter_data.get("description"),

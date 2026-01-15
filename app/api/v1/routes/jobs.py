@@ -7,9 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.session import get_db
-from app.db.models import ProcessingJob, Matter, JobStatus
+from app.db.models import ProcessingJob, Matter, JobStatus, User
 from app.api.v1.schemas.jobs import JobCreateRequest, JobResponse, JobListResponse
 from app.worker.tasks import process_matter, process_full_database
+from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/jobs", tags=["Processing Jobs"])
 
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/jobs", tags=["Processing Jobs"])
 @router.post("", response_model=JobResponse)
 async def create_job(
     request: JobCreateRequest,
-    user_id: int,  # From authenticated session
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -42,7 +43,7 @@ async def create_job(
         result = await db.execute(
             select(Matter).where(
                 Matter.id == request.matter_id,
-                Matter.user_id == user_id
+                Matter.user_id == current_user.id
             )
         )
         matter = result.scalar_one_or_none()
@@ -51,7 +52,7 @@ async def create_job(
 
     # Create job record
     job = ProcessingJob(
-        user_id=user_id,
+        user_id=current_user.id,
         job_type=request.job_type,
         target_matter_id=request.matter_id,
         search_witnesses=request.search_witnesses,
@@ -72,7 +73,7 @@ async def create_job(
     else:
         task = process_full_database.delay(
             job_id=job.id,
-            user_id=user_id,
+            user_id=current_user.id,
             search_targets=request.search_witnesses,
             include_archived=request.include_archived
         )
@@ -86,7 +87,7 @@ async def create_job(
 
 @router.get("", response_model=JobListResponse)
 async def list_jobs(
-    user_id: int,  # From authenticated session
+    current_user: User = Depends(get_current_user),
     status: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -95,7 +96,7 @@ async def list_jobs(
     """
     List processing jobs for the current user.
     """
-    query = select(ProcessingJob).where(ProcessingJob.user_id == user_id)
+    query = select(ProcessingJob).where(ProcessingJob.user_id == current_user.id)
 
     if status:
         query = query.where(ProcessingJob.status == JobStatus(status))
@@ -124,7 +125,7 @@ async def list_jobs(
 @router.get("/{job_id}", response_model=JobResponse)
 async def get_job(
     job_id: int,
-    user_id: int,  # From authenticated session
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -133,7 +134,7 @@ async def get_job(
     result = await db.execute(
         select(ProcessingJob).where(
             ProcessingJob.id == job_id,
-            ProcessingJob.user_id == user_id
+            ProcessingJob.user_id == current_user.id
         )
     )
     job = result.scalar_one_or_none()
@@ -147,7 +148,7 @@ async def get_job(
 @router.post("/{job_id}/cancel")
 async def cancel_job(
     job_id: int,
-    user_id: int,  # From authenticated session
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -156,7 +157,7 @@ async def cancel_job(
     result = await db.execute(
         select(ProcessingJob).where(
             ProcessingJob.id == job_id,
-            ProcessingJob.user_id == user_id
+            ProcessingJob.user_id == current_user.id
         )
     )
     job = result.scalar_one_or_none()

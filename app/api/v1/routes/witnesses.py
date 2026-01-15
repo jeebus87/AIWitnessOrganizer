@@ -8,19 +8,20 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 
 from app.db.session import get_db
-from app.db.models import Witness, Document, Matter, ImportanceLevel, WitnessRole
+from app.db.models import Witness, Document, Matter, ImportanceLevel, WitnessRole, User
 from app.api.v1.schemas.witnesses import (
     WitnessResponse, WitnessListResponse, MatterResponse,
     MatterListResponse, DocumentResponse
 )
 from app.services.export_service import ExportService
+from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/witnesses", tags=["Witnesses"])
 
 
 @router.get("", response_model=WitnessListResponse)
 async def list_witnesses(
-    user_id: int,  # From authenticated session
+    current_user: User = Depends(get_current_user),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     matter_id: Optional[int] = None,
@@ -37,7 +38,7 @@ async def list_witnesses(
         select(Witness)
         .join(Document)
         .join(Matter)
-        .where(Matter.user_id == user_id)
+        .where(Matter.user_id == current_user.id)
         .options(
             selectinload(Witness.document).selectinload(Document.matter)
         )
