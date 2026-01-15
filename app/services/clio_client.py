@@ -331,3 +331,20 @@ async def exchange_code_for_tokens(
         response = await client.post(settings.clio_token_url, data=data)
         response.raise_for_status()
         return response.json()
+
+
+async def get_clio_user_info(access_token: str) -> Dict[str, Any]:
+    """
+    Get the current Clio user's information.
+    Uses the /users/who_am_i endpoint.
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{settings.clio_api_url}/users/who_am_i",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+            }
+        )
+        response.raise_for_status()
+        return response.json().get("data", {})

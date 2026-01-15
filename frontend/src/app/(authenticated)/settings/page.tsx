@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { Link2, Link2Off, ExternalLink, CheckCircle, Loader2 } from "lucide-react";
+import { ExternalLink, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -13,27 +12,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useAuthStore } from "@/store/auth";
-import { api } from "@/lib/api";
-import { toast } from "sonner";
 
 export default function SettingsPage() {
-  const { user, userProfile, fetchUserProfile, token } = useAuthStore();
-  const [disconnecting, setDisconnecting] = useState(false);
-
-  const handleDisconnectClio = async () => {
-    if (!token) return;
-    setDisconnecting(true);
-    try {
-      // This would call an API endpoint to disconnect Clio
-      toast.success("Clio disconnected successfully");
-      await fetchUserProfile();
-    } catch (error) {
-      toast.error("Failed to disconnect Clio");
-      console.error(error);
-    } finally {
-      setDisconnecting(false);
-    }
-  };
+  const { userProfile } = useAuthStore();
 
   return (
     <div className="space-y-6">
@@ -53,13 +34,13 @@ export default function SettingsPage() {
           <CardContent className="space-y-4">
             <div className="grid gap-2">
               <div className="text-sm font-medium">Email</div>
-              <div className="text-muted-foreground">{user?.email || "—"}</div>
+              <div className="text-muted-foreground">{userProfile?.email || "—"}</div>
             </div>
             <Separator />
             <div className="grid gap-2">
               <div className="text-sm font-medium">Display Name</div>
               <div className="text-muted-foreground">
-                {userProfile?.display_name || user?.displayName || "Not set"}
+                {userProfile?.display_name || "Not set"}
               </div>
             </div>
             <Separator />
@@ -78,7 +59,7 @@ export default function SettingsPage() {
           <CardHeader>
             <CardTitle>Clio Integration</CardTitle>
             <CardDescription>
-              Connect your Clio account to sync matters and documents
+              Your Clio account is connected through sign-in
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -100,34 +81,10 @@ export default function SettingsPage() {
                   </div>
                 </div>
               </div>
-              {userProfile?.clio_connected ? (
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-green-500 border-green-500">
-                    <CheckCircle className="mr-1 h-3 w-3" />
-                    Connected
-                  </Badge>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleDisconnectClio}
-                    disabled={disconnecting}
-                  >
-                    {disconnecting ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Link2Off className="mr-2 h-4 w-4" />
-                    )}
-                    Disconnect
-                  </Button>
-                </div>
-              ) : token ? (
-                <Button asChild>
-                  <a href={api.getClioAuthUrl(token)}>
-                    <Link2 className="mr-2 h-4 w-4" />
-                    Connect Clio
-                  </a>
-                </Button>
-              ) : null}
+              <Badge variant="outline" className="text-green-500 border-green-500">
+                <CheckCircle className="mr-1 h-3 w-3" />
+                Connected
+              </Badge>
             </div>
           </CardContent>
         </Card>

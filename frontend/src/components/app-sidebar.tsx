@@ -31,10 +31,10 @@ const navigation = [
 
 export function AppSidebar() {
   const pathname = usePathname();
-  const { user, userProfile, logout, isLoading } = useAuthStore();
+  const { userProfile, logout, isLoading } = useAuthStore();
 
-  const handleLogout = async () => {
-    await logout();
+  const handleLogout = () => {
+    logout();
   };
 
   return (
@@ -76,13 +76,13 @@ export function AppSidebar() {
                   {isLoading ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
-                    (userProfile?.display_name?.[0] || user?.email?.[0] || "U").toUpperCase()
+                    (userProfile?.display_name?.[0] || userProfile?.email?.[0] || "U").toUpperCase()
                   )}
                 </AvatarFallback>
               </Avatar>
               <div className="flex flex-col items-start text-sm">
                 <span className="font-medium">
-                  {userProfile?.display_name || user?.email?.split("@")[0] || "User"}
+                  {userProfile?.display_name || userProfile?.email?.split("@")[0] || "User"}
                 </span>
                 <span className="text-xs text-muted-foreground">
                   {userProfile?.subscription_tier || "Free"}

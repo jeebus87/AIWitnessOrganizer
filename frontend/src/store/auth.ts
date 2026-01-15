@@ -1,110 +1,47 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import {
-  auth,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-  signInWithPopup,
-  googleProvider,
-} from "@/lib/firebase";
-import type { User } from "@/lib/firebase";
 import { api } from "@/lib/api";
 import type { UserProfile } from "@/lib/api";
 
 interface AuthState {
-  user: User | null;
-  userProfile: UserProfile | null;
   token: string | null;
+  userProfile: UserProfile | null;
   isLoading: boolean;
   isHydrated: boolean;
   error: string | null;
-  setUser: (user: User | null) => void;
-  setUserProfile: (profile: UserProfile | null) => void;
   setToken: (token: string | null) => void;
+  setUserProfile: (profile: UserProfile | null) => void;
   setError: (error: string | null) => void;
   setHydrated: (hydrated: boolean) => void;
-  loginWithEmail: (email: string, password: string) => Promise<void>;
-  loginWithGoogle: () => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
-  logout: () => Promise<void>;
-  refreshToken: () => Promise<string | null>;
+  setLoading: (loading: boolean) => void;
+  login: () => void;
+  logout: () => void;
   fetchUserProfile: () => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
-      user: null,
-      userProfile: null,
       token: null,
-      isLoading: true,
+      userProfile: null,
+      isLoading: false,
       isHydrated: false,
       error: null,
 
-      setUser: (user) => set({ user }),
-      setUserProfile: (profile) => set({ userProfile: profile }),
       setToken: (token) => set({ token }),
+      setUserProfile: (profile) => set({ userProfile: profile }),
       setError: (error) => set({ error }),
       setHydrated: (hydrated) => set({ isHydrated: hydrated }),
+      setLoading: (loading) => set({ isLoading: loading }),
 
-      loginWithEmail: async (email, password) => {
-        set({ isLoading: true, error: null });
-        try {
-          const userCredential = await signInWithEmailAndPassword(auth, email, password);
-          const token = await userCredential.user.getIdToken();
-          set({ user: userCredential.user, token, isLoading: false });
-          await get().fetchUserProfile();
-        } catch (error: unknown) {
-          const message = error instanceof Error ? error.message : "Login failed";
-          set({ error: message, isLoading: false });
-          throw error;
-        }
+      login: () => {
+        // Redirect to Clio OAuth
+        window.location.href = api.getLoginUrl();
       },
 
-      loginWithGoogle: async () => {
-        set({ isLoading: true, error: null });
-        try {
-          const userCredential = await signInWithPopup(auth, googleProvider);
-          const token = await userCredential.user.getIdToken();
-          set({ user: userCredential.user, token, isLoading: false });
-          await get().fetchUserProfile();
-        } catch (error: unknown) {
-          const message = error instanceof Error ? error.message : "Google login failed";
-          set({ error: message, isLoading: false });
-          throw error;
-        }
-      },
-
-      register: async (email, password) => {
-        set({ isLoading: true, error: null });
-        try {
-          const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-          const token = await userCredential.user.getIdToken();
-          set({ user: userCredential.user, token, isLoading: false });
-        } catch (error: unknown) {
-          const message = error instanceof Error ? error.message : "Registration failed";
-          set({ error: message, isLoading: false });
-          throw error;
-        }
-      },
-
-      logout: async () => {
-        await signOut(auth);
-        set({ user: null, token: null, userProfile: null });
-      },
-
-      refreshToken: async () => {
-        const { user } = get();
-        if (!user) return null;
-        try {
-          const token = await user.getIdToken(true);
-          set({ token });
-          return token;
-        } catch {
-          return null;
-        }
+      logout: () => {
+        set({ token: null, userProfile: null });
+        window.location.href = "/login";
       },
 
       fetchUserProfile: async () => {
@@ -115,29 +52,26 @@ export const useAuthStore = create<AuthState>()(
           set({ userProfile: profile });
         } catch (error) {
           console.error("Failed to fetch user profile:", error);
+          // If token is invalid, clear it
+          set({ token: null, userProfile: null });
         }
       },
     }),
     {
       name: "auth-storage",
       partialize: (state) => ({ token: state.token }),
-      onRehydrateStorage: (state) => {
-        return () => {
+      onRehydrateStorage: () => {
+        return (state) => {
           state?.setHydrated(true);
+          // Fetch user profile after hydration if token exists
+          if (state?.token) {
+            state.setLoading(true);
+            state.fetchUserProfile().finally(() => {
+              state.setLoading(false);
+            });
+          }
         };
       },
     }
   )
 );
-
-// Initialize auth listener
-if (typeof window !== "undefined") {
-  onAuthStateChanged(auth, async (user) => {
-    if (user) {
-      const token = await user.getIdToken();
-      useAuthStore.setState({ user, token, isLoading: false });
-    } else {
-      useAuthStore.setState({ user: null, token: null, isLoading: false });
-    }
-  });
-}

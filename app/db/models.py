@@ -53,11 +53,11 @@ class ImportanceLevel(str, PyEnum):
 
 
 class User(Base):
-    """User model - linked to Firebase Auth"""
+    """User model - linked to Clio OAuth"""
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    firebase_uid = Column(String(128), unique=True, nullable=False, index=True)
+    clio_user_id = Column(String(128), unique=True, nullable=False, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
     display_name = Column(String(255), nullable=True)
     subscription_tier = Column(

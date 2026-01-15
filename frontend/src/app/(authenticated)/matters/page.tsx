@@ -3,7 +3,6 @@
 import { useState } from "react";
 import useSWR from "swr";
 import {
-  Briefcase,
   RefreshCw,
   Play,
   Search,
@@ -35,7 +34,7 @@ import { api, Matter } from "@/lib/api";
 import { toast } from "sonner";
 
 export default function MattersPage() {
-  const { token, userProfile } = useAuthStore();
+  const { token } = useAuthStore();
   const [searchQuery, setSearchQuery] = useState("");
   const [processingMatterId, setProcessingMatterId] = useState<number | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -84,8 +83,6 @@ export default function MattersPage() {
       matter.client_name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const isClioConnected = userProfile?.clio_connected;
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -95,138 +92,107 @@ export default function MattersPage() {
             Manage your legal matters synced from Clio
           </p>
         </div>
-        <div className="flex gap-2">
-          {isClioConnected ? (
-            <Button onClick={handleSync} disabled={syncing}>
-              {syncing ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
-              )}
-              Sync with Clio
-            </Button>
-          ) : token ? (
-            <Button asChild>
-              <a href={api.getClioAuthUrl(token)}>Connect Clio</a>
-            </Button>
-          ) : null}
-        </div>
+        <Button onClick={handleSync} disabled={syncing}>
+          {syncing ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <RefreshCw className="mr-2 h-4 w-4" />
+          )}
+          Sync with Clio
+        </Button>
       </div>
 
-      {!isClioConnected && (
-        <Card className="border-dashed">
-          <CardHeader className="text-center">
-            <CardTitle>Connect to Clio</CardTitle>
-            <CardDescription>
-              Connect your Clio account to sync matters and start extracting witnesses
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex justify-center">
-            {token && (
-              <Button asChild size="lg">
-                <a href={api.getClioAuthUrl(token)}>
-                  <Briefcase className="mr-2 h-4 w-4" />
-                  Connect Clio Account
-                </a>
-              </Button>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {isClioConnected && (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle>Your Matters</CardTitle>
-                <CardDescription>
-                  {matters?.length || 0} matters synced from Clio
-                </CardDescription>
-              </div>
-              <div className="relative w-64">
-                <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search matters..."
-                  className="pl-8"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
-              </div>
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>Your Matters</CardTitle>
+              <CardDescription>
+                {matters?.length || 0} matters synced from Clio
+              </CardDescription>
             </div>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="space-y-2">
-                {[1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-12 w-full" />
-                ))}
-              </div>
-            ) : filteredMatters?.length === 0 ? (
-              <div className="py-8 text-center text-muted-foreground">
-                {searchQuery
-                  ? "No matters match your search"
-                  : "No matters synced yet. Click 'Sync with Clio' to get started."}
-              </div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Matter #</TableHead>
-                    <TableHead>Client</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Practice Area</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
+            <div className="relative w-64">
+              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search matters..."
+                className="pl-8"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="space-y-2">
+              {[1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </div>
+          ) : filteredMatters?.length === 0 ? (
+            <div className="py-8 text-center text-muted-foreground">
+              {searchQuery
+                ? "No matters match your search"
+                : "No matters synced yet. Click 'Sync with Clio' to get started."}
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Matter #</TableHead>
+                  <TableHead>Client</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Practice Area</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredMatters?.map((matter) => (
+                  <TableRow key={matter.id}>
+                    <TableCell className="font-medium">
+                      {matter.display_number || `#${matter.id}`}
+                    </TableCell>
+                    <TableCell>{matter.client_name || "—"}</TableCell>
+                    <TableCell className="max-w-xs truncate">
+                      {matter.description || "No description"}
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          matter.status === "Open" ? "default" : "secondary"
+                        }
+                      >
+                        {matter.status === "Open" ? (
+                          <CheckCircle className="mr-1 h-3 w-3" />
+                        ) : (
+                          <XCircle className="mr-1 h-3 w-3" />
+                        )}
+                        {matter.status || "Unknown"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{matter.practice_area || "—"}</TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        size="sm"
+                        onClick={() => handleProcess(matter.id)}
+                        disabled={processingMatterId === matter.id}
+                      >
+                        {processingMatterId === matter.id ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <Play className="mr-2 h-4 w-4" />
+                        )}
+                        Process
+                      </Button>
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredMatters?.map((matter) => (
-                    <TableRow key={matter.id}>
-                      <TableCell className="font-medium">
-                        {matter.display_number || `#${matter.id}`}
-                      </TableCell>
-                      <TableCell>{matter.client_name || "—"}</TableCell>
-                      <TableCell className="max-w-xs truncate">
-                        {matter.description || "No description"}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            matter.status === "Open" ? "default" : "secondary"
-                          }
-                        >
-                          {matter.status === "Open" ? (
-                            <CheckCircle className="mr-1 h-3 w-3" />
-                          ) : (
-                            <XCircle className="mr-1 h-3 w-3" />
-                          )}
-                          {matter.status || "Unknown"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{matter.practice_area || "—"}</TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          size="sm"
-                          onClick={() => handleProcess(matter.id)}
-                          disabled={processingMatterId === matter.id}
-                        >
-                          {processingMatterId === matter.id ? (
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          ) : (
-                            <Play className="mr-2 h-4 w-4" />
-                          )}
-                          Process
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
-      )}
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

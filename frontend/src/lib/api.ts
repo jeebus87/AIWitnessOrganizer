@@ -44,8 +44,8 @@ class ApiClient {
   }
 
   // Auth
-  getClioAuthUrl(token: string) {
-    return `${this.baseUrl}/api/v1/auth/clio?token=${encodeURIComponent(token)}`;
+  getLoginUrl() {
+    return `${this.baseUrl}/api/v1/auth/clio`;
   }
 
   // Matters

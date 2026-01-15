@@ -14,6 +14,9 @@ celery==5.4.0
 redis==5.2.1
 flower==2.0.1
 
+# Authentication
+PyJWT==2.8.0
+
 # AWS Bedrock
 boto3==1.35.93
 botocore==1.35.93
@@ -35,7 +38,6 @@ XlsxWriter==3.2.0
 cryptography==44.0.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-firebase-admin==6.6.0
 
 # HTTP Client
 httpx==0.28.1

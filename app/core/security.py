@@ -1,10 +1,15 @@
 """Security utilities for token encryption and authentication"""
-import os
+from datetime import datetime, timedelta
 from typing import Optional
 from cryptography.fernet import Fernet, InvalidToken
 from passlib.context import CryptContext
+import jwt
 
 from app.core.config import settings
+
+# JWT settings
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_DAYS = 7
 
 
 # Password hashing context
@@ -84,3 +89,43 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def generate_fernet_key() -> str:
     """Generate a new Fernet encryption key"""
     return Fernet.generate_key().decode("utf-8")
+
+
+def create_access_token(user_id: int, email: str) -> str:
+    """
+    Create a JWT access token for a user.
+
+    Args:
+        user_id: The user's database ID
+        email: The user's email
+
+    Returns:
+        JWT token string
+    """
+    expire = datetime.utcnow() + timedelta(days=JWT_EXPIRATION_DAYS)
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "exp": expire,
+        "iat": datetime.utcnow(),
+    }
+    return jwt.encode(payload, settings.secret_key, algorithm=JWT_ALGORITHM)
+
+
+def verify_access_token(token: str) -> Optional[dict]:
+    """
+    Verify and decode a JWT access token.
+
+    Args:
+        token: The JWT token string
+
+    Returns:
+        The decoded payload dict, or None if invalid
+    """
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[JWT_ALGORITHM])
+        return payload
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None

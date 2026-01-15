@@ -11,13 +11,13 @@ export default function AuthenticatedLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
-  const { user, isLoading, isHydrated } = useAuthStore();
+  const { token, isLoading, isHydrated } = useAuthStore();
 
   useEffect(() => {
-    if (isHydrated && !isLoading && !user) {
+    if (isHydrated && !isLoading && !token) {
       router.push("/login");
     }
-  }, [user, isLoading, isHydrated, router]);
+  }, [token, isLoading, isHydrated, router]);
 
   if (!isHydrated || isLoading) {
     return (
@@ -27,7 +27,7 @@ export default function AuthenticatedLayout({
     );
   }
 
-  if (!user) {
+  if (!token) {
     return null;
   }
 
