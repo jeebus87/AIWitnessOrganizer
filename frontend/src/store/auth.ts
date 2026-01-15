@@ -8,9 +8,10 @@ import {
   onAuthStateChanged,
   signInWithPopup,
   googleProvider,
-  User,
 } from "@/lib/firebase";
-import { api, UserProfile } from "@/lib/api";
+import type { User } from "@/lib/firebase";
+import { api } from "@/lib/api";
+import type { UserProfile } from "@/lib/api";
 
 interface AuthState {
   user: User | null;

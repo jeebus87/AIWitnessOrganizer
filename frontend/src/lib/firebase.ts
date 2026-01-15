@@ -7,8 +7,8 @@ import {
   onAuthStateChanged,
   GoogleAuthProvider,
   signInWithPopup,
-  User,
 } from "firebase/auth";
+import type { User } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -32,5 +32,6 @@ export {
   onAuthStateChanged,
   signInWithPopup,
   googleProvider,
-  User,
 };
+
+export type { User };
