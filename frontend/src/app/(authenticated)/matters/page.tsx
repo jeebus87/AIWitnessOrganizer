@@ -105,11 +105,11 @@ export default function MattersPage() {
               )}
               Sync with Clio
             </Button>
-          ) : (
+          ) : token ? (
             <Button asChild>
-              <a href={api.getClioAuthUrl()}>Connect Clio</a>
+              <a href={api.getClioAuthUrl(token)}>Connect Clio</a>
             </Button>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -122,12 +122,14 @@ export default function MattersPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="flex justify-center">
-            <Button asChild size="lg">
-              <a href={api.getClioAuthUrl()}>
-                <Briefcase className="mr-2 h-4 w-4" />
-                Connect Clio Account
-              </a>
-            </Button>
+            {token && (
+              <Button asChild size="lg">
+                <a href={api.getClioAuthUrl(token)}>
+                  <Briefcase className="mr-2 h-4 w-4" />
+                  Connect Clio Account
+                </a>
+              </Button>
+            )}
           </CardContent>
         </Card>
       )}

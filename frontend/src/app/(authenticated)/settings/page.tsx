@@ -120,14 +120,14 @@ export default function SettingsPage() {
                     Disconnect
                   </Button>
                 </div>
-              ) : (
+              ) : token ? (
                 <Button asChild>
-                  <a href={api.getClioAuthUrl()}>
+                  <a href={api.getClioAuthUrl(token)}>
                     <Link2 className="mr-2 h-4 w-4" />
                     Connect Clio
                   </a>
                 </Button>
-              )}
+              ) : null}
             </div>
           </CardContent>
         </Card>

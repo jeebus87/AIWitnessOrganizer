@@ -14,6 +14,7 @@ from app.db.session import get_db
 from app.db.models import User, ClioIntegration
 from app.services.clio_client import get_clio_authorize_url, exchange_code_for_tokens
 from app.api.v1.schemas.auth import ClioAuthCallback, ClioAuthResponse, UserResponse
+from app.api.deps import get_current_user, get_current_user_optional
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -24,13 +25,49 @@ _oauth_states = {}
 @router.get("/clio")
 async def initiate_clio_auth(
     redirect_uri: Optional[str] = None,
-    user_id: Optional[int] = None  # From authenticated session
+    token: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Initiate Clio OAuth flow.
     Redirects user to Clio authorization page.
+    Pass Firebase token as query param to identify user.
     """
     global _oauth_states
+
+    user_id = None
+
+    # Verify Firebase token if provided
+    if token:
+        try:
+            from app.api.deps import get_firebase_app
+            from firebase_admin import auth as firebase_auth
+
+            get_firebase_app()
+            decoded_token = firebase_auth.verify_id_token(token)
+            firebase_uid = decoded_token["uid"]
+
+            # Get or create user
+            result = await db.execute(
+                select(User).where(User.firebase_uid == firebase_uid)
+            )
+            user = result.scalar_one_or_none()
+
+            if not user:
+                user = User(
+                    firebase_uid=firebase_uid,
+                    email=decoded_token.get("email", ""),
+                    display_name=decoded_token.get("name", decoded_token.get("email", ""))
+                )
+                db.add(user)
+                await db.commit()
+                await db.refresh(user)
+
+            user_id = user.id
+        except Exception as e:
+            raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+    else:
+        raise HTTPException(status_code=401, detail="Token required")
 
     # Generate state for CSRF protection
     state = secrets.token_urlsafe(32)
