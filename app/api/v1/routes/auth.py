@@ -173,12 +173,12 @@ async def clio_callback(
         await db.commit()
 
         # Redirect to frontend with success
-        frontend_url = f"{settings.frontend_url}/settings/integrations?clio=success"
+        frontend_url = f"{settings.frontend_url}/settings?clio=success"
         return RedirectResponse(url=frontend_url)
 
     except Exception as e:
         # Redirect to frontend with error
-        frontend_url = f"{settings.frontend_url}/settings/integrations?clio=error&message={str(e)}"
+        frontend_url = f"{settings.frontend_url}/settings?clio=error&message={str(e)}"
         return RedirectResponse(url=frontend_url)
 
 
