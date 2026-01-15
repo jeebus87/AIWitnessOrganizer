@@ -16,8 +16,10 @@ from app.db import models  # noqa: F401 - ensures models are registered
 # Alembic Config object
 config = context.config
 
-# Set database URL from settings
-config.set_main_option("sqlalchemy.url", settings.database_url.replace("+asyncpg", ""))
+# Set database URL from settings (use sync URL for alembic)
+# Convert async URL to sync: postgresql+asyncpg:// -> postgresql://
+sync_url = settings.database_url_async.replace("+asyncpg", "")
+config.set_main_option("sqlalchemy.url", sync_url)
 
 # Interpret the config file for Python logging
 if config.config_file_name is not None:
