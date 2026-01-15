@@ -5,7 +5,11 @@ nixPkgs = ["nodejs_22"]
 cmds = ["npm ci"]
 
 [phases.build]
-cmds = ["npm run build"]
+cmds = [
+  "npm run build",
+  "cp -r public .next/standalone/",
+  "cp -r .next/static .next/standalone/.next/"
+]
 
 [start]
-cmd = "npm start"
+cmd = "node .next/standalone/server.js"
