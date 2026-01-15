@@ -145,6 +145,41 @@ async def disconnect_clio(
     return {"success": True, "message": "Clio disconnected"}
 
 
+@router.post("/clio/deauthorize")
+async def clio_deauthorize_webhook(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Webhook called by Clio when a user revokes app access.
+    Clio sends the user's Clio ID in the request body.
+    """
+    try:
+        body = await request.json()
+        clio_user_id = body.get("user_id") or body.get("subject")
+
+        if clio_user_id:
+            # Find and deactivate integrations for this Clio user
+            result = await db.execute(
+                select(ClioIntegration).where(
+                    ClioIntegration.clio_user_id == str(clio_user_id)
+                )
+            )
+            integrations = result.scalars().all()
+
+            for integration in integrations:
+                integration.is_active = False
+                integration.access_token_encrypted = None
+                integration.refresh_token_encrypted = None
+
+            await db.commit()
+
+        return {"success": True}
+    except Exception:
+        # Always return 200 to Clio even on errors
+        return {"success": True}
+
+
 @router.get("/me", response_model=UserResponse)
 async def get_current_user(
     user_id: int,  # From authenticated session
