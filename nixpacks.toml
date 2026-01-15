@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["python311", "libmagic", "poppler_utils", "tesseract"]
+
+[phases.build]
+cmds = ["pip install -r requirements.txt"]
+
+[phases.start]
+procfile = "start.sh"
