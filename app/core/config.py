@@ -68,7 +68,17 @@ class Settings(BaseSettings):
 
     # CORS
     frontend_url: str = "http://localhost:3000"
-    cors_origins: List[str] = ["http://localhost:3000", "http://localhost:8000"]
+
+    @property
+    def cors_origins(self) -> List[str]:
+        """Build CORS origins list including the frontend URL"""
+        origins = [
+            "http://localhost:3000",
+            "http://localhost:8000",
+        ]
+        if self.frontend_url and self.frontend_url not in origins:
+            origins.append(self.frontend_url)
+        return origins
 
     @property
     def clio_authorize_url(self) -> str:
