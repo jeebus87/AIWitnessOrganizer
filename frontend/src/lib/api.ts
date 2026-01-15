@@ -1,0 +1,192 @@
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+interface ApiOptions {
+  method?: string;
+  body?: unknown;
+  token?: string;
+}
+
+class ApiClient {
+  private baseUrl: string;
+
+  constructor(baseUrl: string) {
+    this.baseUrl = baseUrl;
+  }
+
+  private async request<T>(endpoint: string, options: ApiOptions = {}): Promise<T> {
+    const { method = "GET", body, token } = options;
+
+    const headers: HeadersInit = {
+      "Content-Type": "application/json",
+    };
+
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: "Unknown error" }));
+      throw new Error(error.detail || `API error: ${response.status}`);
+    }
+
+    return response.json();
+  }
+
+  // Health check
+  async health() {
+    return this.request<{ status: string; version: string; environment: string }>("/health");
+  }
+
+  // Auth
+  getClioAuthUrl() {
+    return `${this.baseUrl}/api/v1/auth/clio`;
+  }
+
+  // Matters
+  async getMatters(token: string) {
+    return this.request<Matter[]>("/api/v1/matters", { token });
+  }
+
+  async getMatter(id: number, token: string) {
+    return this.request<Matter>(`/api/v1/matters/${id}`, { token });
+  }
+
+  async syncMatters(token: string) {
+    return this.request<{ success: boolean; synced: number }>("/api/v1/matters/sync", {
+      method: "POST",
+      token,
+    });
+  }
+
+  async processMatter(id: number, token: string, searchWitnesses?: string[]) {
+    return this.request<ProcessingJob>(`/api/v1/matters/${id}/process`, {
+      method: "POST",
+      token,
+      body: { search_witnesses: searchWitnesses },
+    });
+  }
+
+  // Witnesses
+  async getWitnesses(token: string, params?: WitnessFilters) {
+    const query = params ? "?" + new URLSearchParams(params as Record<string, string>).toString() : "";
+    return this.request<Witness[]>(`/api/v1/witnesses${query}`, { token });
+  }
+
+  // Jobs
+  async getJobs(token: string) {
+    return this.request<ProcessingJob[]>("/api/v1/jobs", { token });
+  }
+
+  async getJob(id: number, token: string) {
+    return this.request<ProcessingJob>(`/api/v1/jobs/${id}`, { token });
+  }
+
+  async cancelJob(id: number, token: string) {
+    return this.request<{ success: boolean }>(`/api/v1/jobs/${id}/cancel`, {
+      method: "POST",
+      token,
+    });
+  }
+
+  // Exports
+  getExportPdfUrl(jobId: number) {
+    return `${this.baseUrl}/api/v1/jobs/${jobId}/export/pdf`;
+  }
+
+  getExportExcelUrl(jobId: number) {
+    return `${this.baseUrl}/api/v1/jobs/${jobId}/export/excel`;
+  }
+
+  // User
+  async getCurrentUser(token: string) {
+    return this.request<UserProfile>("/api/v1/auth/me", { token });
+  }
+}
+
+// Types
+export interface Matter {
+  id: number;
+  clio_matter_id: string;
+  display_number: string;
+  description: string;
+  status: string;
+  practice_area: string;
+  client_name: string;
+  last_synced_at: string;
+  created_at: string;
+}
+
+export interface Witness {
+  id: number;
+  document_id: number;
+  full_name: string;
+  role: WitnessRole;
+  importance: ImportanceLevel;
+  observation: string;
+  source_quote: string;
+  context: string;
+  email: string;
+  phone: string;
+  address: string;
+  confidence_score: number;
+  created_at: string;
+}
+
+export type WitnessRole =
+  | "plaintiff"
+  | "defendant"
+  | "eyewitness"
+  | "expert"
+  | "attorney"
+  | "physician"
+  | "police_officer"
+  | "family_member"
+  | "colleague"
+  | "bystander"
+  | "mentioned"
+  | "other";
+
+export type ImportanceLevel = "high" | "medium" | "low";
+
+export type JobStatus = "pending" | "processing" | "completed" | "failed" | "cancelled";
+
+export interface ProcessingJob {
+  id: number;
+  user_id: number;
+  celery_task_id: string;
+  job_type: string;
+  target_matter_id: number;
+  status: JobStatus;
+  total_documents: number;
+  processed_documents: number;
+  failed_documents: number;
+  total_witnesses_found: number;
+  error_message: string;
+  started_at: string;
+  completed_at: string;
+  created_at: string;
+}
+
+export interface WitnessFilters {
+  matter_id?: string;
+  role?: WitnessRole;
+  importance?: ImportanceLevel;
+  search?: string;
+}
+
+export interface UserProfile {
+  id: number;
+  email: string;
+  display_name: string;
+  subscription_tier: string;
+  clio_connected: boolean;
+  created_at: string;
+}
+
+export const api = new ApiClient(API_BASE_URL);
