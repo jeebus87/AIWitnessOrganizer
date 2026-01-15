@@ -107,7 +107,7 @@ async def list_witnesses(
 @router.get("/{witness_id}", response_model=WitnessResponse)
 async def get_witness(
     witness_id: int,
-    user_id: int,  # From authenticated session
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -119,7 +119,7 @@ async def get_witness(
         .join(Matter)
         .where(
             Witness.id == witness_id,
-            Matter.user_id == user_id
+            Matter.user_id == current_user.id
         )
         .options(
             selectinload(Witness.document).selectinload(Document.matter)
@@ -153,7 +153,7 @@ async def get_witness(
 
 @router.get("/export/pdf")
 async def export_witnesses_pdf(
-    user_id: int,  # From authenticated session
+    current_user: User = Depends(get_current_user),
     matter_id: Optional[int] = None,
     importance: Optional[List[str]] = Query(None),
     db: AsyncSession = Depends(get_db)
@@ -166,7 +166,7 @@ async def export_witnesses_pdf(
         select(Witness)
         .join(Document)
         .join(Matter)
-        .where(Matter.user_id == user_id)
+        .where(Matter.user_id == current_user.id)
         .options(
             selectinload(Witness.document).selectinload(Document.matter)
         )
@@ -228,7 +228,7 @@ async def export_witnesses_pdf(
 
 @router.get("/export/excel")
 async def export_witnesses_excel(
-    user_id: int,  # From authenticated session
+    current_user: User = Depends(get_current_user),
     matter_id: Optional[int] = None,
     importance: Optional[List[str]] = Query(None),
     db: AsyncSession = Depends(get_db)
@@ -241,7 +241,7 @@ async def export_witnesses_excel(
         select(Witness)
         .join(Document)
         .join(Matter)
-        .where(Matter.user_id == user_id)
+        .where(Matter.user_id == current_user.id)
         .options(
             selectinload(Witness.document).selectinload(Document.matter)
         )
