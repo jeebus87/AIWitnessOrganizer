@@ -279,7 +279,7 @@ async def sync_matters_from_clio(
 
                 if matter:
                     # Update existing - use direct SQL UPDATE to bypass ORM tracking issues
-                    await db.execute(
+                    result = await db.execute(
                         update(Matter)
                         .where(Matter.id == matter.id)
                         .values(
@@ -292,7 +292,11 @@ async def sync_matters_from_clio(
                         )
                     )
                     if synced_count < 3:
-                        print(f"DEBUG DB UPDATE (SQL): id={matter.id}, status={status_name}, client={client_name}")
+                        print(f"DEBUG DB UPDATE (SQL): id={matter.id}, status={status_name}, rows_affected={result.rowcount}")
+                        # Verify the update worked by re-querying
+                        verify = await db.execute(select(Matter.status, Matter.client_name).where(Matter.id == matter.id))
+                        row = verify.first()
+                        print(f"DEBUG VERIFY: id={matter.id}, status_in_db={row[0] if row else 'NO ROW'}, client_in_db={row[1] if row else 'NO ROW'}")
                 else:
                     # Create new
                     matter = Matter(
