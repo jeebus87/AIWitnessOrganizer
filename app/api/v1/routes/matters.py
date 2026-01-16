@@ -1,8 +1,11 @@
 """Matter routes for syncing and browsing Clio matters"""
+import logging
 from typing import Optional
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update, delete
 
@@ -217,10 +220,12 @@ async def sync_matters_from_clio(
     """
     # Clear existing matters if requested
     if clear_existing:
+        logger.info(f"Clearing existing matters for user {current_user.id}")
         await db.execute(
             delete(Matter).where(Matter.user_id == current_user.id)
         )
         await db.commit()
+        logger.info("Existing matters cleared")
 
     # Get Clio integration
     result = await db.execute(
@@ -311,10 +316,12 @@ async def sync_matters_from_clio(
                 if synced_count % 100 == 0:
                     await db.flush()
                     await db.commit()
+                    logger.info(f"Synced {synced_count} matters...")
 
             # Final commit for remaining items
             await db.flush()
             await db.commit()
+            logger.info(f"Sync complete: {synced_count} matters synced")
 
         return {
             "success": True,
