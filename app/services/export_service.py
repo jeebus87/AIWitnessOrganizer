@@ -263,13 +263,24 @@ class ExportService:
             if len(observation) > 150:
                 observation = observation[:147] + "..."
 
-            # Format contact info
+            # Format contact info as: [address], [phone], and [email]
             contact_parts = []
-            if w.get("email"):
-                contact_parts.append(w["email"])
+            if w.get("address"):
+                contact_parts.append(w["address"])
             if w.get("phone"):
                 contact_parts.append(w["phone"])
-            contact = "\n".join(contact_parts) if contact_parts else "-"
+            if w.get("email"):
+                contact_parts.append(w["email"])
+
+            if contact_parts:
+                if len(contact_parts) == 1:
+                    contact = contact_parts[0]
+                elif len(contact_parts) == 2:
+                    contact = f"{contact_parts[0]} and {contact_parts[1]}"
+                else:
+                    contact = f"{contact_parts[0]}, {contact_parts[1]}, and {contact_parts[2]}"
+            else:
+                contact = "Contact info unknown at this time"
 
             row = [
                 Paragraph(w.get("full_name", "Unknown"), self.styles["WitnessName"]),
