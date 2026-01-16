@@ -28,12 +28,20 @@ Base = declarative_base()
 
 
 async def get_db() -> AsyncSession:
-    """Dependency for getting database sessions"""
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
+    """Dependency for getting database sessions.
+
+    Auto-commits after the endpoint returns successfully.
+    Rolls back on exception.
+    """
+    session = AsyncSessionLocal()
+    try:
+        yield session
+        await session.commit()  # Auto-commit after successful endpoint
+    except Exception:
+        await session.rollback()
+        raise
+    finally:
+        await session.close()
 
 
 async def init_db():
