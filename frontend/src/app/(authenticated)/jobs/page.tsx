@@ -98,6 +98,37 @@ export default function JobsPage() {
     }
   };
 
+  const handleExport = async (jobId: number, format: "pdf" | "excel") => {
+    if (!token) return;
+    try {
+      const url = format === "pdf"
+        ? api.getExportPdfUrl(jobId)
+        : api.getExportExcelUrl(jobId);
+
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) {
+        throw new Error("Export failed");
+      }
+
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = `witnesses-job-${jobId}.${format === "pdf" ? "pdf" : "xlsx"}`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(downloadUrl);
+      document.body.removeChild(a);
+      toast.success(`${format.toUpperCase()} downloaded`);
+    } catch (error) {
+      toast.error(`Failed to export ${format.toUpperCase()}`);
+      console.error(error);
+    }
+  };
+
   const activeJobs = jobs?.filter(
     (job) => job.status === "pending" || job.status === "processing"
   ).length;
@@ -250,25 +281,13 @@ export default function JobsPage() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                              <DropdownMenuItem asChild>
-                                <a
-                                  href={api.getExportPdfUrl(job.id)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                >
-                                  <FileText className="mr-2 h-4 w-4" />
-                                  Download PDF
-                                </a>
+                              <DropdownMenuItem onClick={() => handleExport(job.id, "pdf")}>
+                                <FileText className="mr-2 h-4 w-4" />
+                                Download PDF
                               </DropdownMenuItem>
-                              <DropdownMenuItem asChild>
-                                <a
-                                  href={api.getExportExcelUrl(job.id)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                >
-                                  <FileSpreadsheet className="mr-2 h-4 w-4" />
-                                  Download Excel
-                                </a>
+                              <DropdownMenuItem onClick={() => handleExport(job.id, "excel")}>
+                                <FileSpreadsheet className="mr-2 h-4 w-4" />
+                                Download Excel
                               </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
