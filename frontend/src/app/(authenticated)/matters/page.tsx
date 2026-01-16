@@ -53,7 +53,7 @@ export default function MattersPage() {
     if (!token) return;
     setSyncing(true);
     try {
-      const result = await api.syncMatters(token, true); // Clear existing and re-sync
+      const result = await api.syncMatters(token);
       toast.success(`Synced ${result.matters_synced} matters from Clio`);
       mutate();
     } catch (error: any) {
@@ -112,7 +112,7 @@ export default function MattersPage() {
             <div>
               <CardTitle>Your Matters</CardTitle>
               <CardDescription>
-                {matters?.length || 0} matters synced from Clio
+                {mattersResponse?.total || 0} matters synced from Clio
               </CardDescription>
             </div>
             <div className="relative w-64">
