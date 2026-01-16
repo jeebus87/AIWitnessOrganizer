@@ -242,6 +242,10 @@ async def sync_matters_from_clio(
             synced_count = 0
 
             async for matter_data in clio.get_matters(status=status):
+                # Debug: Log first few matters to see what Clio returns
+                if synced_count < 3:
+                    print(f"DEBUG matter_data: {matter_data}")
+
                 # Check if matter exists
                 result = await db.execute(
                     select(Matter).where(
@@ -256,6 +260,7 @@ async def sync_matters_from_clio(
                     matter.display_number = matter_data.get("display_number")
                     matter.description = matter_data.get("description")
                     matter.status = matter_data.get("status")
+                    matter.practice_area = matter_data.get("practice_area")
                     matter.client_name = matter_data.get("client", {}).get("name")
                     matter.last_synced_at = datetime.utcnow()
                 else:
@@ -266,6 +271,7 @@ async def sync_matters_from_clio(
                         display_number=matter_data.get("display_number"),
                         description=matter_data.get("description"),
                         status=matter_data.get("status"),
+                        practice_area=matter_data.get("practice_area"),
                         client_name=matter_data.get("client", {}).get("name"),
                         last_synced_at=datetime.utcnow()
                     )
