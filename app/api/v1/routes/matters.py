@@ -287,8 +287,8 @@ async def sync_matters_from_clio(
     """
     print(f"SYNC: Starting sync, clear_existing={clear_existing}, include_archived={include_archived}")
 
-    # Clear existing matters if requested
-    if clear_existing:
+    # Always clear existing matters to ensure clean sync (removes matters without clients from previous syncs)
+    if True:  # Always clear
         print(f"SYNC: Clearing existing matters for user {current_user.id}")
         await db.execute(
             delete(Matter).where(Matter.user_id == current_user.id)
