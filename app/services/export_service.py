@@ -253,7 +253,7 @@ class ExportService:
             return elements
 
         # Table data - match Excel columns
-        headers = ["Witness Name", "Role", "Importance", "Observation", "Source Quote", "Contact", "Confidence"]
+        headers = ["Witness Name", "Role", "Importance", "Observation", "Source Quote", "Source Document", "Contact", "Confidence"]
 
         data = [headers]
 
@@ -261,6 +261,7 @@ class ExportService:
             # Full observation (no truncation)
             observation = w.get("observation", "") or ""
             source_quote = w.get("source_quote", "") or ""
+            source_doc = w.get("document_filename", "") or ""
 
             # Format contact info as: [address], [phone], and [email]
             contact_parts = []
@@ -290,13 +291,14 @@ class ExportService:
                 w.get("importance", "LOW"),
                 Paragraph(observation, self.styles["Observation"]),
                 Paragraph(source_quote, self.styles["Observation"]),
+                Paragraph(source_doc, self.styles["Observation"]),
                 Paragraph(contact, self.styles["Observation"]),
                 confidence
             ]
             data.append(row)
 
-        # Create table - adjusted column widths for 7 columns
-        col_widths = [1.2 * inch, 0.8 * inch, 0.7 * inch, 2.5 * inch, 2 * inch, 2 * inch, 0.6 * inch]
+        # Create table - adjusted column widths for 8 columns
+        col_widths = [1.1 * inch, 0.7 * inch, 0.6 * inch, 2 * inch, 1.5 * inch, 1.2 * inch, 1.8 * inch, 0.5 * inch]
 
         table = Table(data, colWidths=col_widths, repeatRows=1)
 
@@ -314,7 +316,7 @@ class ExportService:
             ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
             ("FONTSIZE", (0, 1), (-1, -1), 8),
             ("ALIGN", (2, 1), (2, -1), "CENTER"),  # Importance centered
-            ("ALIGN", (6, 1), (6, -1), "CENTER"),  # Confidence centered
+            ("ALIGN", (7, 1), (7, -1), "CENTER"),  # Confidence centered
 
             # Grid
             ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
