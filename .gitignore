@@ -86,3 +86,6 @@ service-account.json
 # Windows reserved device names (accidental creation)
 nul
 claudebro.md
+
+# Claude Code instructions (contains sensitive info)
+CLAUDE.md
