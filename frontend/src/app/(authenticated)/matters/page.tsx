@@ -56,9 +56,11 @@ export default function MattersPage() {
       const result = await api.syncMatters(token);
       toast.success(`Synced ${result.synced} matters from Clio`);
       mutate();
-    } catch (error) {
-      toast.error("Failed to sync with Clio");
-      console.error(error);
+    } catch (error: any) {
+      console.error("Sync error:", error);
+      // Try to extract detailed error message from API response
+      const errorMessage = error.response?.data?.detail || error.message || "Unknown error";
+      toast.error(`Sync failed: ${errorMessage}`);
     } finally {
       setSyncing(false);
     }
