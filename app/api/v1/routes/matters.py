@@ -351,8 +351,9 @@ async def sync_matters_from_clio(
                 practice_area_name = extract_nested(matter_data, "practice_area")
                 client_name = extract_nested(matter_data, "client")
 
-                # Skip matters without a client
-                if not client_name:
+                # Skip matters without a client (check both client_name and display_number)
+                display_number = matter_data.get("display_number", "")
+                if not client_name or "No Client Associated" in (display_number or ""):
                     continue
 
                 if matter:
