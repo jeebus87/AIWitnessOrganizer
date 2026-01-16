@@ -232,12 +232,26 @@ class ClioClient:
     # Matter Operations
     # =========================================================================
 
+    # Default fields needed for matters - Clio API returns only id/etag without explicit fields
+    DEFAULT_MATTER_FIELDS = [
+        "id",
+        "display_number",
+        "description",
+        "status",
+        "practice_area",
+        "client{name}",  # Nested field syntax for Clio API
+    ]
+
     async def get_matters(
         self,
         status: Optional[str] = "Open",
         fields: Optional[List[str]] = None
     ) -> AsyncIterator[Dict[str, Any]]:
         """Get all matters (paginated). Pass status=None to get ALL matters."""
+        # Use default fields if none specified - Clio returns only id/etag otherwise!
+        if fields is None:
+            fields = self.DEFAULT_MATTER_FIELDS
+
         params = {}
         if status:  # Only add status if provided (None = get all)
             params["status"] = status
