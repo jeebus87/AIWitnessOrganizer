@@ -75,6 +75,8 @@ class Settings(BaseSettings):
         origins = [
             "http://localhost:3000",
             "http://localhost:8000",
+            "https://aiwitnessorganizer.juridionlaw.com",
+            "https://aiwitness-web-production.up.railway.app",
         ]
         if self.frontend_url and self.frontend_url not in origins:
             origins.append(self.frontend_url)
