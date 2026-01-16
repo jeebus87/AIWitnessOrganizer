@@ -11,6 +11,7 @@ import {
   FileText,
   FileSpreadsheet,
   Ban,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -129,6 +130,34 @@ export default function JobsPage() {
     }
   };
 
+
+  const handleDelete = async (jobId: number) => {
+    if (!token) return;
+    try {
+      await api.deleteJob(jobId, token);
+      toast.success("Job deleted");
+      mutate();
+    } catch (error) {
+      toast.error("Failed to delete job");
+      console.error(error);
+    }
+  };
+
+  const handleClearFinished = async () => {
+    if (!token) return;
+    try {
+      const result = await api.clearFinishedJobs(token);
+      toast.success(`Cleared ${result.deleted_count} job(s)`);
+      mutate();
+    } catch (error) {
+      toast.error("Failed to clear jobs");
+      console.error(error);
+    }
+  };
+  const cancelledOrFailedJobs = jobs?.filter(
+    (job) => job.status === "cancelled" || job.status === "failed"
+  ).length || 0;
+
   const activeJobs = jobs?.filter(
     (job) => job.status === "pending" || job.status === "processing"
   ).length;
@@ -142,12 +171,20 @@ export default function JobsPage() {
             Track the status of your document processing jobs
           </p>
         </div>
-        {activeJobs ? (
-          <Badge variant="secondary" className="text-sm">
-            <Loader2 className="mr-2 h-3 w-3 animate-spin" />
-            {activeJobs} active job{activeJobs > 1 ? "s" : ""}
-          </Badge>
-        ) : null}
+        <div className="flex items-center gap-4">
+          {cancelledOrFailedJobs > 0 && (
+            <Button variant="outline" size="sm" onClick={handleClearFinished}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              Clear {cancelledOrFailedJobs} finished
+            </Button>
+          )}
+          {activeJobs ? (
+            <Badge variant="secondary" className="text-sm">
+              <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+              {activeJobs} active job{activeJobs > 1 ? "s" : ""}
+            </Badge>
+          ) : null}
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
@@ -300,10 +337,16 @@ export default function JobsPage() {
                             <Ban className="mr-2 h-4 w-4" />
                             Cancel
                           </Button>
-                        ) : job.status === "failed" ? (
-                          <span className="text-sm text-red-500">
-                            {job.error_message || "Unknown error"}
-                          </span>
+                        ) : job.status === "failed" || job.status === "cancelled" ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDelete(job.id)}
+                            className="text-muted-foreground hover:text-destructive"
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete
+                          </Button>
                         ) : null}
                       </TableCell>
                     </TableRow>

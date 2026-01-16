@@ -183,6 +183,61 @@ async def cancel_job(
     return {"success": True, "message": "Job cancelled"}
 
 
+
+
+@router.delete("/{job_id}")
+async def delete_job(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Delete a cancelled or failed job.
+    """
+    result = await db.execute(
+        select(ProcessingJob).where(
+            ProcessingJob.id == job_id,
+            ProcessingJob.user_id == current_user.id
+        )
+    )
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status not in (JobStatus.CANCELLED, JobStatus.FAILED, JobStatus.COMPLETED):
+        raise HTTPException(
+            status_code=400,
+            detail="Can only delete cancelled, failed, or completed jobs"
+        )
+
+    await db.delete(job)
+    await db.commit()
+
+    return {"success": True, "message": "Job deleted"}
+
+
+@router.delete("")
+async def clear_finished_jobs(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Clear all cancelled and failed jobs for the current user.
+    """
+    from sqlalchemy import delete
+
+    result = await db.execute(
+        delete(ProcessingJob).where(
+            ProcessingJob.user_id == current_user.id,
+            ProcessingJob.status.in_([JobStatus.CANCELLED, JobStatus.FAILED])
+        )
+    )
+    await db.commit()
+
+    return {"success": True, "deleted_count": result.rowcount}
+
+
 @router.get("/{job_id}/export/pdf")
 async def export_job_pdf(
     job_id: int,
