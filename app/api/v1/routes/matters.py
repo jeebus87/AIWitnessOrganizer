@@ -303,12 +303,22 @@ async def sync_matters_from_clio(
 
                 # Commit in batches
                 if synced_count % 100 == 0:
-                    await db.commit()
+                    try:
+                        await db.commit()
+                        print(f"DEBUG: Batch commit at {synced_count}")
+                    except Exception as commit_err:
+                        print(f"ERROR: Batch commit failed: {commit_err}")
+                        await db.rollback()
 
-            await db.commit()
-            print(f"DEBUG: Final synced_count = {synced_count}")
+            try:
+                await db.commit()
+                print(f"DEBUG: Final commit successful, synced_count = {synced_count}")
+            except Exception as commit_err:
+                print(f"ERROR: Final commit failed: {commit_err}")
+                await db.rollback()
+                raise
 
-        print(f"DEBUG: About to return, synced_count = {synced_count}")
+        print(f"DEBUG: Returning response with synced_count = {synced_count}")
         return {
             "success": True,
             "matters_synced": synced_count
