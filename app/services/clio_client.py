@@ -151,7 +151,6 @@ class ClioClient:
         retry=retry_if_exception_type(ClioRateLimitError),
         stop=stop_after_attempt(10),
         wait=wait_exponential(multiplier=1, min=2, max=120),
-        before_sleep=lambda retry_state: print(f"DEBUG: Rate limit hit. Retrying attempt {retry_state.attempt_number}...")
     )
     async def _request(
         self,
@@ -162,9 +161,6 @@ class ClioClient:
         """Make a rate-limited request to Clio API"""
         await self._ensure_valid_token()
         await self.rate_limiter.acquire()
-
-        # Debug logging
-        print(f"DEBUG: _request endpoint='{endpoint}' startswith_http={endpoint.startswith('http')}")
 
         if endpoint.startswith("http"):
             url = endpoint
@@ -224,33 +220,22 @@ class ClioClient:
 
         while True:
             params["offset"] = offset
-            print(f"DEBUG: Fetching {endpoint} offset={offset}, limit={page_size}")
-
             response = await self.get(endpoint, params=params)
             data = response.get("data", [])
 
-            # Debug: log data count
-            paging = response.get("meta", {}).get("paging", {})
-            print(f"DEBUG: Page returned {len(data)} items, total records: {paging.get('records', 'unknown')}")
-
             if not data:
-                print(f"DEBUG: No data returned, stopping pagination")
                 break
 
             # Check for duplicate IDs (indicates we've wrapped around)
-            new_items = 0
             for item in data:
                 item_id = item.get("id")
                 if item_id in seen_ids:
-                    print(f"DEBUG: Duplicate ID {item_id} detected, stopping")
                     return  # Stop iteration completely
                 seen_ids.add(item_id)
-                new_items += 1
                 yield item
 
             # If we got fewer items than page_size, we've reached the end
             if len(data) < page_size:
-                print(f"DEBUG: Got {len(data)} items (< {page_size}), reached end of data")
                 break
 
             offset += page_size

@@ -52,10 +52,6 @@ async def list_matters(
     result = await db.execute(query)
     matters = result.scalars().all()
 
-    # Debug: Log first 3 matters from DB
-    for i, m in enumerate(matters[:3]):
-        print(f"DEBUG LIST: Matter {i+1}: id={m.id}, clio_id={m.clio_matter_id}, status={m.status}, client={m.client_name}, desc={m.description[:30] if m.description else None}")
-
     # Get document and witness counts
     matter_responses = []
     for m in matters:
@@ -246,10 +242,6 @@ async def sync_matters_from_clio(
             synced_count = 0
 
             async for matter_data in clio.get_matters(status=status):
-                # Debug: Log first few matters to see what Clio returns
-                if synced_count < 3:
-                    print(f"DEBUG matter_data: {matter_data}")
-
                 # Check if matter exists
                 result = await db.execute(
                     select(Matter).where(
@@ -273,13 +265,9 @@ async def sync_matters_from_clio(
                 practice_area_name = extract_nested(matter_data, "practice_area")
                 client_name = extract_nested(matter_data, "client")
 
-                # Debug: Log extracted values for first few matters
-                if synced_count < 3:
-                    print(f"DEBUG extracted: status={status_name}, practice_area={practice_area_name}, client={client_name}, desc={matter_data.get('description', '')[:50] if matter_data.get('description') else None}")
-
                 if matter:
                     # Update existing - use direct SQL UPDATE to bypass ORM tracking issues
-                    result = await db.execute(
+                    await db.execute(
                         update(Matter)
                         .where(Matter.id == matter.id)
                         .values(
@@ -291,12 +279,6 @@ async def sync_matters_from_clio(
                             last_synced_at=datetime.utcnow()
                         )
                     )
-                    if synced_count < 3:
-                        print(f"DEBUG DB UPDATE (SQL): id={matter.id}, status={status_name}, rows_affected={result.rowcount}")
-                        # Verify the update worked by re-querying
-                        verify = await db.execute(select(Matter.status, Matter.client_name).where(Matter.id == matter.id))
-                        row = verify.first()
-                        print(f"DEBUG VERIFY: id={matter.id}, status_in_db={row[0] if row else 'NO ROW'}, client_in_db={row[1] if row else 'NO ROW'}")
                 else:
                     # Create new
                     matter = Matter(
@@ -310,31 +292,18 @@ async def sync_matters_from_clio(
                         last_synced_at=datetime.utcnow()
                     )
                     db.add(matter)
-                    if synced_count < 3:
-                        print(f"DEBUG DB CREATE: clio_id={matter.clio_matter_id}, status={matter.status}, client={matter.client_name}")
 
                 synced_count += 1
 
                 # Commit in batches
                 if synced_count % 100 == 0:
-                    try:
-                        await db.flush()  # Force pending changes to DB
-                        await db.commit()
-                        print(f"DEBUG: Batch commit at {synced_count}")
-                    except Exception as commit_err:
-                        print(f"ERROR: Batch commit failed: {commit_err}")
-                        await db.rollback()
+                    await db.flush()
+                    await db.commit()
 
-            try:
-                await db.flush()  # Force any remaining pending changes
-                await db.commit()
-                print(f"DEBUG: Final commit successful, synced_count = {synced_count}")
-            except Exception as commit_err:
-                print(f"ERROR: Final commit failed: {commit_err}")
-                await db.rollback()
-                raise
+            # Final commit for remaining items
+            await db.flush()
+            await db.commit()
 
-        print(f"DEBUG: Returning response with synced_count = {synced_count}")
         return {
             "success": True,
             "matters_synced": synced_count
