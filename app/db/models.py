@@ -177,7 +177,8 @@ class Witness(Base):
 
     # Extracted details
     observation = Column(Text, nullable=True)  # What they saw/testified
-    source_quote = Column(Text, nullable=True)  # Direct quote from document
+    source_quote = Column(Text, nullable=True)  # Summary of where/how mentioned (legacy name kept for compat)
+    source_page = Column(Integer, nullable=True)  # Page number where found
     context = Column(Text, nullable=True)  # Additional context
 
     # Contact info (if found)

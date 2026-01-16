@@ -203,8 +203,10 @@ async def export_witnesses_pdf(
             "importance": w.importance.value.upper(),
             "observation": w.observation,
             "source_quote": w.source_quote,
+            "source_page": w.source_page,
             "email": w.email,
             "phone": w.phone,
+            "address": w.address,
             "document_filename": w.document.filename if w.document else None,
             "confidence_score": w.confidence_score
         })
@@ -276,8 +278,10 @@ async def export_witnesses_excel(
             "importance": w.importance.value.upper(),
             "observation": w.observation,
             "source_quote": w.source_quote,
+            "source_page": w.source_page,
             "email": w.email,
             "phone": w.phone,
+            "address": w.address,
             "document_filename": w.document.filename if w.document else None,
             "matter_name": w.document.matter.description if w.document and w.document.matter else None,
             "confidence_score": w.confidence_score

@@ -19,11 +19,12 @@ class WitnessData:
     role: str
     importance: str
     observation: Optional[str] = None
-    source_quote: Optional[str] = None
+    source_summary: Optional[str] = None  # Summary of where/how they're mentioned
     context: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
+    source_page: Optional[int] = None  # Page number where found
     confidence_score: float = 0.0
 
 
@@ -48,18 +49,29 @@ You have exceptional visual reasoning abilities and can:
 - Recognize names even in poor quality scans
 
 For each person you identify, extract:
-1. **fullName**: The person's full name (use the most complete name available)
-2. **role**: Their role or relationship to the case
-3. **importance**: HIGH (direct testimony on core facts), MEDIUM (relevant secondary witness), or LOW (administrative/peripheral contact)
-4. **observation**: Summary of what they saw, testified to, or their relevance
-5. **sourceQuote**: The exact text where they are mentioned
-6. **context**: One-sentence description of the context of their mention
-7. **email**: Email address if found
-8. **phone**: Phone number if found
-9. **address**: Physical address if found
-10. **confidenceScore**: Your confidence in this extraction (0.0 to 1.0)
-
-Role classifications include: plaintiff, defendant, eyewitness, expert, attorney, physician, police_officer, family_member, colleague, bystander, mentioned, other
+1. **fullName**: The person's full name. Use "FNU" (First Name Unknown) if first name is unknown, "LNU" (Last Name Unknown) if last name is unknown. Example: "FNU Smith" or "John LNU"
+2. **role**: Their SPECIFIC role - be as accurate and specific as possible:
+   - plaintiff, defendant (parties to the case)
+   - eyewitness (directly witnessed events)
+   - expert (expert witness, medical expert, technical expert)
+   - attorney, paralegal (legal professionals)
+   - physician, nurse, medical_staff (healthcare providers)
+   - police_officer, detective, investigator (law enforcement)
+   - family_member (spouse, parent, child, sibling)
+   - employer, supervisor, coworker, colleague (work relationships)
+   - friend, neighbor, acquaintance (personal relationships)
+   - insurance_adjuster, claims_representative (insurance)
+   - government_official (government employees)
+   - other (only if none of the above fit)
+3. **importance**: HIGH (direct involvement/testimony on core facts), MEDIUM (relevant supporting witness), LOW (peripheral/administrative contact)
+4. **observation**: Detailed summary of what they saw, testified to, or their relevance to the case
+5. **sourceSummary**: A brief summary describing WHERE and HOW they are mentioned (NOT a direct quote). Example: "Named as treating physician in medical records" or "Listed as supervisor in employment documents"
+6. **sourcePage**: The page number where this person is mentioned (if visible/determinable from the document)
+7. **context**: One-sentence description of the context of their mention
+8. **email**: Email address if found
+9. **phone**: Phone number if found
+10. **address**: Physical address if found
+11. **confidenceScore**: Your confidence in this extraction (0.0 to 1.0)
 
 CRITICAL: You must respond ONLY with valid JSON matching this exact schema:
 {
@@ -69,7 +81,8 @@ CRITICAL: You must respond ONLY with valid JSON matching this exact schema:
       "role": "string",
       "importance": "HIGH|MEDIUM|LOW",
       "observation": "string or null",
-      "sourceQuote": "string or null",
+      "sourceSummary": "string or null",
+      "sourcePage": "number or null",
       "context": "string or null",
       "email": "string or null",
       "phone": "string or null",
@@ -241,11 +254,12 @@ Respond with valid JSON only."""
                     role=w.get("role", "other").lower(),
                     importance=w.get("importance", "LOW").upper(),
                     observation=w.get("observation"),
-                    source_quote=w.get("sourceQuote"),
+                    source_summary=w.get("sourceSummary") or w.get("sourceQuote"),  # Fallback for backwards compat
                     context=w.get("context"),
                     email=w.get("email"),
                     phone=w.get("phone"),
                     address=w.get("address"),
+                    source_page=w.get("sourcePage"),
                     confidence_score=float(w.get("confidenceScore", 0.5))
                 ))
 
@@ -360,3 +374,82 @@ Respond with valid JSON only."""
             results.append(result)
 
         return results
+
+    async def verify_witnesses(
+        self,
+        witnesses: List[WitnessData],
+        document_filename: str
+    ) -> List[WitnessData]:
+        """
+        Run a second AI pass to verify and improve witness data accuracy.
+
+        Args:
+            witnesses: List of extracted WitnessData to verify
+            document_filename: Name of the source document
+
+        Returns:
+            List of verified/improved WitnessData
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        if not witnesses:
+            return witnesses
+
+        logger.info(f"Running verification pass on {len(witnesses)} witnesses")
+
+        # Build verification prompt
+        witness_json = json.dumps([{
+            "fullName": w.full_name,
+            "role": w.role,
+            "importance": w.importance,
+            "observation": w.observation,
+            "sourceSummary": w.source_summary,
+            "sourcePage": w.source_page,
+            "email": w.email,
+            "phone": w.phone,
+            "address": w.address,
+            "confidenceScore": w.confidence_score
+        } for w in witnesses], indent=2)
+
+        verification_prompt = f"""You are verifying and improving witness extraction accuracy. Review the following extracted witness data from document "{document_filename}" and improve it:
+
+EXTRACTED DATA:
+{witness_json}
+
+Please verify and improve each witness entry:
+1. **Names**: If a name appears incomplete, use "FNU" (First Name Unknown) or "LNU" (Last Name Unknown) appropriately
+2. **Roles**: Verify the role is the most accurate and specific classification:
+   - plaintiff, defendant, eyewitness, expert, attorney, paralegal
+   - physician, nurse, medical_staff, police_officer, detective, investigator
+   - family_member, employer, supervisor, coworker, colleague
+   - friend, neighbor, acquaintance, insurance_adjuster, claims_representative
+   - government_official, other
+3. **Importance**: Verify HIGH/MEDIUM/LOW is accurate based on their involvement
+4. **Duplicates**: If the same person appears multiple times with slight variations, consolidate into one entry with the most complete information
+5. **Confidence**: Adjust confidence scores based on how certain the information is
+
+Return the verified/improved list in the same JSON format.
+
+CRITICAL: Respond ONLY with valid JSON:
+{{"witnesses": [...]}}"""
+
+        messages = [{
+            "role": "user",
+            "content": [{"type": "text", "text": verification_prompt}]
+        }]
+
+        try:
+            response = self._invoke_model(messages)
+            result = self._parse_response(response)
+
+            if result.success and result.witnesses:
+                logger.info(f"Verification complete: {len(result.witnesses)} witnesses after deduplication/improvement")
+                return result.witnesses
+            else:
+                logger.warning(f"Verification failed, returning original witnesses: {result.error}")
+                return witnesses
+
+        except Exception as e:
+            logger.error(f"Verification error: {e}, returning original witnesses")
+            return witnesses

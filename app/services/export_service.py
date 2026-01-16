@@ -252,16 +252,28 @@ class ExportService:
             ))
             return elements
 
+        # Sort witnesses by importance: HIGH first, then MEDIUM, then LOW
+        importance_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+        sorted_witnesses = sorted(
+            witnesses,
+            key=lambda w: importance_order.get(w.get("importance", "LOW").upper(), 3)
+        )
+
         # Table data - match Excel columns
-        headers = ["Witness Name", "Role", "Importance", "Observation", "Source Quote", "Source Document", "Contact", "Confidence"]
+        headers = ["Witness Name", "Role", "Importance", "Observation", "Source Summary", "Source Document", "Contact", "Confidence"]
 
         data = [headers]
 
-        for w in witnesses:
+        for w in sorted_witnesses:
             # Full observation (no truncation)
             observation = w.get("observation", "") or ""
-            source_quote = w.get("source_quote", "") or ""
+            source_summary = w.get("source_quote", "") or ""  # source_quote column stores source_summary
+
+            # Format source document with page number
             source_doc = w.get("document_filename", "") or ""
+            source_page = w.get("source_page")
+            if source_page:
+                source_doc = f"{source_doc} (Page {source_page})"
 
             # Format contact info as: [address], [phone], and [email]
             contact_parts = []
@@ -290,7 +302,7 @@ class ExportService:
                 w.get("role", "").replace("_", " ").title(),
                 w.get("importance", "LOW"),
                 Paragraph(observation, self.styles["Observation"]),
-                Paragraph(source_quote, self.styles["Observation"]),
+                Paragraph(source_summary, self.styles["Observation"]),
                 Paragraph(source_doc, self.styles["Observation"]),
                 Paragraph(contact, self.styles["Observation"]),
                 confidence

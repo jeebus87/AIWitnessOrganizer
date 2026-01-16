@@ -173,16 +173,24 @@ async def _process_single_document_async(
                     await session.commit()
                     return {"success": False, "error": extraction_result.error}
 
+            # Run verification pass to improve accuracy
+            verified_witnesses = await bedrock.verify_witnesses(
+                extraction_result.witnesses,
+                document.filename
+            )
+            logger.info(f"Verification complete: {len(verified_witnesses)} witnesses")
+
             # Save witnesses to database
             witnesses_created = 0
-            for w_data in extraction_result.witnesses:
+            for w_data in verified_witnesses:
                 witness = Witness(
                     document_id=document.id,
                     full_name=w_data.full_name,
                     role=_map_role(w_data.role),
                     importance=_map_importance(w_data.importance),
                     observation=w_data.observation,
-                    source_quote=w_data.source_quote,
+                    source_quote=w_data.source_summary,  # source_summary stored in source_quote column
+                    source_page=w_data.source_page,
                     context=w_data.context,
                     email=w_data.email,
                     phone=w_data.phone,
