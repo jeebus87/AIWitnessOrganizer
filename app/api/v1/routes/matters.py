@@ -278,13 +278,15 @@ async def sync_matters_from_clio(
                     print(f"DEBUG extracted: status={status_name}, practice_area={practice_area_name}, client={client_name}, desc={matter_data.get('description', '')[:50] if matter_data.get('description') else None}")
 
                 if matter:
-                    # Update existing
+                    # Update existing - use explicit attribute updates
                     matter.display_number = matter_data.get("display_number")
                     matter.description = matter_data.get("description")
                     matter.status = status_name
                     matter.practice_area = practice_area_name
                     matter.client_name = client_name
                     matter.last_synced_at = datetime.utcnow()
+                    # Force SQLAlchemy to track this object as dirty
+                    db.add(matter)
                     if synced_count < 3:
                         print(f"DEBUG DB UPDATE: id={matter.id}, status={matter.status}, client={matter.client_name}")
                 else:
@@ -308,6 +310,7 @@ async def sync_matters_from_clio(
                 # Commit in batches
                 if synced_count % 100 == 0:
                     try:
+                        await db.flush()  # Force pending changes to DB
                         await db.commit()
                         print(f"DEBUG: Batch commit at {synced_count}")
                     except Exception as commit_err:
@@ -315,6 +318,7 @@ async def sync_matters_from_clio(
                         await db.rollback()
 
             try:
+                await db.flush()  # Force any remaining pending changes
                 await db.commit()
                 print(f"DEBUG: Final commit successful, synced_count = {synced_count}")
             except Exception as commit_err:
