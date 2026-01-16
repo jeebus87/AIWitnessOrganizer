@@ -256,9 +256,18 @@ async def sync_matters_from_clio(
                 matter = result.scalar_one_or_none()
 
                 # Extract nested fields - Clio returns {status: {name: "Open"}} not {status: "Open"}
-                status_name = matter_data.get("status", {}).get("name") if matter_data.get("status") else None
-                practice_area_name = matter_data.get("practice_area", {}).get("name") if matter_data.get("practice_area") else None
-                client_name = matter_data.get("client", {}).get("name") if matter_data.get("client") else None
+                # Handle both dict (nested) and string (direct) responses
+                def extract_nested(data, field):
+                    val = data.get(field)
+                    if val is None:
+                        return None
+                    if isinstance(val, dict):
+                        return val.get("name")
+                    return str(val)  # If it's already a string, use it directly
+
+                status_name = extract_nested(matter_data, "status")
+                practice_area_name = extract_nested(matter_data, "practice_area")
+                client_name = extract_nested(matter_data, "client")
 
                 if matter:
                     # Update existing
