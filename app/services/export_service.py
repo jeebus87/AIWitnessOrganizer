@@ -252,16 +252,15 @@ class ExportService:
             ))
             return elements
 
-        # Table data
-        headers = ["Name", "Role", "Importance", "Observation", "Source", "Contact"]
+        # Table data - match Excel columns
+        headers = ["Witness Name", "Role", "Importance", "Observation", "Source Quote", "Contact", "Confidence"]
 
         data = [headers]
 
         for w in witnesses:
-            # Format observation to fit in cell
+            # Full observation (no truncation)
             observation = w.get("observation", "") or ""
-            if len(observation) > 150:
-                observation = observation[:147] + "..."
+            source_quote = w.get("source_quote", "") or ""
 
             # Format contact info as: [address], [phone], and [email]
             contact_parts = []
@@ -282,18 +281,22 @@ class ExportService:
             else:
                 contact = "Contact info unknown at this time"
 
+            # Format confidence
+            confidence = f"{w.get('confidence_score', 0) * 100:.0f}%"
+
             row = [
                 Paragraph(w.get("full_name", "Unknown"), self.styles["WitnessName"]),
                 w.get("role", "").replace("_", " ").title(),
                 w.get("importance", "LOW"),
                 Paragraph(observation, self.styles["Observation"]),
-                w.get("document_filename", "-")[:30],
-                Paragraph(contact, self.styles["Normal"])
+                Paragraph(source_quote, self.styles["Observation"]),
+                Paragraph(contact, self.styles["Observation"]),
+                confidence
             ]
             data.append(row)
 
-        # Create table
-        col_widths = [1.5 * inch, 1 * inch, 0.8 * inch, 4 * inch, 1.5 * inch, 1.5 * inch]
+        # Create table - adjusted column widths for 7 columns
+        col_widths = [1.2 * inch, 0.8 * inch, 0.7 * inch, 2.5 * inch, 2 * inch, 2 * inch, 0.6 * inch]
 
         table = Table(data, colWidths=col_widths, repeatRows=1)
 
@@ -311,6 +314,7 @@ class ExportService:
             ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
             ("FONTSIZE", (0, 1), (-1, -1), 8),
             ("ALIGN", (2, 1), (2, -1), "CENTER"),  # Importance centered
+            ("ALIGN", (6, 1), (6, -1), "CENTER"),  # Confidence centered
 
             # Grid
             ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
