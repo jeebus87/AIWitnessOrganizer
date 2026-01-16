@@ -100,11 +100,14 @@ async def _process_single_document_async(
             # Process document
             processor = DocumentProcessor()
             bedrock = BedrockClient()
-            
+
+            # Calculate file hash upfront for caching (needed for both paths)
+            file_hash = processor.get_file_hash(content)
+
             # Check if this is a large PDF that needs chunked processing
             # Large = > 20MB, which typically means 100+ pages
             is_large_pdf = (
-                len(content) > 20 * 1024 * 1024 and 
+                len(content) > 20 * 1024 * 1024 and
                 (document.filename.lower().endswith('.pdf') or content[:4] == b'%PDF')
             )
             
@@ -198,7 +201,7 @@ async def _process_single_document_async(
                 "input_tokens": extraction_result.input_tokens,
                 "output_tokens": extraction_result.output_tokens
             }
-            document.analysis_cache_key = proc_result.file_hash
+            document.analysis_cache_key = file_hash
 
             await session.commit()
 
@@ -206,7 +209,6 @@ async def _process_single_document_async(
 
             # Clean up memory after successful processing
             del content
-            del proc_result
             del extraction_result
             gc.collect()
 
