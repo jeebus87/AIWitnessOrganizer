@@ -341,11 +341,16 @@ async def sync_matters_from_clio(
     # Always clear existing matters to ensure clean sync (removes matters without clients from previous syncs)
     if True:  # Always clear
         print(f"SYNC: Clearing existing matters for user {current_user.id}")
+        # First delete processing jobs that reference these matters (foreign key constraint)
+        await db.execute(
+            delete(ProcessingJob).where(ProcessingJob.user_id == current_user.id)
+        )
+        # Then delete the matters
         await db.execute(
             delete(Matter).where(Matter.user_id == current_user.id)
         )
         await db.commit()
-        print("SYNC: Existing matters cleared")
+        print("SYNC: Existing jobs and matters cleared")
 
     # Get Clio integration
     result = await db.execute(
