@@ -218,14 +218,16 @@ async def sync_matters_from_clio(
         include_archived: If True, sync all matters including archived. Default syncs only Open.
         clear_existing: If True, delete all existing matters before syncing.
     """
+    print(f"SYNC: Starting sync, clear_existing={clear_existing}, include_archived={include_archived}")
+
     # Clear existing matters if requested
     if clear_existing:
-        logger.info(f"Clearing existing matters for user {current_user.id}")
+        print(f"SYNC: Clearing existing matters for user {current_user.id}")
         await db.execute(
             delete(Matter).where(Matter.user_id == current_user.id)
         )
         await db.commit()
-        logger.info("Existing matters cleared")
+        print("SYNC: Existing matters cleared")
 
     # Get Clio integration
     result = await db.execute(
@@ -316,12 +318,12 @@ async def sync_matters_from_clio(
                 if synced_count % 100 == 0:
                     await db.flush()
                     await db.commit()
-                    logger.info(f"Synced {synced_count} matters...")
+                    print(f"SYNC: Synced {synced_count} matters...")
 
             # Final commit for remaining items
             await db.flush()
             await db.commit()
-            logger.info(f"Sync complete: {synced_count} matters synced")
+            print(f"SYNC: Complete - {synced_count} matters synced")
 
         return {
             "success": True,
