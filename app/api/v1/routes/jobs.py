@@ -183,6 +183,70 @@ async def cancel_job(
     return {"success": True, "message": "Job cancelled"}
 
 
+@router.get("/{job_id}/export/pdf")
+async def export_job_pdf(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Export witnesses found in a job to PDF.
+    """
+    from fastapi.responses import RedirectResponse
+
+    result = await db.execute(
+        select(ProcessingJob).where(
+            ProcessingJob.id == job_id,
+            ProcessingJob.user_id == current_user.id
+        )
+    )
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Redirect to witnesses export with matter_id
+    if job.target_matter_id:
+        return RedirectResponse(
+            url=f"/api/v1/witnesses/export/pdf?matter_id={job.target_matter_id}",
+            status_code=307
+        )
+    else:
+        return RedirectResponse(url="/api/v1/witnesses/export/pdf", status_code=307)
+
+
+@router.get("/{job_id}/export/excel")
+async def export_job_excel(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Export witnesses found in a job to Excel.
+    """
+    from fastapi.responses import RedirectResponse
+
+    result = await db.execute(
+        select(ProcessingJob).where(
+            ProcessingJob.id == job_id,
+            ProcessingJob.user_id == current_user.id
+        )
+    )
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Redirect to witnesses export with matter_id
+    if job.target_matter_id:
+        return RedirectResponse(
+            url=f"/api/v1/witnesses/export/excel?matter_id={job.target_matter_id}",
+            status_code=307
+        )
+    else:
+        return RedirectResponse(url="/api/v1/witnesses/export/excel", status_code=307)
+
+
 def _job_to_response(job: ProcessingJob) -> JobResponse:
     """Convert a ProcessingJob to JobResponse"""
     progress = 0.0
