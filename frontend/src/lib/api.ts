@@ -112,7 +112,7 @@ class ApiClient {
   }
 
   async deleteJob(id: number, token: string) {
-    return this.request<{ success: boolean }>(\`/api/v1/jobs/\${id}\`, {
+    return this.request<{ success: boolean }>(`/api/v1/jobs/${id}`, {
       method: "DELETE",
       token,
     });
