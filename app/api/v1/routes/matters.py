@@ -4,7 +4,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, delete
 
 from app.core.security import decrypt_token
 from app.db.session import get_db
@@ -205,11 +205,23 @@ async def list_matter_documents(
 async def sync_matters_from_clio(
     current_user: User = Depends(get_current_user),
     include_archived: bool = False,
+    clear_existing: bool = False,
     db: AsyncSession = Depends(get_db)
 ):
     """
     Sync matters from Clio to local database.
+
+    Args:
+        include_archived: If True, sync all matters including archived. Default syncs only Open.
+        clear_existing: If True, delete all existing matters before syncing.
     """
+    # Clear existing matters if requested
+    if clear_existing:
+        await db.execute(
+            delete(Matter).where(Matter.user_id == current_user.id)
+        )
+        await db.commit()
+
     # Get Clio integration
     result = await db.execute(
         select(ClioIntegration).where(
