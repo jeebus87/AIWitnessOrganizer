@@ -125,27 +125,28 @@ class ExportService:
             for col_num, value in enumerate(df.columns.values):
                 worksheet.write(0, col_num, value, header_format)
 
-            # Apply conditional formatting for importance column
-            importance_col = df.columns.get_loc("Importance")
-            for row_num in range(1, len(df) + 1):
-                importance = df.iloc[row_num - 1]["Importance"]
-                if importance == "HIGH":
-                    worksheet.set_row(row_num, None, high_format)
-                elif importance == "MEDIUM":
-                    worksheet.set_row(row_num, None, medium_format)
-                else:
-                    worksheet.set_row(row_num, None, low_format)
+            # Apply conditional formatting for importance column (only if data exists)
+            if len(df) > 0 and "Importance" in df.columns:
+                for row_num in range(1, len(df) + 1):
+                    importance = df.iloc[row_num - 1]["Importance"]
+                    if importance == "HIGH":
+                        worksheet.set_row(row_num, None, high_format)
+                    elif importance == "MEDIUM":
+                        worksheet.set_row(row_num, None, medium_format)
+                    else:
+                        worksheet.set_row(row_num, None, low_format)
 
-            # Auto-fit columns
-            for idx, col in enumerate(df.columns):
-                max_len = max(
-                    df[col].astype(str).map(len).max(),
-                    len(col)
-                ) + 2
-                worksheet.set_column(idx, idx, min(max_len, 50))
+            # Auto-fit columns (only if data exists)
+            if len(df) > 0:
+                for idx, col in enumerate(df.columns):
+                    max_len = max(
+                        df[col].astype(str).map(len).max(),
+                        len(col)
+                    ) + 2
+                    worksheet.set_column(idx, idx, min(max_len, 50))
 
-            # Add auto-filter
-            worksheet.autofilter(0, 0, len(df), len(df.columns) - 1)
+                # Add auto-filter
+                worksheet.autofilter(0, 0, len(df), len(df.columns) - 1)
 
         output.seek(0)
         return output.getvalue()
