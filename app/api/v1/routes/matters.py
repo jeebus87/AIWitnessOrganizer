@@ -52,6 +52,10 @@ async def list_matters(
     result = await db.execute(query)
     matters = result.scalars().all()
 
+    # Debug: Log first 3 matters from DB
+    for i, m in enumerate(matters[:3]):
+        print(f"DEBUG LIST: Matter {i+1}: id={m.id}, clio_id={m.clio_matter_id}, status={m.status}, client={m.client_name}, desc={m.description[:30] if m.description else None}")
+
     # Get document and witness counts
     matter_responses = []
     for m in matters:
