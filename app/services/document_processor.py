@@ -1,4 +1,5 @@
 """Document processing service for PDFs, images, and Outlook emails"""
+import logging
 import os
 import io
 import tempfile
@@ -15,6 +16,8 @@ try:
     PDF2IMAGE_AVAILABLE = True
 except ImportError:
     PDF2IMAGE_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -119,6 +122,8 @@ class DocumentProcessor:
         """
         file_hash = self.get_file_hash(content)
         file_type = self.detect_file_type(filename, content)
+        
+        logger.info(f"Processing document: {filename} (type: {file_type}, size: {len(content)} bytes)")
 
         try:
             # Images
@@ -194,6 +199,7 @@ class DocumentProcessor:
         context: str = ""
     ) -> List[ProcessedAsset]:
         """Process an image file, resizing if necessary"""
+        logger.info(f"Processing image: {filename}")
         processed_bytes, media_type = self._resize_and_compress_image(content)
 
         return [ProcessedAsset(
@@ -216,6 +222,8 @@ class DocumentProcessor:
             raise ImportError("pdf2image not available. Install poppler.")
 
         import gc
+        
+        logger.info(f"PDF processing started: {filename} ({len(content)} bytes)")
 
         assets = []
         page_number = 1
@@ -261,6 +269,8 @@ class DocumentProcessor:
                     context=context,
                     page_number=page_number
                 ))
+                
+                logger.info(f"PDF page {page_number} converted: {filename}")
 
                 page_number += 1
 
@@ -276,6 +286,8 @@ class DocumentProcessor:
 
         # Final garbage collection
         gc.collect()
+        
+        logger.info(f"PDF processing complete: {filename} - {len(assets)} pages converted")
 
         return assets
 
@@ -289,6 +301,7 @@ class DocumentProcessor:
         Process Outlook .msg file recursively.
         Extracts email body and all attachments (including nested emails).
         """
+        logger.info(f"Processing MSG email: {filename}")
         assets = []
 
         # Save to temp file (extract-msg requires file path)
@@ -412,6 +425,7 @@ class DocumentProcessor:
         context: str = ""
     ) -> List[ProcessedAsset]:
         """Extract text from Word documents (.docx)"""
+        logger.info(f"Processing DOCX: {filename}")
         from docx import Document
 
         doc = Document(io.BytesIO(content))
@@ -450,6 +464,7 @@ class DocumentProcessor:
         context: str = ""
     ) -> List[ProcessedAsset]:
         """Extract text from Excel spreadsheets (.xlsx, .xls)"""
+        logger.info(f"Processing XLSX: {filename}")
         from openpyxl import load_workbook
 
         wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
@@ -646,6 +661,7 @@ class DocumentProcessor:
         context: str = ""
     ) -> List[ProcessedAsset]:
         """Process multi-page TIFF images"""
+        logger.info(f"Processing TIFF: {filename}")
         import gc
 
         img = Image.open(io.BytesIO(content))
