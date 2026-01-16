@@ -269,6 +269,10 @@ async def sync_matters_from_clio(
                 practice_area_name = extract_nested(matter_data, "practice_area")
                 client_name = extract_nested(matter_data, "client")
 
+                # Debug: Log extracted values for first few matters
+                if synced_count < 3:
+                    print(f"DEBUG extracted: status={status_name}, practice_area={practice_area_name}, client={client_name}, desc={matter_data.get('description', '')[:50] if matter_data.get('description') else None}")
+
                 if matter:
                     # Update existing
                     matter.display_number = matter_data.get("display_number")
