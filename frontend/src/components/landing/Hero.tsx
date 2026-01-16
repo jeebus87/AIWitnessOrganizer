@@ -20,7 +20,7 @@ export function Hero() {
                 <div className="text-center max-w-4xl mx-auto mb-16">
                     <div className="inline-flex items-center px-3 py-1 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 text-sm font-medium mb-8">
                         <span className="flex w-2 h-2 rounded-full bg-blue-600 dark:bg-blue-400 mr-2" />
-                        Now integrated with Claude 3.5 Sonnet
+                        Powered by Claude 4.5 Sonnet
                     </div>
 
                     <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-8">
@@ -32,7 +32,7 @@ export function Hero() {
 
                     <p className="text-xl text-muted-foreground mb-10 max-w-2xl mx-auto leading-relaxed">
                         Automate the tedious process of finding witnesses in discovery documents.
-                        Connects seamlessly with Clio to analyze PDFs, emails, and images in seconds.
+                        Connects seamlessly with Clio to analyze PDFs, Word, Excel, emails, and more in seconds.
                     </p>
 
                     <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
