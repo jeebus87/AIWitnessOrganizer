@@ -182,7 +182,7 @@ class Witness(Base):
 
     # Contact info (if found)
     email = Column(String(255), nullable=True)
-    phone = Column(String(50), nullable=True)
+    phone = Column(String(100), nullable=True)  # Increased for phone+ext formats
     address = Column(Text, nullable=True)
 
     # AI confidence
