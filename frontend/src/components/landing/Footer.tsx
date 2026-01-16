@@ -25,8 +25,10 @@ export function Footer() {
                         </Link>
                     </div>
 
-                    <div className="text-sm text-muted-foreground">
-                        © {new Date().getFullYear()} AI Witness Finder. All rights reserved.
+                    <div className="flex flex-col sm:flex-row gap-2 text-sm text-muted-foreground">
+                        <p>© {new Date().getFullYear()} Juridionlaw LLC. All rights reserved.</p>
+                        <p className="hidden sm:block">•</p>
+                        <p>A product by <span className="font-medium">Juridionlaw LLC</span></p>
                     </div>
                 </div>
             </div>
