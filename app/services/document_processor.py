@@ -291,6 +291,108 @@ class DocumentProcessor:
 
         return assets
 
+
+    async def process_pdf_chunked(
+        self,
+        content: bytes,
+        filename: str,
+        context: str = "",
+        chunk_size: int = 30
+    ):
+        """
+        Generator that yields chunks of PDF pages as ProcessedAssets.
+        Processes chunk_size pages at a time to avoid memory exhaustion.
+        
+        Args:
+            content: Raw PDF bytes
+            filename: Original filename
+            context: Additional context
+            chunk_size: Number of pages per chunk (default 30)
+            
+        Yields:
+            List[ProcessedAsset] - chunks of processed page images
+        """
+        if not PDF2IMAGE_AVAILABLE:
+            raise ImportError("pdf2image not available. Install poppler.")
+
+        import gc
+        
+        logger.info(f"PDF chunked processing started: {filename} ({len(content)} bytes), chunk_size={chunk_size}")
+
+        page_number = 1
+        chunk_assets = []
+        total_pages = 0
+
+        while True:
+            try:
+                # Convert single page at lower DPI to reduce memory usage
+                images = convert_from_bytes(
+                    content,
+                    dpi=100,
+                    first_page=page_number,
+                    last_page=page_number
+                )
+
+                if not images:
+                    break
+
+                image = images[0]
+
+                # Convert PIL Image to bytes
+                buffer = io.BytesIO()
+                image.save(buffer, format="JPEG", quality=80, optimize=True)
+                image_bytes = buffer.getvalue()
+
+                # Explicitly close and delete image to free memory
+                image.close()
+                del image
+                del images
+                buffer.close()
+
+                # Resize if needed
+                processed_bytes, media_type = self._resize_and_compress_image(image_bytes)
+                del image_bytes
+
+                chunk_assets.append(ProcessedAsset(
+                    asset_type="image",
+                    content=processed_bytes,
+                    media_type=media_type,
+                    filename=f"{filename}_page_{page_number}.jpg",
+                    original_filename=filename,
+                    context=context,
+                    page_number=page_number
+                ))
+                
+                total_pages += 1
+                
+                # When chunk is full, yield it and clear memory
+                if len(chunk_assets) >= chunk_size:
+                    logger.info(f"PDF chunk ready: pages {page_number - chunk_size + 1}-{page_number} of {filename}")
+                    yield chunk_assets
+                    chunk_assets = []
+                    gc.collect()
+
+                page_number += 1
+
+                # Force garbage collection every few pages even within chunk
+                if page_number % 10 == 0:
+                    gc.collect()
+
+            except Exception as e:
+                # If we get an error (e.g., page out of range), we're done
+                if "page" in str(e).lower() or page_number > 1:
+                    break
+                raise
+
+        # Yield any remaining pages
+        if chunk_assets:
+            logger.info(f"PDF final chunk ready: {len(chunk_assets)} pages of {filename}")
+            yield chunk_assets
+
+        # Final garbage collection
+        gc.collect()
+        logger.info(f"PDF chunked processing complete: {filename} - {total_pages} total pages")
+
     async def _process_msg(
         self,
         content: bytes,

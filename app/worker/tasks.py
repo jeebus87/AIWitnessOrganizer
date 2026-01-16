@@ -99,27 +99,76 @@ async def _process_single_document_async(
 
             # Process document
             processor = DocumentProcessor()
-            proc_result = await processor.process(
-                content=content,
-                filename=document.filename
-            )
-
-            if not proc_result.success:
-                document.processing_error = proc_result.error
-                await session.commit()
-                return {"success": False, "error": proc_result.error}
-
-            # Extract witnesses using AI
             bedrock = BedrockClient()
-            extraction_result = await bedrock.extract_witnesses(
-                assets=proc_result.assets,
-                search_targets=search_targets
+            
+            # Check if this is a large PDF that needs chunked processing
+            # Large = > 20MB, which typically means 100+ pages
+            is_large_pdf = (
+                len(content) > 20 * 1024 * 1024 and 
+                (document.filename.lower().endswith('.pdf') or content[:4] == b'%PDF')
             )
+            
+            all_witnesses = []
+            
+            if is_large_pdf:
+                logger.info(f"Large PDF detected ({len(content)} bytes), using chunked processing")
+                
+                # Process PDF in chunks to avoid memory exhaustion
+                chunk_num = 0
+                async for chunk_assets in processor.process_pdf_chunked(
+                    content=content,
+                    filename=document.filename,
+                    chunk_size=30  # Process 30 pages at a time
+                ):
+                    chunk_num += 1
+                    logger.info(f"Processing chunk {chunk_num} with {len(chunk_assets)} pages")
+                    
+                    # Extract witnesses from this chunk
+                    extraction_result = await bedrock.extract_witnesses(
+                        assets=chunk_assets,
+                        search_targets=search_targets
+                    )
+                    
+                    if extraction_result.success:
+                        all_witnesses.extend(extraction_result.witnesses)
+                        logger.info(f"Chunk {chunk_num}: found {len(extraction_result.witnesses)} witnesses")
+                    else:
+                        logger.warning(f"Chunk {chunk_num} extraction failed: {extraction_result.error}")
+                    
+                    # Clear chunk memory
+                    del chunk_assets
+                    gc.collect()
+                
+                logger.info(f"Large PDF processing complete: {len(all_witnesses)} total witnesses found")
+                
+                # Create a mock successful extraction result with all witnesses
+                from app.services.bedrock_client import ExtractionResult
+                extraction_result = ExtractionResult(
+                    success=True,
+                    witnesses=all_witnesses
+                )
+            else:
+                # Standard processing for smaller documents
+                proc_result = await processor.process(
+                    content=content,
+                    filename=document.filename
+                )
 
-            if not extraction_result.success:
-                document.processing_error = extraction_result.error
-                await session.commit()
-                return {"success": False, "error": extraction_result.error}
+                if not proc_result.success:
+                    document.processing_error = proc_result.error
+                    await session.commit()
+                    return {"success": False, "error": proc_result.error}
+
+                # Extract witnesses using AI
+                extraction_result = await bedrock.extract_witnesses(
+                    assets=proc_result.assets,
+                    search_targets=search_targets
+                )
+
+                if not extraction_result.success:
+                    document.processing_error = extraction_result.error
+                    await session.commit()
+                    return {"success": False, "error": extraction_result.error}
 
             # Save witnesses to database
             witnesses_created = 0
