@@ -19,6 +19,19 @@ from app.api.deps import get_current_user
 router = APIRouter(prefix="/matters", tags=["Matters"])
 
 
+@router.delete("/clear")
+async def clear_all_matters(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete all matters for the current user."""
+    result = await db.execute(
+        delete(Matter).where(Matter.user_id == current_user.id)
+    )
+    await db.commit()
+    return {"deleted": result.rowcount}
+
+
 @router.get("", response_model=MatterListResponse)
 async def list_matters(
     current_user: User = Depends(get_current_user),
