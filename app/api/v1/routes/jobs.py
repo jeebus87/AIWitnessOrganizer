@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from app.db.session import get_db
 from app.db.models import ProcessingJob, Matter, JobStatus, User
@@ -96,7 +97,7 @@ async def list_jobs(
     """
     List processing jobs for the current user.
     """
-    query = select(ProcessingJob).where(ProcessingJob.user_id == current_user.id)
+    query = select(ProcessingJob).options(joinedload(ProcessingJob.target_matter)).where(ProcessingJob.user_id == current_user.id)
 
     if status:
         query = query.where(ProcessingJob.status == JobStatus(status))
