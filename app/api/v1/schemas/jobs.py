@@ -29,6 +29,7 @@ class JobResponse(BaseModel):
     id: int
     job_type: str
     status: str
+    matter_name: Optional[str] = None
     total_documents: int
     processed_documents: int
     failed_documents: int

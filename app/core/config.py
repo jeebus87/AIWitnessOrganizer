@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
     aws_region: str = "us-east-1"
-    bedrock_model_id: str = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    bedrock_model_id: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 
     # Firebase
     firebase_project_id: Optional[str] = None

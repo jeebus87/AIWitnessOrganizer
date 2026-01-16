@@ -308,10 +308,16 @@ def _job_to_response(job: ProcessingJob) -> JobResponse:
     if job.total_documents > 0:
         progress = (job.processed_documents / job.total_documents) * 100
 
+    # Get matter name if available
+    matter_name = None
+    if job.target_matter:
+        matter_name = job.target_matter.display_number or job.target_matter.description
+
     return JobResponse(
         id=job.id,
         job_type=job.job_type,
         status=job.status.value,
+        matter_name=matter_name,
         total_documents=job.total_documents,
         processed_documents=job.processed_documents,
         failed_documents=job.failed_documents,
