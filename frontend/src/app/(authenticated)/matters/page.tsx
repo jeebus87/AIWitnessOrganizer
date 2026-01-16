@@ -7,8 +7,6 @@ import {
   RefreshCw,
   Play,
   Loader2,
-  CheckCircle,
-  XCircle,
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
@@ -29,7 +27,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
@@ -256,34 +253,15 @@ export default function MattersPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <SortableHeader field="display_number">Matter #</SortableHeader>
-                    <SortableHeader field="description">Description</SortableHeader>
-                    <SortableHeader field="status">Status</SortableHeader>
+                    <SortableHeader field="display_number">Matter</SortableHeader>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {matters?.map((matter) => (
                     <TableRow key={matter.id}>
-                      <TableCell className="font-medium whitespace-nowrap">
+                      <TableCell className="font-medium">
                         {matter.display_number || `#${matter.id}`}
-                      </TableCell>
-                      <TableCell>
-                        {matter.description || "No description"}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            matter.status === "Open" ? "default" : "secondary"
-                          }
-                        >
-                          {matter.status === "Open" ? (
-                            <CheckCircle className="mr-1 h-3 w-3" />
-                          ) : (
-                            <XCircle className="mr-1 h-3 w-3" />
-                          )}
-                          {matter.status || "Unknown"}
-                        </Badge>
                       </TableCell>
                       <TableCell className="text-right">
                         <Button

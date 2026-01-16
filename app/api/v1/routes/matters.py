@@ -351,6 +351,10 @@ async def sync_matters_from_clio(
                 practice_area_name = extract_nested(matter_data, "practice_area")
                 client_name = extract_nested(matter_data, "client")
 
+                # Skip matters without a client
+                if not client_name:
+                    continue
+
                 if matter:
                     # Update existing - use direct SQL UPDATE to bypass ORM tracking issues
                     await db.execute(
