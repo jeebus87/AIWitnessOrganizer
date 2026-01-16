@@ -239,11 +239,17 @@ class ClioClient:
             response = await self.get(url, params={} if url.startswith("http") else params)
             data = response.get("data", [])
 
+            # Debug: log data count and paging info
+            paging = response.get("meta", {}).get("paging", {})
+            print(f"DEBUG: Page returned {len(data)} items, paging: {paging}")
+
             for item in data:
                 yield item
 
-            # Get next page URL
-            paging = response.get("meta", {}).get("paging", {})
+            # If no data returned, stop pagination (prevents infinite loop on empty pages)
+            if not data:
+                print(f"DEBUG: No data returned, stopping pagination")
+                break
             url = paging.get("next")
 
     # =========================================================================
