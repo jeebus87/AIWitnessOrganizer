@@ -48,8 +48,8 @@ class DocumentProcessor:
     # Image constraints for AWS Bedrock
     MAX_IMAGE_SIZE_MB = 3.75
     MAX_IMAGE_DIMENSION = 8000
-    SUPPORTED_IMAGE_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-    SUPPORTED_DOC_FORMATS = {".pdf", ".msg", ".eml"}
+    SUPPORTED_IMAGE_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
+    SUPPORTED_DOC_FORMATS = {".pdf", ".msg", ".eml", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".rtf", ".txt", ".html", ".htm", ".csv"}
 
     def __init__(self, temp_dir: Optional[str] = None):
         self.temp_dir = temp_dir or tempfile.gettempdir()
@@ -65,12 +65,36 @@ class DocumentProcessor:
         # Check magic bytes for common formats
         if content[:4] == b"%PDF":
             return "pdf"
-        elif content[:8] == b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1":  # OLE compound
-            return "msg"
+        elif content[:8] == b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1":  # OLE compound (could be .msg, .doc, .xls, .ppt)
+            # Need to check extension for legacy Office formats
+            if ext == ".msg":
+                return "msg"
+            elif ext == ".doc":
+                return "doc"
+            elif ext == ".xls":
+                return "xls"
+            elif ext == ".ppt":
+                return "ppt"
+            return "msg"  # Default to msg for OLE
+        elif content[:4] == b"PK\x03\x04":  # ZIP-based (Office Open XML: .docx, .xlsx, .pptx)
+            if ext == ".docx":
+                return "docx"
+            elif ext in (".xlsx", ".xls"):
+                return "xlsx"
+            elif ext == ".pptx":
+                return "pptx"
+            # Could also be a regular .zip, fall back to extension
+            return ext.lstrip(".") if ext else "zip"
         elif content[:4] == b"\x89PNG":
             return "png"
         elif content[:2] == b"\xFF\xD8":
             return "jpg"
+        elif content[:4] in (b"II*\x00", b"MM\x00*"):  # TIFF (little/big endian)
+            return "tiff"
+        elif content[:5] == b"{\\rtf":
+            return "rtf"
+        elif content[:14].lower().startswith(b"<!doctype html") or content[:5].lower() == b"<html":
+            return "html"
         elif ext in self.SUPPORTED_IMAGE_FORMATS:
             return ext.lstrip(".")
 
@@ -97,14 +121,52 @@ class DocumentProcessor:
         file_type = self.detect_file_type(filename, content)
 
         try:
-            if file_type in ("jpg", "jpeg", "png", "gif", "webp"):
+            # Images
+            if file_type in ("jpg", "jpeg", "png", "gif", "webp", "bmp"):
                 assets = await self._process_image(content, filename, context)
+            elif file_type in ("tif", "tiff"):
+                assets = await self._process_tiff(content, filename, context)
+            # PDF
             elif file_type == "pdf":
                 assets = await self._process_pdf(content, filename, context)
+            # Email
             elif file_type == "msg":
                 assets = await self._process_msg(content, filename, context)
             elif file_type == "eml":
                 assets = await self._process_eml(content, filename, context)
+            # Office documents
+            elif file_type == "docx":
+                assets = await self._process_docx(content, filename, context)
+            elif file_type == "doc":
+                # Legacy .doc - try docx parser (may fail for very old formats)
+                try:
+                    assets = await self._process_docx(content, filename, context)
+                except Exception:
+                    return ProcessingResult(
+                        success=False,
+                        error="Legacy .doc format not supported. Please convert to .docx",
+                        file_hash=file_hash
+                    )
+            elif file_type in ("xlsx", "xls"):
+                assets = await self._process_xlsx(content, filename, context)
+            elif file_type == "pptx":
+                assets = await self._process_pptx(content, filename, context)
+            elif file_type == "ppt":
+                # Legacy .ppt - not supported
+                return ProcessingResult(
+                    success=False,
+                    error="Legacy .ppt format not supported. Please convert to .pptx",
+                    file_hash=file_hash
+                )
+            # Text-based formats
+            elif file_type == "txt":
+                assets = await self._process_txt(content, filename, context)
+            elif file_type == "rtf":
+                assets = await self._process_rtf(content, filename, context)
+            elif file_type in ("html", "htm"):
+                assets = await self._process_html(content, filename, context)
+            elif file_type == "csv":
+                assets = await self._process_csv(content, filename, context)
             else:
                 return ProcessingResult(
                     success=False,
@@ -266,19 +328,9 @@ class DocumentProcessor:
                     if context:
                         att_context = f"{context} > {att_context}"
 
-                    # Recursive processing for nested emails
+                    # Recursive processing for all supported attachments
                     att_ext = Path(att_filename).suffix.lower()
-                    if att_ext in (".msg", ".eml"):
-                        nested_result = await self.process(
-                            att_content,
-                            att_filename,
-                            att_context
-                        )
-                        if nested_result.success:
-                            for asset in nested_result.assets:
-                                asset.parent_filename = filename
-                            assets.extend(nested_result.assets)
-                    elif att_ext in self.SUPPORTED_IMAGE_FORMATS or att_ext == ".pdf":
+                    if att_ext in self.SUPPORTED_DOC_FORMATS or att_ext in self.SUPPORTED_IMAGE_FORMATS:
                         nested_result = await self.process(
                             att_content,
                             att_filename,
@@ -344,12 +396,298 @@ class DocumentProcessor:
                 att_context = f"{context} > {att_context}"
 
             att_ext = Path(att_filename).suffix.lower()
-            if att_ext in (".msg", ".eml") or att_ext in self.SUPPORTED_IMAGE_FORMATS or att_ext == ".pdf":
+            if att_ext in self.SUPPORTED_DOC_FORMATS or att_ext in self.SUPPORTED_IMAGE_FORMATS:
                 nested_result = await self.process(att_content, att_filename, att_context)
                 if nested_result.success:
                     for asset in nested_result.assets:
                         asset.parent_filename = filename
                     assets.extend(nested_result.assets)
+
+        return assets
+
+    async def _process_docx(
+        self,
+        content: bytes,
+        filename: str,
+        context: str = ""
+    ) -> List[ProcessedAsset]:
+        """Extract text from Word documents (.docx)"""
+        from docx import Document
+
+        doc = Document(io.BytesIO(content))
+        text_parts = []
+
+        # Extract paragraphs
+        for para in doc.paragraphs:
+            if para.text.strip():
+                text_parts.append(para.text)
+
+        # Extract tables
+        for table in doc.tables:
+            table_rows = []
+            for row in table.rows:
+                row_text = " | ".join(cell.text.strip() for cell in row.cells)
+                if row_text.strip(" |"):
+                    table_rows.append(row_text)
+            if table_rows:
+                text_parts.append("\n[Table]\n" + "\n".join(table_rows))
+
+        full_text = "\n\n".join(text_parts)
+
+        return [ProcessedAsset(
+            asset_type="text",
+            content=full_text.encode("utf-8"),
+            media_type="text/plain",
+            filename=filename,
+            original_filename=filename,
+            context=context
+        )]
+
+    async def _process_xlsx(
+        self,
+        content: bytes,
+        filename: str,
+        context: str = ""
+    ) -> List[ProcessedAsset]:
+        """Extract text from Excel spreadsheets (.xlsx, .xls)"""
+        from openpyxl import load_workbook
+
+        wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        assets = []
+
+        for sheet_name in wb.sheetnames:
+            sheet = wb[sheet_name]
+            rows = []
+
+            for row in sheet.iter_rows(values_only=True):
+                # Convert each cell to string, handling None values
+                row_text = " | ".join(str(cell) if cell is not None else "" for cell in row)
+                if row_text.strip(" |"):
+                    rows.append(row_text)
+
+            if rows:
+                sheet_text = f"[Sheet: {sheet_name}]\n" + "\n".join(rows)
+                assets.append(ProcessedAsset(
+                    asset_type="text",
+                    content=sheet_text.encode("utf-8"),
+                    media_type="text/plain",
+                    filename=f"{filename}_{sheet_name}",
+                    original_filename=filename,
+                    context=context
+                ))
+
+        wb.close()
+
+        # If no sheets had data, return at least one empty asset
+        if not assets:
+            assets.append(ProcessedAsset(
+                asset_type="text",
+                content=b"[Empty spreadsheet]",
+                media_type="text/plain",
+                filename=filename,
+                original_filename=filename,
+                context=context
+            ))
+
+        return assets
+
+    async def _process_pptx(
+        self,
+        content: bytes,
+        filename: str,
+        context: str = ""
+    ) -> List[ProcessedAsset]:
+        """Extract text from PowerPoint presentations (.pptx)"""
+        from pptx import Presentation
+
+        prs = Presentation(io.BytesIO(content))
+        assets = []
+
+        for i, slide in enumerate(prs.slides, 1):
+            texts = []
+
+            for shape in slide.shapes:
+                if hasattr(shape, "text") and shape.text.strip():
+                    texts.append(shape.text)
+
+            if texts:
+                slide_text = f"[Slide {i}]\n" + "\n".join(texts)
+                assets.append(ProcessedAsset(
+                    asset_type="text",
+                    content=slide_text.encode("utf-8"),
+                    media_type="text/plain",
+                    filename=f"{filename}_slide_{i}",
+                    original_filename=filename,
+                    page_number=i,
+                    context=context
+                ))
+
+        # If no slides had text, return at least one asset
+        if not assets:
+            assets.append(ProcessedAsset(
+                asset_type="text",
+                content=b"[Empty presentation]",
+                media_type="text/plain",
+                filename=filename,
+                original_filename=filename,
+                context=context
+            ))
+
+        return assets
+
+    async def _process_txt(
+        self,
+        content: bytes,
+        filename: str,
+        context: str = ""
+    ) -> List[ProcessedAsset]:
+        """Process plain text files"""
+        # Try UTF-8 first, fallback to latin-1
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            text = content.decode("latin-1")
+
+        return [ProcessedAsset(
+            asset_type="text",
+            content=text.encode("utf-8"),
+            media_type="text/plain",
+            filename=filename,
+            original_filename=filename,
+            context=context
+        )]
+
+    async def _process_rtf(
+        self,
+        content: bytes,
+        filename: str,
+        context: str = ""
+    ) -> List[ProcessedAsset]:
+        """Extract text from RTF files"""
+        from striprtf.striprtf import rtf_to_text
+
+        rtf_content = content.decode("utf-8", errors="replace")
+        text = rtf_to_text(rtf_content)
+
+        return [ProcessedAsset(
+            asset_type="text",
+            content=text.encode("utf-8"),
+            media_type="text/plain",
+            filename=filename,
+            original_filename=filename,
+            context=context
+        )]
+
+    async def _process_html(
+        self,
+        content: bytes,
+        filename: str,
+        context: str = ""
+    ) -> List[ProcessedAsset]:
+        """Extract text from HTML files"""
+        from bs4 import BeautifulSoup
+
+        # Try to decode with different encodings
+        try:
+            html_content = content.decode("utf-8")
+        except UnicodeDecodeError:
+            html_content = content.decode("latin-1")
+
+        soup = BeautifulSoup(html_content, "lxml")
+
+        # Remove script and style elements
+        for tag in soup(["script", "style"]):
+            tag.decompose()
+
+        text = soup.get_text(separator="\n", strip=True)
+
+        return [ProcessedAsset(
+            asset_type="text",
+            content=text.encode("utf-8"),
+            media_type="text/plain",
+            filename=filename,
+            original_filename=filename,
+            context=context
+        )]
+
+    async def _process_csv(
+        self,
+        content: bytes,
+        filename: str,
+        context: str = ""
+    ) -> List[ProcessedAsset]:
+        """Process CSV files as formatted text"""
+        import csv
+
+        # Try to decode with different encodings
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            text = content.decode("latin-1")
+
+        # Parse CSV and format as text with pipe separators
+        reader = csv.reader(io.StringIO(text))
+        rows = [" | ".join(row) for row in reader if any(cell.strip() for cell in row)]
+        formatted = "\n".join(rows)
+
+        return [ProcessedAsset(
+            asset_type="text",
+            content=formatted.encode("utf-8"),
+            media_type="text/plain",
+            filename=filename,
+            original_filename=filename,
+            context=context
+        )]
+
+    async def _process_tiff(
+        self,
+        content: bytes,
+        filename: str,
+        context: str = ""
+    ) -> List[ProcessedAsset]:
+        """Process multi-page TIFF images"""
+        import gc
+
+        img = Image.open(io.BytesIO(content))
+        assets = []
+        page = 0
+
+        while True:
+            try:
+                img.seek(page)
+
+                # Convert frame to RGB if needed and save as JPEG
+                buffer = io.BytesIO()
+                frame = img.copy()
+                if frame.mode != "RGB":
+                    frame = frame.convert("RGB")
+                frame.save(buffer, format="JPEG", quality=80, optimize=True)
+
+                processed_bytes, media_type = self._resize_and_compress_image(buffer.getvalue())
+
+                assets.append(ProcessedAsset(
+                    asset_type="image",
+                    content=processed_bytes,
+                    media_type=media_type,
+                    filename=f"{filename}_page_{page + 1}.jpg",
+                    original_filename=filename,
+                    page_number=page + 1,
+                    context=context
+                ))
+
+                frame.close()
+                buffer.close()
+                page += 1
+
+                # Garbage collection every few pages
+                if page % 5 == 0:
+                    gc.collect()
+
+            except EOFError:
+                break
+
+        img.close()
+        gc.collect()
 
         return assets
 
