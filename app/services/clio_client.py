@@ -3,7 +3,7 @@ import asyncio
 import time
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, AsyncIterator, List
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse, parse_qs, urlunsplit
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -215,11 +215,28 @@ class ClioClient:
         """
         params = params or {}
         url = endpoint
-        # Preserve fields param - Clio's "next" URL doesn't include it
+        # Preserve fields param - Clio's "next" URL doesn't always include it
         fields_param = params.get("fields")
+        prev_url = None  # Track previous URL to detect infinite loops
 
         while url:
-            response = await self.get(url, params=params)
+            # Detect infinite loop - same URL being requested twice
+            if url == prev_url:
+                print(f"WARNING: Pagination loop detected, same URL returned twice: {url[:100]}...")
+                break
+            prev_url = url
+
+            # If this is a full URL (pagination), ensure fields param is included
+            if url.startswith("http") and fields_param:
+                parsed = urlparse(url)
+                query_params = parse_qs(parsed.query)
+                if "fields" not in query_params:
+                    # Add fields to the URL directly
+                    separator = "&" if parsed.query else "?"
+                    url = f"{url}{separator}fields={fields_param}"
+                    print(f"DEBUG: Added fields to pagination URL")
+
+            response = await self.get(url, params={} if url.startswith("http") else params)
             data = response.get("data", [])
 
             for item in data:
@@ -228,8 +245,6 @@ class ClioClient:
             # Get next page URL
             paging = response.get("meta", {}).get("paging", {})
             url = paging.get("next")
-            # Clear most params (they're in the next URL), but keep fields
-            params = {"fields": fields_param} if fields_param else {}
 
     # =========================================================================
     # Matter Operations
