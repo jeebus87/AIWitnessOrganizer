@@ -144,6 +144,7 @@ export default function MattersPage() {
     try {
       const job = await api.processMatter(matterId, token);
       toast.success(`Processing job started (ID: ${job.id})`);
+      router.push("/jobs");
     } catch (error) {
       toast.error("Failed to start processing");
       console.error(error);
