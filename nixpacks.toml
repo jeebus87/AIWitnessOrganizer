@@ -1,5 +1,6 @@
 [phases.setup]
-nixPkgs = ["python311", "libmagic", "poppler_utils", "tesseract"]
+nixPkgs = ["python311", "file", "poppler_utils"]
+
 providers = ["python"]
 
 
