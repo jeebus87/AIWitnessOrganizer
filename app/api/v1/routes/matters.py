@@ -11,7 +11,7 @@ from sqlalchemy import select, func, update, delete, distinct, asc, desc
 
 from app.core.security import decrypt_token
 from app.db.session import get_db
-from app.db.models import Matter, Document, Witness, ClioIntegration, User
+from app.db.models import Matter, Document, Witness, ClioIntegration, User, ProcessingJob, JobStatus
 from app.api.v1.schemas.witnesses import MatterResponse, MatterListResponse, DocumentResponse
 from app.services.clio_client import ClioClient
 from app.api.deps import get_current_user
@@ -204,6 +204,57 @@ async def get_matter(
         witness_count=witness_count,
         last_synced_at=matter.last_synced_at
     )
+
+
+@router.post("/{matter_id}/process")
+async def process_matter(
+    matter_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Start processing a matter to extract witnesses from its documents.
+    """
+    # Verify matter belongs to user
+    result = await db.execute(
+        select(Matter).where(
+            Matter.id == matter_id,
+            Matter.user_id == current_user.id
+        )
+    )
+    matter = result.scalar_one_or_none()
+
+    if not matter:
+        raise HTTPException(status_code=404, detail="Matter not found")
+
+    # Create job record
+    job = ProcessingJob(
+        user_id=current_user.id,
+        job_type="single_matter",
+        target_matter_id=matter_id,
+        status=JobStatus.PENDING
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    # Start Celery task
+    from app.worker.tasks import process_matter as process_matter_task
+    task = process_matter_task.delay(
+        job_id=job.id,
+        matter_id=matter_id,
+        search_targets=None
+    )
+
+    # Store task ID
+    job.celery_task_id = task.id
+    await db.commit()
+
+    return {
+        "id": job.id,
+        "status": job.status.value,
+        "message": f"Processing started for matter {matter.display_number}"
+    }
 
 
 @router.get("/{matter_id}/documents")
