@@ -231,6 +231,8 @@ async def sync_matters_from_clio(
         include_archived: If True, sync all matters including archived. Default syncs only Open.
         clear_existing: If True, delete all existing matters before syncing.
     """
+    # TEMP: Always clear existing to fix old data
+    clear_existing = True
     print(f"SYNC: Starting sync, clear_existing={clear_existing}, include_archived={include_archived}")
 
     # Clear existing matters if requested
