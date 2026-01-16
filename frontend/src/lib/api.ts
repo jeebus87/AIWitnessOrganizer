@@ -57,8 +57,9 @@ class ApiClient {
     return this.request<Matter>(`/api/v1/matters/${id}`, { token });
   }
 
-  async syncMatters(token: string) {
-    return this.request<{ success: boolean; synced: number }>("/api/v1/matters/sync", {
+  async syncMatters(token: string, clearExisting: boolean = false) {
+    const params = clearExisting ? "?clear_existing=true" : "";
+    return this.request<{ success: boolean; synced: number }>(`/api/v1/matters/sync${params}`, {
       method: "POST",
       token,
     });

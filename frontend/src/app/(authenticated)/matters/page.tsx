@@ -53,8 +53,8 @@ export default function MattersPage() {
     if (!token) return;
     setSyncing(true);
     try {
-      const result = await api.syncMatters(token);
-      toast.success(`Synced ${result.synced} matters from Clio`);
+      const result = await api.syncMatters(token, true); // Clear existing and re-sync
+      toast.success(`Synced ${result.matters_synced} matters from Clio`);
       mutate();
     } catch (error: any) {
       console.error("Sync error:", error);
