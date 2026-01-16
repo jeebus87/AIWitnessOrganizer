@@ -255,13 +255,18 @@ async def sync_matters_from_clio(
                 )
                 matter = result.scalar_one_or_none()
 
+                # Extract nested fields - Clio returns {status: {name: "Open"}} not {status: "Open"}
+                status_name = matter_data.get("status", {}).get("name") if matter_data.get("status") else None
+                practice_area_name = matter_data.get("practice_area", {}).get("name") if matter_data.get("practice_area") else None
+                client_name = matter_data.get("client", {}).get("name") if matter_data.get("client") else None
+
                 if matter:
                     # Update existing
                     matter.display_number = matter_data.get("display_number")
                     matter.description = matter_data.get("description")
-                    matter.status = matter_data.get("status")
-                    matter.practice_area = matter_data.get("practice_area")
-                    matter.client_name = matter_data.get("client", {}).get("name")
+                    matter.status = status_name
+                    matter.practice_area = practice_area_name
+                    matter.client_name = client_name
                     matter.last_synced_at = datetime.utcnow()
                 else:
                     # Create new
@@ -270,9 +275,9 @@ async def sync_matters_from_clio(
                         clio_matter_id=str(matter_data["id"]),
                         display_number=matter_data.get("display_number"),
                         description=matter_data.get("description"),
-                        status=matter_data.get("status"),
-                        practice_area=matter_data.get("practice_area"),
-                        client_name=matter_data.get("client", {}).get("name"),
+                        status=status_name,
+                        practice_area=practice_area_name,
+                        client_name=client_name,
                         last_synced_at=datetime.utcnow()
                     )
                     db.add(matter)

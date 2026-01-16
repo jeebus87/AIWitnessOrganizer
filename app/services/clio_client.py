@@ -233,13 +233,14 @@ class ClioClient:
     # =========================================================================
 
     # Default fields needed for matters - Clio API returns only id/etag without explicit fields
+    # Note: status, practice_area, and client are nested objects - use {name} syntax
     DEFAULT_MATTER_FIELDS = [
         "id",
         "display_number",
         "description",
-        "status",
-        "practice_area",
-        "client{name}",  # Nested field syntax for Clio API
+        "status{name}",        # Nested: returns {"status": {"name": "Open"}}
+        "practice_area{name}", # Nested: returns {"practice_area": {"name": "Litigation"}}
+        "client{name}",        # Nested: returns {"client": {"name": "John Doe"}}
     ]
 
     async def get_matters(
