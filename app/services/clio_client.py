@@ -149,8 +149,9 @@ class ClioClient:
 
     @retry(
         retry=retry_if_exception_type(ClioRateLimitError),
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=60)
+        stop=stop_after_attempt(10),
+        wait=wait_exponential(multiplier=1, min=2, max=120),
+        before_sleep=lambda retry_state: print(f"DEBUG: Rate limit hit. Retrying attempt {retry_state.attempt_number}...")
     )
     async def _request(
         self,
@@ -162,7 +163,14 @@ class ClioClient:
         await self._ensure_valid_token()
         await self.rate_limiter.acquire()
 
-        url = f"{self.api_url}/{endpoint.lstrip('/')}"
+        # Debug logging
+        print(f"DEBUG: _request endpoint='{endpoint}' startswith_http={endpoint.startswith('http')}")
+
+        if endpoint.startswith("http"):
+            url = endpoint
+        else:
+            url = f"{self.api_url}/{endpoint.lstrip('/')}"
+
         response = await self.client.request(
             method,
             url,
@@ -226,11 +234,13 @@ class ClioClient:
 
     async def get_matters(
         self,
-        status: str = "Open",
+        status: Optional[str] = "Open",
         fields: Optional[List[str]] = None
     ) -> AsyncIterator[Dict[str, Any]]:
-        """Get all matters (paginated)"""
-        params = {"status": status}
+        """Get all matters (paginated). Pass status=None to get ALL matters."""
+        params = {}
+        if status:  # Only add status if provided (None = get all)
+            params["status"] = status
         if fields:
             params["fields"] = ",".join(fields)
         async for matter in self.get_paginated("matters", params):

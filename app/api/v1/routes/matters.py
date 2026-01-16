@@ -237,7 +237,8 @@ async def sync_matters_from_clio(
             token_expires_at=integration.token_expires_at,
             region=integration.clio_region
         ) as clio:
-            status = "All" if include_archived else "Open"
+            # Pass None for status to get ALL matters, "Open" to get only open ones
+            status = None if include_archived else "Open"
             synced_count = 0
 
             async for matter_data in clio.get_matters(status=status):
