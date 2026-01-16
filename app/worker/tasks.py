@@ -1,5 +1,6 @@
 """Celery background tasks for document processing and witness extraction"""
 import asyncio
+import gc
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
@@ -142,6 +143,7 @@ async def _process_single_document_async(
             # Update document status
             document.is_processed = True
             document.processed_at = datetime.utcnow()
+            tokens_used = extraction_result.input_tokens + extraction_result.output_tokens
             document.analysis_cache = {
                 "witnesses_count": witnesses_created,
                 "input_tokens": extraction_result.input_tokens,
@@ -153,17 +155,26 @@ async def _process_single_document_async(
 
             logger.info(f"Document {document_id} processed: {witnesses_created} witnesses found")
 
+            # Clean up memory after successful processing
+            del content
+            del proc_result
+            del extraction_result
+            gc.collect()
+
             return {
                 "success": True,
                 "document_id": document_id,
                 "witnesses_found": witnesses_created,
-                "tokens_used": extraction_result.input_tokens + extraction_result.output_tokens
+                "tokens_used": tokens_used
             }
 
         except Exception as e:
             logger.exception(f"Error processing document {document_id}")
             document.processing_error = str(e)
             await session.commit()
+
+            # Clean up memory even on error
+            gc.collect()
 
             # Retry if retries remaining
             raise task.retry(exc=e, countdown=60)
@@ -305,6 +316,9 @@ async def _process_matter_async(
                     failed_count += 1
                     job.processed_documents += 1
                     await session.commit()
+
+                # Force garbage collection after each document to prevent memory buildup
+                gc.collect()
 
             # Update job completion
             job.status = JobStatus.COMPLETED
@@ -495,6 +509,9 @@ async def _process_full_database_async(
                     failed_count += 1
                     job.processed_documents += 1
                     await session.commit()
+
+                # Force garbage collection after each document to prevent memory buildup
+                gc.collect()
 
             # Update job completion
             job.status = JobStatus.COMPLETED

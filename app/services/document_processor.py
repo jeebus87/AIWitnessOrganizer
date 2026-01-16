@@ -149,31 +149,71 @@ class DocumentProcessor:
         filename: str,
         context: str = ""
     ) -> List[ProcessedAsset]:
-        """Convert PDF pages to images"""
+        """Convert PDF pages to images - processes one page at a time to save memory"""
         if not PDF2IMAGE_AVAILABLE:
             raise ImportError("pdf2image not available. Install poppler.")
 
+        import gc
+
         assets = []
-        images = convert_from_bytes(content, dpi=150)
+        page_number = 1
 
-        for i, image in enumerate(images, 1):
-            # Convert PIL Image to bytes
-            buffer = io.BytesIO()
-            image.save(buffer, format="JPEG", quality=85, optimize=True)
-            image_bytes = buffer.getvalue()
+        # Process one page at a time to avoid memory exhaustion
+        # first_page and last_page are 1-indexed in pdf2image
+        while True:
+            try:
+                # Convert single page at lower DPI to reduce memory usage
+                images = convert_from_bytes(
+                    content,
+                    dpi=100,  # Reduced from 150 to save memory
+                    first_page=page_number,
+                    last_page=page_number
+                )
 
-            # Resize if needed
-            processed_bytes, media_type = self._resize_and_compress_image(image_bytes)
+                if not images:
+                    break
 
-            assets.append(ProcessedAsset(
-                asset_type="image",
-                content=processed_bytes,
-                media_type=media_type,
-                filename=f"{filename}_page_{i}.jpg",
-                original_filename=filename,
-                context=context,
-                page_number=i
-            ))
+                image = images[0]
+
+                # Convert PIL Image to bytes
+                buffer = io.BytesIO()
+                image.save(buffer, format="JPEG", quality=80, optimize=True)
+                image_bytes = buffer.getvalue()
+
+                # Explicitly close and delete image to free memory
+                image.close()
+                del image
+                del images
+                buffer.close()
+
+                # Resize if needed
+                processed_bytes, media_type = self._resize_and_compress_image(image_bytes)
+                del image_bytes
+
+                assets.append(ProcessedAsset(
+                    asset_type="image",
+                    content=processed_bytes,
+                    media_type=media_type,
+                    filename=f"{filename}_page_{page_number}.jpg",
+                    original_filename=filename,
+                    context=context,
+                    page_number=page_number
+                ))
+
+                page_number += 1
+
+                # Force garbage collection every few pages
+                if page_number % 5 == 0:
+                    gc.collect()
+
+            except Exception as e:
+                # If we get an error (e.g., page out of range), we're done
+                if "page" in str(e).lower() or page_number > 1:
+                    break
+                raise
+
+        # Final garbage collection
+        gc.collect()
 
         return assets
 
