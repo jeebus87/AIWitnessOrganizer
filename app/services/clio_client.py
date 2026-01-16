@@ -215,6 +215,8 @@ class ClioClient:
         """
         params = params or {}
         url = endpoint
+        # Preserve fields param - Clio's "next" URL doesn't include it
+        fields_param = params.get("fields")
 
         while url:
             response = await self.get(url, params=params)
@@ -226,7 +228,8 @@ class ClioClient:
             # Get next page URL
             paging = response.get("meta", {}).get("paging", {})
             url = paging.get("next")
-            params = {}  # Clear params, they're included in the next URL
+            # Clear most params (they're in the next URL), but keep fields
+            params = {"fields": fields_param} if fields_param else {}
 
     # =========================================================================
     # Matter Operations
