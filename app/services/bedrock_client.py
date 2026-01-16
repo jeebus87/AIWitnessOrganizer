@@ -283,7 +283,13 @@ Respond with valid JSON only."""
         Returns:
             ExtractionResult with list of WitnessData
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.info(f"extract_witnesses called with {len(assets)} assets, types: {[a.asset_type for a in assets]}")
+        
         if not assets:
+            logger.warning("No assets provided to extract_witnesses")
             return ExtractionResult(
                 success=True,
                 witnesses=[],
@@ -308,8 +314,11 @@ Respond with valid JSON only."""
 
         # Invoke model
         try:
+            logger.info(f"Calling Bedrock model {self.model_id}...")
             response = self._invoke_model(messages)
-            return self._parse_response(response)
+            result = self._parse_response(response)
+            logger.info(f"Bedrock returned {len(result.witnesses)} witnesses, success={result.success}, tokens={result.input_tokens}+{result.output_tokens}")
+            return result
         except BedrockThrottlingError as e:
             return ExtractionResult(
                 success=False,
