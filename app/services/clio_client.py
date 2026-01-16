@@ -207,50 +207,53 @@ class ClioClient:
     async def get_paginated(
         self,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None
+        params: Optional[Dict[str, Any]] = None,
+        page_size: int = 200
     ) -> AsyncIterator[Dict[str, Any]]:
         """
-        Iterate through paginated Clio API results.
+        Iterate through paginated Clio API results using offset-based pagination.
         Yields individual items from the 'data' array.
+
+        Uses offset pagination instead of cursor pagination because Clio's
+        cursor-based pagination returns the same page_token repeatedly.
         """
         params = params or {}
-        url = endpoint
-        # Preserve fields param - Clio's "next" URL doesn't always include it
-        fields_param = params.get("fields")
-        prev_url = None  # Track previous URL to detect infinite loops
+        params["limit"] = page_size
+        offset = 0
+        seen_ids: set = set()  # Track seen IDs to detect duplicates
 
-        while url:
-            # Detect infinite loop - same URL being requested twice
-            if url == prev_url:
-                print(f"WARNING: Pagination loop detected, same URL returned twice: {url[:100]}...")
-                break
-            prev_url = url
+        while True:
+            params["offset"] = offset
+            print(f"DEBUG: Fetching {endpoint} offset={offset}, limit={page_size}")
 
-            # If this is a full URL (pagination), ensure fields param is included
-            if url.startswith("http") and fields_param:
-                parsed = urlparse(url)
-                query_params = parse_qs(parsed.query)
-                if "fields" not in query_params:
-                    # Add fields to the URL directly
-                    separator = "&" if parsed.query else "?"
-                    url = f"{url}{separator}fields={fields_param}"
-                    print(f"DEBUG: Added fields to pagination URL")
-
-            response = await self.get(url, params={} if url.startswith("http") else params)
+            response = await self.get(endpoint, params=params)
             data = response.get("data", [])
 
-            # Debug: log data count and paging info
+            # Debug: log data count
             paging = response.get("meta", {}).get("paging", {})
-            print(f"DEBUG: Page returned {len(data)} items, paging: {paging}")
+            print(f"DEBUG: Page returned {len(data)} items, total records: {paging.get('records', 'unknown')}")
 
-            for item in data:
-                yield item
-
-            # If no data returned, stop pagination (prevents infinite loop on empty pages)
             if not data:
                 print(f"DEBUG: No data returned, stopping pagination")
                 break
-            url = paging.get("next")
+
+            # Check for duplicate IDs (indicates we've wrapped around)
+            new_items = 0
+            for item in data:
+                item_id = item.get("id")
+                if item_id in seen_ids:
+                    print(f"DEBUG: Duplicate ID {item_id} detected, stopping")
+                    return  # Stop iteration completely
+                seen_ids.add(item_id)
+                new_items += 1
+                yield item
+
+            # If we got fewer items than page_size, we've reached the end
+            if len(data) < page_size:
+                print(f"DEBUG: Got {len(data)} items (< {page_size}), reached end of data")
+                break
+
+            offset += page_size
 
     # =========================================================================
     # Matter Operations
