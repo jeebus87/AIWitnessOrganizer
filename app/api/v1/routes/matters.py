@@ -281,6 +281,8 @@ async def sync_matters_from_clio(
                     matter.practice_area = practice_area_name
                     matter.client_name = client_name
                     matter.last_synced_at = datetime.utcnow()
+                    if synced_count < 3:
+                        print(f"DEBUG DB UPDATE: id={matter.id}, status={matter.status}, client={matter.client_name}")
                 else:
                     # Create new
                     matter = Matter(
@@ -294,6 +296,8 @@ async def sync_matters_from_clio(
                         last_synced_at=datetime.utcnow()
                     )
                     db.add(matter)
+                    if synced_count < 3:
+                        print(f"DEBUG DB CREATE: clio_id={matter.clio_matter_id}, status={matter.status}, client={matter.client_name}")
 
                 synced_count += 1
 
