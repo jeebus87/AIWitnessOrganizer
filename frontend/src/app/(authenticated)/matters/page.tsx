@@ -257,21 +257,18 @@ export default function MattersPage() {
                 <TableHeader>
                   <TableRow>
                     <SortableHeader field="display_number">Matter #</SortableHeader>
-                    <SortableHeader field="client_name">Client</SortableHeader>
                     <SortableHeader field="description">Description</SortableHeader>
                     <SortableHeader field="status">Status</SortableHeader>
-                    <SortableHeader field="practice_area">Practice Area</SortableHeader>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {matters?.map((matter) => (
                     <TableRow key={matter.id}>
-                      <TableCell className="font-medium">
+                      <TableCell className="font-medium whitespace-nowrap">
                         {matter.display_number || `#${matter.id}`}
                       </TableCell>
-                      <TableCell>{matter.client_name || "—"}</TableCell>
-                      <TableCell className="max-w-xs truncate">
+                      <TableCell>
                         {matter.description || "No description"}
                       </TableCell>
                       <TableCell>
@@ -288,7 +285,6 @@ export default function MattersPage() {
                           {matter.status || "Unknown"}
                         </Badge>
                       </TableCell>
-                      <TableCell>{matter.practice_area || "—"}</TableCell>
                       <TableCell className="text-right">
                         <Button
                           size="sm"
