@@ -49,8 +49,24 @@ class ApiClient {
   }
 
   // Matters
-  async getMatters(token: string) {
-    return this.request<MatterListResponse>("/api/v1/matters", { token });
+  async getMatters(token: string, params: GetMattersParams = {}) {
+    const searchParams = new URLSearchParams();
+    if (params.page) searchParams.set('page', params.page.toString());
+    if (params.pageSize) searchParams.set('page_size', params.pageSize.toString());
+    if (params.sortBy) searchParams.set('sort_by', params.sortBy);
+    if (params.sortOrder) searchParams.set('sort_order', params.sortOrder);
+    if (params.search) searchParams.set('search', params.search);
+    if (params.status) searchParams.set('status', params.status);
+    if (params.practiceArea) searchParams.set('practice_area', params.practiceArea);
+    if (params.clientName) searchParams.set('client_name', params.clientName);
+    if (params.syncedAfter) searchParams.set('synced_after', params.syncedAfter);
+    if (params.syncedBefore) searchParams.set('synced_before', params.syncedBefore);
+    const query = searchParams.toString();
+    return this.request<MatterListResponse>(`/api/v1/matters${query ? '?' + query : ''}`, { token });
+  }
+
+  async getMatterFilters(token: string) {
+    return this.request<MatterFilters>("/api/v1/matters/filters", { token });
   }
 
   async getMatter(id: number, token: string) {
@@ -211,6 +227,26 @@ export interface MatterListResponse {
   total: number;
   page: number;
   page_size: number;
+  total_pages: number;
+}
+
+export interface GetMattersParams {
+  page?: number;
+  pageSize?: number;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  search?: string;
+  status?: string;
+  practiceArea?: string;
+  clientName?: string;
+  syncedAfter?: string;
+  syncedBefore?: string;
+}
+
+export interface MatterFilters {
+  statuses: string[];
+  practice_areas: string[];
+  clients: string[];
 }
 
 export interface WitnessListResponse {

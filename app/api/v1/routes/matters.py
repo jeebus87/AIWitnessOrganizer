@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update, delete
+from sqlalchemy import select, func, update, delete, distinct, asc, desc
 
 from app.core.security import decrypt_token
 from app.db.session import get_db
@@ -32,6 +32,29 @@ async def clear_all_matters(
     return {"deleted": result.rowcount}
 
 
+@router.get("/filters")
+async def get_matter_filters(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get distinct values for filter dropdowns."""
+    statuses_result = await db.execute(
+        select(distinct(Matter.status)).where(Matter.user_id == current_user.id)
+    )
+    practice_areas_result = await db.execute(
+        select(distinct(Matter.practice_area)).where(Matter.user_id == current_user.id)
+    )
+    clients_result = await db.execute(
+        select(distinct(Matter.client_name)).where(Matter.user_id == current_user.id)
+    )
+
+    return {
+        "statuses": sorted([s for s in statuses_result.scalars().all() if s]),
+        "practice_areas": sorted([p for p in practice_areas_result.scalars().all() if p]),
+        "clients": sorted([c for c in clients_result.scalars().all() if c])
+    }
+
+
 @router.get("", response_model=MatterListResponse)
 async def list_matters(
     current_user: User = Depends(get_current_user),
@@ -39,13 +62,20 @@ async def list_matters(
     page_size: int = Query(20, ge=1, le=100),
     search: Optional[str] = None,
     status: Optional[str] = None,
+    practice_area: Optional[str] = None,
+    client_name: Optional[str] = None,
+    synced_after: Optional[datetime] = None,
+    synced_before: Optional[datetime] = None,
+    sort_by: str = Query("display_number", pattern="^(display_number|client_name|status|practice_area|last_synced_at|description)$"),
+    sort_order: str = Query("asc", pattern="^(asc|desc)$"),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    List matters for the current user.
+    List matters for the current user with sorting, filtering, and pagination.
     """
     query = select(Matter).where(Matter.user_id == current_user.id)
 
+    # Text search across multiple fields
     if search:
         query = query.where(
             Matter.description.ilike(f"%{search}%") |
@@ -53,17 +83,38 @@ async def list_matters(
             Matter.client_name.ilike(f"%{search}%")
         )
 
+    # Exact match filters
     if status:
         query = query.where(Matter.status == status)
 
-    # Count total
+    if practice_area:
+        query = query.where(Matter.practice_area == practice_area)
+
+    # Partial match for client name
+    if client_name:
+        query = query.where(Matter.client_name.ilike(f"%{client_name}%"))
+
+    # Date range filters
+    if synced_after:
+        query = query.where(Matter.last_synced_at >= synced_after)
+
+    if synced_before:
+        query = query.where(Matter.last_synced_at <= synced_before)
+
+    # Count total (before pagination)
     count_query = select(func.count()).select_from(query.subquery())
     total = await db.scalar(count_query)
 
-    # Apply pagination and ordering
+    # Apply sorting
+    sort_column = getattr(Matter, sort_by, Matter.display_number)
+    if sort_order == "desc":
+        query = query.order_by(desc(sort_column))
+    else:
+        query = query.order_by(asc(sort_column))
+
+    # Apply pagination
     offset = (page - 1) * page_size
     query = query.offset(offset).limit(page_size)
-    query = query.order_by(Matter.display_number)
 
     result = await db.execute(query)
     matters = result.scalars().all()
@@ -97,11 +148,14 @@ async def list_matters(
             last_synced_at=m.last_synced_at
         ))
 
+    total_pages = (total + page_size - 1) // page_size if total else 0
+
     return MatterListResponse(
         matters=matter_responses,
         total=total,
         page=page,
-        page_size=page_size
+        page_size=page_size,
+        total_pages=total_pages
     )
 
 
