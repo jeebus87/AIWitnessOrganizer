@@ -1,5 +1,7 @@
 [phases.setup]
 nixPkgs = ["python311", "libmagic", "poppler_utils", "tesseract"]
+providers = ["python"]
+
 
 [phases.build]
 cmds = ["pip install -r requirements.txt"]
