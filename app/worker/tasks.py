@@ -211,7 +211,69 @@ async def _process_matter_async(
         await session.commit()
 
         try:
-            # Get all documents for this matter
+            # Get matter with user info
+            result = await session.execute(
+                select(Matter).where(Matter.id == matter_id)
+            )
+            matter = result.scalar_one_or_none()
+
+            if not matter:
+                job.status = JobStatus.FAILED
+                job.error_message = "Matter not found"
+                await session.commit()
+                return {"success": False, "error": "Matter not found"}
+
+            # Get user's Clio integration
+            result = await session.execute(
+                select(ClioIntegration).where(ClioIntegration.user_id == matter.user_id)
+            )
+            clio_integration = result.scalar_one_or_none()
+
+            if not clio_integration:
+                job.status = JobStatus.FAILED
+                job.error_message = "No Clio integration found"
+                await session.commit()
+                return {"success": False, "error": "Clio integration not found"}
+
+            # Decrypt tokens and sync documents from Clio
+            access_token = decrypt_token(clio_integration.access_token_encrypted)
+            refresh_token = decrypt_token(clio_integration.refresh_token_encrypted)
+
+            logger.info(f"Syncing documents for matter {matter_id} from Clio...")
+
+            async with ClioClient(
+                access_token=access_token,
+                refresh_token=refresh_token,
+                token_expires_at=clio_integration.token_expires_at,
+                region=clio_integration.clio_region
+            ) as clio:
+                # Sync documents for this matter from Clio
+                docs_synced = 0
+                async for doc_data in clio.get_documents(matter_id=int(matter.clio_matter_id)):
+                    result = await session.execute(
+                        select(Document).where(
+                            Document.matter_id == matter.id,
+                            Document.clio_document_id == str(doc_data["id"])
+                        )
+                    )
+                    doc = result.scalar_one_or_none()
+
+                    if not doc:
+                        doc = Document(
+                            matter_id=matter.id,
+                            clio_document_id=str(doc_data["id"]),
+                            filename=doc_data.get("name", "unknown"),
+                            file_type=doc_data.get("content_type", "").split("/")[-1] if doc_data.get("content_type") else None,
+                            file_size=doc_data.get("size"),
+                            etag=doc_data.get("etag")
+                        )
+                        session.add(doc)
+                        docs_synced += 1
+
+                await session.commit()
+                logger.info(f"Synced {docs_synced} new documents for matter {matter_id}")
+
+            # Get all documents for this matter (now including newly synced ones)
             result = await session.execute(
                 select(Document).where(Document.matter_id == matter_id)
             )
