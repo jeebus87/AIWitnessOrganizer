@@ -302,7 +302,9 @@ async def sync_matters_from_clio(
                     await db.commit()
 
             await db.commit()
+            print(f"DEBUG: Final synced_count = {synced_count}")
 
+        print(f"DEBUG: About to return, synced_count = {synced_count}")
         return {
             "success": True,
             "matters_synced": synced_count
