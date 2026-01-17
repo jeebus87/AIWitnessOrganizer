@@ -7,6 +7,7 @@ Create Date: 2025-01-17
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import text
 
 # revision identifiers
 revision = '007'
@@ -21,16 +22,27 @@ def upgrade() -> None:
     op.create_index('ix_processing_jobs_job_number', 'processing_jobs', ['job_number'])
 
     # Create organization_job_counters table if it doesn't exist
-    op.create_table(
-        'organization_job_counters',
-        sa.Column('organization_id', sa.Integer(), nullable=False),
-        sa.Column('job_counter', sa.Integer(), nullable=False, server_default='0'),
-        sa.ForeignKeyConstraint(['organization_id'], ['organizations.id'], ondelete='CASCADE'),
-        sa.PrimaryKeyConstraint('organization_id')
-    )
+    # (It may have been created in migration 005)
+    conn = op.get_bind()
+    result = conn.execute(text("""
+        SELECT EXISTS(
+            SELECT 1 FROM information_schema.tables WHERE table_name = 'organization_job_counters'
+        )
+    """))
+    table_exists = result.scalar()
+
+    if not table_exists:
+        op.create_table(
+            'organization_job_counters',
+            sa.Column('organization_id', sa.Integer(), nullable=False),
+            sa.Column('job_counter', sa.Integer(), nullable=False, server_default='0'),
+            sa.ForeignKeyConstraint(['organization_id'], ['organizations.id'], ondelete='CASCADE'),
+            sa.PrimaryKeyConstraint('organization_id')
+        )
 
 
 def downgrade() -> None:
-    op.drop_table('organization_job_counters')
+    # Note: We don't drop organization_job_counters here since it might have been
+    # created in migration 005
     op.drop_index('ix_processing_jobs_job_number', table_name='processing_jobs')
     op.drop_column('processing_jobs', 'job_number')

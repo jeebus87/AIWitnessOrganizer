@@ -7,6 +7,7 @@ Create Date: 2025-01-17
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import text
 
 # revision identifiers
 revision = '006'
@@ -16,8 +17,18 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Enable pgvector extension (requires superuser or extension already installed)
-    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    # Check if pgvector extension is available
+    conn = op.get_bind()
+    result = conn.execute(text("""
+        SELECT EXISTS(
+            SELECT 1 FROM pg_available_extensions WHERE name = 'vector'
+        )
+    """))
+    pgvector_available = result.scalar()
+
+    if pgvector_available:
+        # Enable pgvector extension
+        op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
     # Create legal_authorities table
     op.create_table(
@@ -40,7 +51,7 @@ def upgrade() -> None:
     op.create_index('ix_legal_authorities_clio_document_id', 'legal_authorities', ['clio_document_id'])
     op.create_index('ix_legal_authorities_matter_id', 'legal_authorities', ['matter_id'])
 
-    # Create legal_authority_chunks table with vector column
+    # Create legal_authority_chunks table
     op.create_table(
         'legal_authority_chunks',
         sa.Column('id', sa.Integer(), nullable=False),
@@ -54,17 +65,18 @@ def upgrade() -> None:
     op.create_index('ix_legal_authority_chunks_id', 'legal_authority_chunks', ['id'])
     op.create_index('ix_legal_authority_chunks_legal_authority_id', 'legal_authority_chunks', ['legal_authority_id'])
 
-    # Add vector column for embeddings (1536 dimensions for Amazon Titan)
-    op.execute("ALTER TABLE legal_authority_chunks ADD COLUMN embedding vector(1536)")
+    if pgvector_available:
+        # Add vector column for embeddings (1536 dimensions for Amazon Titan)
+        op.execute("ALTER TABLE legal_authority_chunks ADD COLUMN embedding vector(1536)")
 
-    # Create IVFFlat index for fast similarity search
-    # Using cosine similarity (vector_cosine_ops)
-    op.execute("""
-        CREATE INDEX ix_legal_authority_chunks_embedding
-        ON legal_authority_chunks
-        USING ivfflat (embedding vector_cosine_ops)
-        WITH (lists = 100)
-    """)
+        # Create IVFFlat index for fast similarity search
+        # Using cosine similarity (vector_cosine_ops)
+        op.execute("""
+            CREATE INDEX ix_legal_authority_chunks_embedding
+            ON legal_authority_chunks
+            USING ivfflat (embedding vector_cosine_ops)
+            WITH (lists = 100)
+        """)
 
 
 def downgrade() -> None:
