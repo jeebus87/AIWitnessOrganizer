@@ -233,6 +233,9 @@ Respond with valid JSON only."""
 
     def _parse_response(self, response: Dict[str, Any]) -> ExtractionResult:
         """Parse the Claude response into structured WitnessData"""
+        import logging
+        logger = logging.getLogger(__name__)
+
         try:
             # Extract text content from response
             text_content = ""
@@ -241,16 +244,55 @@ Respond with valid JSON only."""
                     text_content = block.get("text", "")
                     break
 
+            # Log raw response length for debugging
+            logger.info(f"Raw response length: {len(text_content)} chars")
+
             # Parse JSON
             try:
                 data = json.loads(text_content)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
+                logger.warning(f"Initial JSON parse failed: {e}")
+
                 # Try to extract JSON from the text
                 import re
                 json_match = re.search(r'\{[\s\S]*\}', text_content)
                 if json_match:
-                    data = json.loads(json_match.group())
+                    json_text = json_match.group()
+                    try:
+                        data = json.loads(json_text)
+                    except json.JSONDecodeError as e2:
+                        # Try to fix common JSON errors
+                        logger.warning(f"Regex JSON parse failed: {e2}, attempting repairs")
+
+                        # Try to fix truncated JSON by finding last complete witness entry
+                        # Look for the last complete "}" before the error
+                        try:
+                            # Find witnesses array and extract complete entries
+                            witnesses_match = re.search(r'"witnesses"\s*:\s*\[([\s\S]*)', json_text)
+                            if witnesses_match:
+                                witnesses_content = witnesses_match.group(1)
+                                # Find all complete witness objects
+                                complete_witnesses = re.findall(r'\{[^{}]*\}', witnesses_content)
+                                if complete_witnesses:
+                                    fixed_json = '{"witnesses": [' + ','.join(complete_witnesses) + ']}'
+                                    data = json.loads(fixed_json)
+                                    logger.info(f"Recovered {len(complete_witnesses)} witnesses from malformed JSON")
+                                else:
+                                    raise e2
+                            else:
+                                raise e2
+                        except Exception:
+                            # Log a sample of the problematic JSON for debugging
+                            logger.error(f"JSON repair failed. Sample (first 1000 chars): {json_text[:1000]}")
+                            logger.error(f"JSON repair failed. Sample (last 500 chars): {json_text[-500:]}")
+                            return ExtractionResult(
+                                success=False,
+                                witnesses=[],
+                                raw_response=text_content[:2000],
+                                error=f"Failed to parse JSON: {e2}"
+                            )
                 else:
+                    logger.error(f"No JSON found in response. Sample: {text_content[:500]}")
                     return ExtractionResult(
                         success=False,
                         witnesses=[],
