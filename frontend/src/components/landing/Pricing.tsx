@@ -3,70 +3,50 @@
 import { Button } from "@/components/ui/button";
 import { Check } from "lucide-react";
 import { useAuthStore } from "@/store/auth";
-import { api } from "@/lib/api";
 
 const tiers = [
     {
-        name: "Basic",
-        id: "price_1SpkLcBS2VKrUF7Ru3SNu2Wp",
-        price: "$49",
-        description: "Essential tools for solo practitioners.",
+        name: "Free",
+        price: "$0",
+        description: "Get started with AI-powered witness extraction.",
         features: [
-            "5 Matters per month",
-            "Basic AI Extraction",
-            "Clio Integration",
-            "Email Support",
+            "10 reports per user per day",
+            "AI witness extraction",
+            "Clio integration",
+            "PDF & Excel exports",
+            "Email support",
         ],
+        cta: "Get Started Free",
     },
     {
-        name: "Professional",
-        id: "price_1SpkLsBS2VKrUF7RJJty99ye",
-        price: "$149",
-        description: "Perfect for growing law firms.",
+        name: "Firm Plan",
+        price: "$29.99",
+        priceDetail: "/user/month",
+        description: "Unlimited processing for your entire firm.",
         features: [
-            "Unlimited Matters",
-            "Advanced AI Context",
-            "Priority Processing",
-            "Priority Support",
-            "Bulk Export",
+            "14-day free trial",
+            "Unlimited reports",
+            "Unlimited matters",
+            "Priority processing",
+            "Bulk export",
+            "Priority support",
         ],
         featured: true,
-    },
-    {
-        name: "Enterprise",
-        id: "price_1SpkLuBS2VKrUF7Rz2AAxSgu",
-        price: "$499",
-        description: "For large firms with high volume.",
-        features: [
-            "Unlimited Everything",
-            "Custom AI Models",
-            "Dedicated Account Manager",
-            "SLA Guarantees",
-            "API Access",
-        ],
+        cta: "Start Free Trial",
     },
 ];
 
+const topUpPackages = [
+    { credits: 10, price: "$4.99" },
+    { credits: 25, price: "$12.49" },
+    { credits: 50, price: "$24.99" },
+];
+
 export function Pricing() {
-    const { userProfile, token, login } = useAuthStore();
+    const { login } = useAuthStore();
 
-    const handleSubscribe = async (priceId: string) => {
-        if (!token) {
-            login();
-            return;
-        }
-
-        // If already subscribed, redirect to portal, else checkout
-        if (userProfile?.subscription_tier !== 'free') {
-            const { url } = await api.createPortalSession(token);
-            // eslint-disable-next-line
-            window.location.href = url;
-            return;
-        }
-
-        const { url } = await api.createCheckoutSession(token, priceId);
-        // eslint-disable-next-line
-        window.location.href = url;
+    const handleGetStarted = () => {
+        login();
     };
 
     return (
@@ -77,22 +57,22 @@ export function Pricing() {
                         Simple, Transparent Pricing
                     </h2>
                     <p className="text-lg text-muted-foreground">
-                        Choose the plan that fits your firm size. No hidden fees. Cancel anytime.
+                        Start free, upgrade when you need more. No hidden fees. Cancel anytime.
                     </p>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl mx-auto">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto mb-16">
                     {tiers.map((tier) => (
                         <div
                             key={tier.name}
                             className={`relative p-8 rounded-3xl border flex flex-col ${tier.featured
-                                ? "bg-muted/30 border-blue-500/50 shadow-xl scale-105 z-10"
+                                ? "bg-muted/30 border-primary/50 shadow-xl"
                                 : "bg-card shadow-sm hover:shadow-md transition-shadow"
                                 }`}
                         >
                             {tier.featured && (
-                                <div className="absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1 bg-blue-600 text-white text-sm font-medium rounded-full">
-                                    Most Popular
+                                <div className="absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1 bg-primary text-primary-foreground text-sm font-medium rounded-full">
+                                    14-Day Free Trial
                                 </div>
                             )}
 
@@ -100,7 +80,9 @@ export function Pricing() {
                                 <h3 className="text-xl font-bold mb-2">{tier.name}</h3>
                                 <div className="flex items-baseline gap-1 mb-4">
                                     <span className="text-4xl font-bold">{tier.price}</span>
-                                    <span className="text-muted-foreground">/month</span>
+                                    <span className="text-muted-foreground">
+                                        {tier.priceDetail || (tier.price === "$0" ? "" : "/month")}
+                                    </span>
                                 </div>
                                 <p className="text-muted-foreground text-sm">
                                     {tier.description}
@@ -120,16 +102,33 @@ export function Pricing() {
 
                             <Button
                                 variant={tier.featured ? "default" : "outline"}
-                                className={`w-full rounded-full ${tier.featured ? "bg-blue-600 hover:bg-blue-700" : ""
-                                    }`}
-                                onClick={() => handleSubscribe(tier.id)}
+                                className="w-full rounded-full"
+                                onClick={handleGetStarted}
                             >
-                                {userProfile?.subscription_tier === 'free' || !userProfile
-                                    ? "Get Started"
-                                    : "Upgrade"}
+                                {tier.cta}
                             </Button>
                         </div>
                     ))}
+                </div>
+
+                {/* Credit Top-Ups */}
+                <div className="max-w-2xl mx-auto text-center">
+                    <h3 className="text-lg font-semibold mb-4">Need More Credits?</h3>
+                    <p className="text-sm text-muted-foreground mb-6">
+                        Free plan users can purchase additional report credits anytime.
+                    </p>
+                    <div className="flex justify-center gap-4 flex-wrap">
+                        {topUpPackages.map((pkg) => (
+                            <div
+                                key={pkg.credits}
+                                className="px-6 py-3 rounded-xl border bg-card text-sm"
+                            >
+                                <span className="font-semibold">{pkg.credits} credits</span>
+                                <span className="text-muted-foreground"> for </span>
+                                <span className="font-semibold text-primary">{pkg.price}</span>
+                            </div>
+                        ))}
+                    </div>
                 </div>
             </div>
         </section>
