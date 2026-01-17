@@ -1,4 +1,5 @@
 """Main FastAPI application"""
+import subprocess
 from contextlib import asynccontextmanager
 from typing import Callable
 
@@ -37,6 +38,22 @@ async def lifespan(app: FastAPI):
     """Application lifespan management"""
     # Startup
     logger.info("Starting AI Witness Finder API", environment=settings.environment)
+
+    # Run database migrations
+    logger.info("Running database migrations...")
+    try:
+        result = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        if result.returncode == 0:
+            logger.info("Database migrations completed successfully")
+        else:
+            logger.error("Database migration failed", stderr=result.stderr, stdout=result.stdout)
+    except Exception as e:
+        logger.error("Failed to run database migrations", error=str(e))
 
     # Initialize database
     await init_db()
