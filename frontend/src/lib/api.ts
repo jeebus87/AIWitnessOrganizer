@@ -100,8 +100,15 @@ class ApiClient {
   }
 
   // Jobs
-  async getJobs(token: string) {
-    return this.request<JobListResponse>("/api/v1/jobs", { token });
+  async getJobs(token: string, archived: boolean = false) {
+    const params = new URLSearchParams();
+    if (archived) params.set('archived', 'true');
+    const query = params.toString();
+    return this.request<JobListResponse>(`/api/v1/jobs${query ? '?' + query : ''}`, { token });
+  }
+
+  async getJobStats(token: string) {
+    return this.request<JobStats>("/api/v1/jobs/stats/counts", { token });
   }
 
   async getJob(id: number, token: string) {
@@ -110,6 +117,20 @@ class ApiClient {
 
   async cancelJob(id: number, token: string) {
     return this.request<{ success: boolean }>(`/api/v1/jobs/${id}/cancel`, {
+      method: "POST",
+      token,
+    });
+  }
+
+  async archiveJob(id: number, token: string) {
+    return this.request<{ success: boolean }>(`/api/v1/jobs/${id}/archive`, {
+      method: "POST",
+      token,
+    });
+  }
+
+  async unarchiveJob(id: number, token: string) {
+    return this.request<{ success: boolean }>(`/api/v1/jobs/${id}/unarchive`, {
       method: "POST",
       token,
     });
@@ -245,6 +266,7 @@ export interface ProcessingJob {
   celery_task_id: string;
   job_type: string;
   target_matter_id: number;
+  matter_name: string | null;  // Formatted: "Case Caption, Case No. 12345"
   status: JobStatus;
   total_documents: number;
   processed_documents: number;
@@ -254,6 +276,17 @@ export interface ProcessingJob {
   started_at: string;
   completed_at: string;
   created_at: string;
+  is_archived: boolean;
+  archived_at: string | null;
+}
+
+export interface JobStats {
+  total: number;
+  completed: number;
+  processing: number;
+  pending: number;
+  failed: number;
+  archived: number;
 }
 
 export interface WitnessFilters {

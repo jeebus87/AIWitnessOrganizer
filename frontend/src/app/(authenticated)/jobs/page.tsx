@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import useSWR from "swr";
 import {
   Clock,
@@ -12,6 +12,8 @@ import {
   FileSpreadsheet,
   Ban,
   Trash2,
+  Archive,
+  ArchiveRestore,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,7 +40,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthStore } from "@/store/auth";
-import { api, ProcessingJob, JobStatus, JobListResponse } from "@/lib/api";
+import { api, ProcessingJob, JobStatus, JobListResponse, JobStats } from "@/lib/api";
 import { toast } from "sonner";
 
 const statusConfig: Record<JobStatus, { icon: typeof Clock; color: string; label: string }> = {
@@ -61,13 +63,23 @@ function getProgressPercent(job: ProcessingJob) {
 
 export default function JobsPage() {
   const { token } = useAuthStore();
+  const [showArchived, setShowArchived] = useState(false);
 
   const {
     data: jobsResponse,
     isLoading,
     mutate,
-  } = useSWR<JobListResponse>(token ? ["jobs", token] : null, () =>
-    api.getJobs(token!)
+  } = useSWR<JobListResponse>(
+    token ? ["jobs", token, showArchived] : null,
+    () => api.getJobs(token!, showArchived)
+  );
+
+  const {
+    data: stats,
+    mutate: mutateStats,
+  } = useSWR<JobStats>(
+    token ? ["job-stats", token] : null,
+    () => api.getJobStats(token!)
   );
 
   const jobs = jobsResponse?.jobs;
@@ -81,6 +93,7 @@ export default function JobsPage() {
         status: j.status,
         processed: j.processed_documents,
         total: j.total_documents,
+        matter_name: j.matter_name,
       })));
     }
   }, [jobs]);
@@ -94,11 +107,12 @@ export default function JobsPage() {
     if (hasActiveJobs) {
       const interval = setInterval(() => {
         mutate();
+        mutateStats();
       }, 5000);
 
       return () => clearInterval(interval);
     }
-  }, [jobs, mutate]);
+  }, [jobs, mutate, mutateStats]);
 
   const handleCancel = async (jobId: number) => {
     if (!token) return;
@@ -106,8 +120,35 @@ export default function JobsPage() {
       await api.cancelJob(jobId, token);
       toast.success("Job cancelled");
       mutate();
+      mutateStats();
     } catch (error) {
       toast.error("Failed to cancel job");
+      console.error(error);
+    }
+  };
+
+  const handleArchive = async (jobId: number) => {
+    if (!token) return;
+    try {
+      await api.archiveJob(jobId, token);
+      toast.success("Job archived");
+      mutate();
+      mutateStats();
+    } catch (error) {
+      toast.error("Failed to archive job");
+      console.error(error);
+    }
+  };
+
+  const handleUnarchive = async (jobId: number) => {
+    if (!token) return;
+    try {
+      await api.unarchiveJob(jobId, token);
+      toast.success("Job unarchived");
+      mutate();
+      mutateStats();
+    } catch (error) {
+      toast.error("Failed to unarchive job");
       console.error(error);
     }
   };
@@ -150,6 +191,7 @@ export default function JobsPage() {
       await api.deleteJob(jobId, token);
       toast.success("Job deleted");
       mutate();
+      mutateStats();
     } catch (error) {
       toast.error("Failed to delete job");
       console.error(error);
@@ -162,11 +204,13 @@ export default function JobsPage() {
       const result = await api.clearFinishedJobs(token);
       toast.success(`Cleared ${result.deleted_count} job(s)`);
       mutate();
+      mutateStats();
     } catch (error) {
       toast.error("Failed to clear jobs");
       console.error(error);
     }
   };
+
   const cancelledOrFailedJobs = jobs?.filter(
     (job) => job.status === "cancelled" || job.status === "failed"
   ).length || 0;
@@ -174,6 +218,9 @@ export default function JobsPage() {
   const activeJobs = jobs?.filter(
     (job) => job.status === "pending" || job.status === "processing"
   ).length;
+
+  // Calculate non-archived completed jobs for stat card
+  const nonArchivedCompleted = (stats?.completed || 0) - (stats?.archived || 0);
 
   return (
     <div className="space-y-6">
@@ -185,7 +232,7 @@ export default function JobsPage() {
           </p>
         </div>
         <div className="flex items-center gap-4">
-          {cancelledOrFailedJobs > 0 && (
+          {cancelledOrFailedJobs > 0 && !showArchived && (
             <Button variant="outline" size="sm" onClick={handleClearFinished}>
               <Trash2 className="mr-2 h-4 w-4" />
               Clear {cancelledOrFailedJobs} finished
@@ -200,14 +247,17 @@ export default function JobsPage() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card>
+      <div className="grid gap-4 md:grid-cols-5">
+        <Card
+          className={`cursor-pointer transition-colors ${!showArchived ? 'ring-2 ring-primary' : 'hover:bg-muted/50'}`}
+          onClick={() => setShowArchived(false)}
+        >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Jobs</CardTitle>
             <FileText className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{jobs?.length || 0}</div>
+            <div className="text-2xl font-bold">{(stats?.total || 0) - (stats?.archived || 0)}</div>
           </CardContent>
         </Card>
         <Card>
@@ -216,9 +266,7 @@ export default function JobsPage() {
             <CheckCircle className="h-4 w-4 text-green-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
-              {jobs?.filter((j) => j.status === "completed").length || 0}
-            </div>
+            <div className="text-2xl font-bold">{nonArchivedCompleted}</div>
           </CardContent>
         </Card>
         <Card>
@@ -227,9 +275,7 @@ export default function JobsPage() {
             <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
-              {jobs?.filter((j) => j.status === "processing").length || 0}
-            </div>
+            <div className="text-2xl font-bold">{stats?.processing || 0}</div>
           </CardContent>
         </Card>
         <Card>
@@ -238,18 +284,33 @@ export default function JobsPage() {
             <XCircle className="h-4 w-4 text-red-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
-              {jobs?.filter((j) => j.status === "failed").length || 0}
-            </div>
+            <div className="text-2xl font-bold">{stats?.failed || 0}</div>
+          </CardContent>
+        </Card>
+        <Card
+          className={`cursor-pointer transition-colors ${showArchived ? 'ring-2 ring-primary' : 'hover:bg-muted/50'}`}
+          onClick={() => setShowArchived(true)}
+        >
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Archived</CardTitle>
+            <Archive className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats?.archived || 0}</div>
           </CardContent>
         </Card>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Job History</CardTitle>
+          <CardTitle>
+            {showArchived ? "Archived Jobs" : "Job History"}
+          </CardTitle>
           <CardDescription>
-            All document processing jobs and their status
+            {showArchived
+              ? "Archived jobs that have been hidden from the main list"
+              : "All document processing jobs and their status"
+            }
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -261,14 +322,17 @@ export default function JobsPage() {
             </div>
           ) : jobs?.length === 0 ? (
             <div className="py-12 text-center text-muted-foreground">
-              No processing jobs yet. Go to Matters and start processing.
+              {showArchived
+                ? "No archived jobs. Archive completed jobs to move them here."
+                : "No processing jobs yet. Go to Matters and start processing."
+              }
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Job ID</TableHead>
-                  <TableHead>Type</TableHead>
+                  <TableHead>Matter</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Progress</TableHead>
                   <TableHead>Witnesses Found</TableHead>
@@ -286,8 +350,8 @@ export default function JobsPage() {
                       <TableCell className="font-mono" title={`DB ID: ${job.id}, Job Number: ${job.job_number}`}>
                         #{job.job_number ?? job.id}
                       </TableCell>
-                      <TableCell className="capitalize">
-                        {job.job_type.replace("_", " ")}
+                      <TableCell className="max-w-xs truncate" title={job.matter_name || undefined}>
+                        {job.matter_name || <span className="text-muted-foreground italic">Full Database</span>}
                       </TableCell>
                       <TableCell>
                         <Badge
@@ -325,25 +389,64 @@ export default function JobsPage() {
                         {formatDate(job.started_at)}
                       </TableCell>
                       <TableCell className="text-right">
-                        {job.status === "completed" ? (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="sm">
-                                <Download className="mr-2 h-4 w-4" />
-                                Export
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={() => handleExport(job.id, "pdf")}>
-                                <FileText className="mr-2 h-4 w-4" />
-                                Download PDF
-                              </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => handleExport(job.id, "excel")}>
-                                <FileSpreadsheet className="mr-2 h-4 w-4" />
-                                Download Excel
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                        {job.status === "completed" && !job.is_archived ? (
+                          <div className="flex items-center justify-end gap-2">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="sm">
+                                  <Download className="mr-2 h-4 w-4" />
+                                  Export
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={() => handleExport(job.id, "pdf")}>
+                                  <FileText className="mr-2 h-4 w-4" />
+                                  Download PDF
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleExport(job.id, "excel")}>
+                                  <FileSpreadsheet className="mr-2 h-4 w-4" />
+                                  Download Excel
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleArchive(job.id)}
+                              title="Archive job"
+                            >
+                              <Archive className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ) : job.status === "completed" && job.is_archived ? (
+                          <div className="flex items-center justify-end gap-2">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="sm">
+                                  <Download className="mr-2 h-4 w-4" />
+                                  Export
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={() => handleExport(job.id, "pdf")}>
+                                  <FileText className="mr-2 h-4 w-4" />
+                                  Download PDF
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleExport(job.id, "excel")}>
+                                  <FileSpreadsheet className="mr-2 h-4 w-4" />
+                                  Download Excel
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleUnarchive(job.id)}
+                              title="Unarchive job"
+                            >
+                              <ArchiveRestore className="h-4 w-4" />
+                            </Button>
+                          </div>
                         ) : job.status === "processing" || job.status === "pending" ? (
                           <Button
                             variant="ghost"

@@ -290,6 +290,10 @@ class ProcessingJob(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
+    # Archive status
+    is_archived = Column(Boolean, default=False, nullable=False)
+    archived_at = Column(DateTime, nullable=True)
+
     # Relationships
     user = relationship("User", back_populates="processing_jobs")
     target_matter = relationship("Matter")

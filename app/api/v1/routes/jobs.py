@@ -117,14 +117,19 @@ async def create_job(
 async def list_jobs(
     current_user: User = Depends(get_current_user),
     status: Optional[str] = None,
+    archived: bool = Query(False, description="Show archived jobs instead of active jobs"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db)
 ):
     """
     List processing jobs for the current user.
+    By default shows non-archived jobs. Set archived=true to see archived jobs.
     """
     query = select(ProcessingJob).options(joinedload(ProcessingJob.target_matter)).where(ProcessingJob.user_id == current_user.id)
+
+    # Filter by archive status
+    query = query.where(ProcessingJob.is_archived == archived)
 
     if status:
         query = query.where(ProcessingJob.status == JobStatus(status))
@@ -211,6 +216,96 @@ async def cancel_job(
     return {"success": True, "message": "Job cancelled"}
 
 
+@router.post("/{job_id}/archive")
+async def archive_job(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Archive a completed job to hide it from the main job list.
+    """
+    result = await db.execute(
+        select(ProcessingJob).where(
+            ProcessingJob.id == job_id,
+            ProcessingJob.user_id == current_user.id
+        )
+    )
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != JobStatus.COMPLETED:
+        raise HTTPException(
+            status_code=400,
+            detail="Only completed jobs can be archived"
+        )
+
+    job.is_archived = True
+    job.archived_at = datetime.utcnow()
+    await db.commit()
+
+    return {"success": True, "message": "Job archived"}
+
+
+@router.post("/{job_id}/unarchive")
+async def unarchive_job(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Unarchive a job to show it in the main job list again.
+    """
+    result = await db.execute(
+        select(ProcessingJob).where(
+            ProcessingJob.id == job_id,
+            ProcessingJob.user_id == current_user.id
+        )
+    )
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job.is_archived = False
+    job.archived_at = None
+    await db.commit()
+
+    return {"success": True, "message": "Job unarchived"}
+
+
+@router.get("/stats/counts")
+async def get_job_stats(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get job counts by status including archived count.
+    """
+    from sqlalchemy import func, case
+
+    result = await db.execute(
+        select(
+            func.count().label("total"),
+            func.sum(case((ProcessingJob.status == JobStatus.COMPLETED, 1), else_=0)).label("completed"),
+            func.sum(case((ProcessingJob.status == JobStatus.PROCESSING, 1), else_=0)).label("processing"),
+            func.sum(case((ProcessingJob.status == JobStatus.PENDING, 1), else_=0)).label("pending"),
+            func.sum(case((ProcessingJob.status == JobStatus.FAILED, 1), else_=0)).label("failed"),
+            func.sum(case((ProcessingJob.is_archived == True, 1), else_=0)).label("archived"),
+        ).where(ProcessingJob.user_id == current_user.id)
+    )
+    row = result.one()
+
+    return {
+        "total": row.total or 0,
+        "completed": row.completed or 0,
+        "processing": row.processing or 0,
+        "pending": row.pending or 0,
+        "failed": row.failed or 0,
+        "archived": row.archived or 0,
+    }
 
 
 @router.delete("/{job_id}")
@@ -336,10 +431,21 @@ def _job_to_response(job: ProcessingJob) -> JobResponse:
     if job.total_documents > 0:
         progress = (job.processed_documents / job.total_documents) * 100
 
-    # Get matter name if available
+    # Format matter name as "[case caption], Case No. [case number]"
     matter_name = None
     if job.target_matter:
-        matter_name = job.target_matter.display_number or job.target_matter.description
+        description = job.target_matter.description or ""
+        display_number = job.target_matter.display_number or ""
+
+        if description and display_number:
+            # Full format: "John Doe v. Jane Doe, et al., Case No. 123456"
+            matter_name = f"{description}, Case No. {display_number}"
+        elif description:
+            matter_name = description
+        elif display_number:
+            matter_name = f"Case No. {display_number}"
+        else:
+            matter_name = "Unknown Matter"
 
     return JobResponse(
         id=job.id,
@@ -356,5 +462,7 @@ def _job_to_response(job: ProcessingJob) -> JobResponse:
         result_summary=job.result_summary,
         started_at=job.started_at,
         completed_at=job.completed_at,
-        created_at=job.created_at
+        created_at=job.created_at,
+        is_archived=job.is_archived,
+        archived_at=job.archived_at
     )

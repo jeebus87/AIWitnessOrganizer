@@ -30,7 +30,7 @@ class JobResponse(BaseModel):
     job_number: Optional[int] = None  # Sequential job number per organization
     job_type: str
     status: str
-    matter_name: Optional[str] = None
+    matter_name: Optional[str] = None  # Formatted: "Case Caption, Case No. 12345"
     total_documents: int
     processed_documents: int
     failed_documents: int
@@ -41,6 +41,8 @@ class JobResponse(BaseModel):
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
     created_at: datetime
+    is_archived: bool = False
+    archived_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
