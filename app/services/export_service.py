@@ -292,9 +292,21 @@ class ExportService:
                     worksheet.set_column(idx, idx, width)
 
             # Set row height for data rows to accommodate text wrapping
+            # Calculate row height based on content length (estimate ~15 chars per line at font size 10)
             if len(df) > 0:
                 for row_num in range(len(df)):
-                    worksheet.set_row(header_row_start + 1 + row_num, 60)
+                    # Get the max text length in wrappable columns (Observation, Source Summary)
+                    obs_text = str(df.iloc[row_num].get("Observation", "") or "")
+                    summary_text = str(df.iloc[row_num].get("Source Summary", "") or "")
+
+                    # Estimate lines needed (col width ~40 chars for observation, ~30 for summary)
+                    obs_lines = max(1, len(obs_text) // 50 + 1)
+                    summary_lines = max(1, len(summary_text) // 40 + 1)
+                    max_lines = max(obs_lines, summary_lines)
+
+                    # Set row height: 15 points per line, minimum 30, maximum 200
+                    row_height = min(200, max(30, max_lines * 15))
+                    worksheet.set_row(header_row_start + 1 + row_num, row_height)
 
             # Add auto-filter
             if len(df) > 0:
@@ -538,9 +550,11 @@ class ExportService:
                     data.append(row)
 
         # Create table - adjusted column widths for 6 columns
-        col_widths = [2.5 * inch, 0.7 * inch, 0.7 * inch, 2.5 * inch, 2 * inch, 1.5 * inch]
+        # Landscape LETTER = 11" wide, minus 1" margins = 10" available
+        # Witness Info: 2.2", Importance: 0.65", Confidence: 0.65", Observation: 2.8", Source Summary: 2.0", Source Document: 1.7"
+        col_widths = [2.2 * inch, 0.65 * inch, 0.65 * inch, 2.8 * inch, 2.0 * inch, 1.7 * inch]
 
-        table = Table(data, colWidths=col_widths, repeatRows=1)
+        table = Table(data, colWidths=col_widths, repeatRows=1, splitByRow=True)
 
         # Style the table
         style = TableStyle([
