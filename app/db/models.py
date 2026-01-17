@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum as PyEnum
 from typing import Optional, List
 from sqlalchemy import (
-    Column, Integer, String, Text, Boolean, DateTime, ForeignKey,
+    Column, Integer, BigInteger, String, Text, Boolean, DateTime, ForeignKey,
     Enum, JSON, Float, Index
 )
 from sqlalchemy.orm import relationship
@@ -198,7 +198,7 @@ class Document(Base):
 
     filename = Column(String(512), nullable=False)
     file_type = Column(String(128), nullable=True)  # MIME type subtype (pdf, vnd.openxmlformats-officedocument.spreadsheetml.sheet, etc.)
-    file_size = Column(Integer, nullable=True)  # in bytes
+    file_size = Column(BigInteger, nullable=True)  # in bytes (BigInteger for files >2GB)
     etag = Column(String(255), nullable=True)  # For caching
 
     # Processing status
