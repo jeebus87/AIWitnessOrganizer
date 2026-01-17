@@ -35,6 +35,143 @@ def run_async(coro):
         loop.close()
 
 
+
+
+@celery_app.task(bind=True)
+def sync_matter_documents(self, matter_id: int, user_id: int):
+    """
+    Sync documents from Clio for a specific matter.
+    This is separate from processing - just updates the local document cache.
+    """
+    return run_async(_sync_matter_documents_async(matter_id, user_id))
+
+
+async def _sync_matter_documents_async(matter_id: int, user_id: int):
+    """Async implementation of document sync"""
+    async with get_worker_session() as session:
+        # Get matter
+        result = await session.execute(
+            select(Matter).where(Matter.id == matter_id)
+        )
+        matter = result.scalar_one_or_none()
+        
+        if not matter:
+            logger.error(f"Matter {matter_id} not found for sync")
+            return {"success": False, "error": "Matter not found"}
+        
+        # Get user's Clio integration
+        result = await session.execute(
+            select(ClioIntegration).where(ClioIntegration.user_id == user_id)
+        )
+        clio_integration = result.scalar_one_or_none()
+        
+        if not clio_integration:
+            logger.error(f"No Clio integration for user {user_id}")
+            return {"success": False, "error": "Clio integration not found"}
+        
+        # Decrypt tokens
+        access_token = decrypt_token(clio_integration.access_token_encrypted)
+        refresh_token = decrypt_token(clio_integration.refresh_token_encrypted)
+        
+        logger.info(f"Syncing documents for matter {matter_id} (Clio ID: {matter.clio_matter_id})")
+        
+        async with ClioClient(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_expires_at=clio_integration.token_expires_at,
+            region=clio_integration.clio_region
+        ) as clio:
+            docs_synced = 0
+            docs_updated = 0
+            
+            # Get all documents in the matter via folder traversal
+            doc_iterator = clio.get_all_matter_documents_via_folders(
+                matter_id=int(matter.clio_matter_id),
+                exclude_folder_ids=[]
+            )
+            
+            async for doc_data in doc_iterator:
+                clio_doc_id = str(doc_data["id"])
+                doc_name = doc_data.get("name", "unknown")
+                
+                result = await session.execute(
+                    select(Document).where(
+                        Document.matter_id == matter.id,
+                        Document.clio_document_id == clio_doc_id
+                    )
+                )
+                doc = result.scalar_one_or_none()
+                
+                if not doc:
+                    # New document
+                    doc = Document(
+                        matter_id=matter.id,
+                        clio_document_id=clio_doc_id,
+                        filename=doc_name,
+                        file_type=doc_data.get("content_type", "").split("/")[-1] if doc_data.get("content_type") else None,
+                        file_size=doc_data.get("size"),
+                        etag=doc_data.get("etag"),
+                        clio_folder_id=str(doc_data.get("parent", {}).get("id")) if doc_data.get("parent") else None
+                    )
+                    session.add(doc)
+                    docs_synced += 1
+                else:
+                    # Update existing document metadata
+                    doc.filename = doc_name
+                    doc.file_size = doc_data.get("size")
+                    doc.etag = doc_data.get("etag")
+                    doc.clio_folder_id = str(doc_data.get("parent", {}).get("id")) if doc_data.get("parent") else None
+                    docs_updated += 1
+            
+            await session.commit()
+            
+            # Update matter's last sync time
+            matter.last_synced_at = datetime.utcnow()
+            await session.commit()
+            
+            logger.info(f"Sync complete for matter {matter_id}: {docs_synced} new, {docs_updated} updated")
+            
+            return {
+                "success": True,
+                "matter_id": matter_id,
+                "documents_synced": docs_synced,
+                "documents_updated": docs_updated
+            }
+
+
+@celery_app.task(bind=True)
+def sync_all_user_matters(self, user_id: int):
+    """
+    Sync documents for all matters belonging to a user.
+    Called when user enters the matters page.
+    """
+    return run_async(_sync_all_user_matters_async(user_id))
+
+
+async def _sync_all_user_matters_async(user_id: int):
+    """Async implementation of sync all matters"""
+    async with get_worker_session() as session:
+        # Get all matters for this user
+        result = await session.execute(
+            select(Matter).where(Matter.user_id == user_id)
+        )
+        matters = result.scalars().all()
+        
+        if not matters:
+            return {"success": True, "matters_synced": 0}
+        
+        logger.info(f"Starting background sync for {len(matters)} matters for user {user_id}")
+        
+        # Queue sync tasks for each matter
+        for matter in matters:
+            sync_matter_documents.delay(matter.id, user_id)
+        
+        return {
+            "success": True,
+            "matters_queued": len(matters)
+        }
+
+
 @celery_app.task(bind=True, max_retries=3)
 def process_single_document(
     self,
@@ -404,129 +541,70 @@ async def _process_matter_async(
                 await session.commit()
                 return {"success": False, "error": "Clio integration not found"}
 
-            # Decrypt tokens and sync documents from Clio
-            access_token = decrypt_token(clio_integration.access_token_encrypted)
-            refresh_token = decrypt_token(clio_integration.refresh_token_encrypted)
+            # Documents should already be synced - just query from database
+            # Sync happens on matters page load or manual sync, not during processing
 
             logger.info(f"")
             logger.info(f"{'='*60}")
-            logger.info(f"=== PROCESSING MATTER - DEBUG MODE ===")
+            logger.info(f"=== PROCESSING MATTER (USING PRE-SYNCED DOCS) ===")
             logger.info(f"{'='*60}")
             logger.info(f"  Database matter_id: {matter_id}")
             logger.info(f"  Clio matter_id: {matter.clio_matter_id}")
-            logger.info(f"  Matter description: {matter.description}")
-            logger.info(f"  Matter display_number: {matter.display_number}")
             logger.info(f"  Job ID: {job_id}")
-            logger.info(f"  scan_folder_id: {scan_folder_id} (type: {type(scan_folder_id).__name__})")
+            logger.info(f"  scan_folder_id: {scan_folder_id}")
             logger.info(f"  legal_authority_folder_id: {legal_authority_folder_id}")
-            logger.info(f"  include_subfolders: {include_subfolders}")
             logger.info(f"{'='*60}")
 
-            # Determine scanning mode
+            # Query documents from database based on folder selection
+            document_ids_to_process = []
+
             if scan_folder_id:
+                # Filter by specific folder
+                logger.info(f"Querying documents in folder {scan_folder_id} from database")
+                result = await session.execute(
+                    select(Document).where(
+                        Document.matter_id == matter.id,
+                        Document.clio_folder_id == str(scan_folder_id)
+                    )
+                )
+                docs_in_scope = list(result.scalars().all())
+
+                # For subfolders, we'd need folder hierarchy - TODO: implement if needed
                 if include_subfolders:
-                    logger.info(f"SCAN MODE: Recursive folder scan (folder {scan_folder_id} + subfolders)")
-                else:
-                    logger.info(f"SCAN MODE: Single folder only (folder {scan_folder_id}, NO subfolders)")
+                    logger.info(f"Note: Subfolder scanning uses pre-synced folder structure")
             else:
-                logger.info(f"SCAN MODE: ALL documents in matter via folder traversal")
+                # All documents in matter
+                logger.info(f"Querying all documents in matter from database")
+                result = await session.execute(
+                    select(Document).where(Document.matter_id == matter.id)
+                )
+                docs_in_scope = list(result.scalars().all())
 
+            # Exclude legal authority folder documents
             if legal_authority_folder_id:
-                logger.info(f"EXCLUSION: Will exclude folder {legal_authority_folder_id} from scanning")
+                docs_in_scope = [d for d in docs_in_scope if d.clio_folder_id != str(legal_authority_folder_id)]
 
-            async with ClioClient(
-                access_token=access_token,
-                refresh_token=refresh_token,
-                token_expires_at=clio_integration.token_expires_at,
-                region=clio_integration.clio_region
-            ) as clio:
-                # Track document IDs to process (only documents from selected folder/scope)
-                document_ids_to_process = []
-                docs_synced = 0
+            document_ids_to_process = [d.id for d in docs_in_scope]
+            logger.info(f"Found {len(document_ids_to_process)} documents in database for processing")
 
-                # Determine which documents to sync based on folder selection
-                if scan_folder_id and include_subfolders:
-                    # Recursive folder scanning with optional exclusion
-                    exclude_ids = [legal_authority_folder_id] if legal_authority_folder_id else []
-                    doc_iterator = clio.get_documents_recursive(
-                        matter_id=int(matter.clio_matter_id),
-                        folder_id=scan_folder_id,
-                        exclude_folder_ids=exclude_ids
-                    )
-                elif scan_folder_id:
-                    # Single folder only (no subfolders)
-                    doc_iterator = clio.get_documents_in_folder(scan_folder_id)
-                else:
-                    # All documents in matter via folder traversal
-                    # This avoids the Clio API offset pagination limit (~10,000)
-                    logger.info(f"Using folder-based traversal to get all documents for matter {matter.clio_matter_id}")
-                    exclude_ids = [legal_authority_folder_id] if legal_authority_folder_id else []
-                    doc_iterator = clio.get_all_matter_documents_via_folders(
-                        matter_id=int(matter.clio_matter_id),
-                        exclude_folder_ids=exclude_ids
-                    )
+            # Process Legal Authority folder if specified (needs Clio access for RAG)
+            legal_context = ""
+            if legal_authority_folder_id:
+                logger.info(f"Processing Legal Authority folder: {legal_authority_folder_id}")
 
-                logger.info(f"")
-                logger.info(f"--- Starting document iteration from Clio ---")
-                doc_count = 0
-                async for doc_data in doc_iterator:
-                    doc_count += 1
-                    clio_doc_id = str(doc_data["id"])
-                    doc_name = doc_data.get("name", "unknown")
-                    doc_folder = doc_data.get("parent", {}).get("id") if doc_data.get("parent") else "root"
+                # Decrypt tokens for legal authority access
+                access_token = decrypt_token(clio_integration.access_token_encrypted)
+                refresh_token = decrypt_token(clio_integration.refresh_token_encrypted)
 
-                    # Log every document found (first 50, then every 100th)
-                    if doc_count <= 50 or doc_count % 100 == 0:
-                        logger.info(f"  [{doc_count}] Found: {doc_name} (clio_id={clio_doc_id}, folder={doc_folder})")
+                legal_auth_service = LegalAuthorityService()
+                doc_processor = DocumentProcessor()
 
-                    result = await session.execute(
-                        select(Document).where(
-                            Document.matter_id == matter.id,
-                            Document.clio_document_id == clio_doc_id
-                        )
-                    )
-                    doc = result.scalar_one_or_none()
-
-                    if not doc:
-                        doc = Document(
-                            matter_id=matter.id,
-                            clio_document_id=clio_doc_id,
-                            filename=doc_name,
-                            file_type=doc_data.get("content_type", "").split("/")[-1] if doc_data.get("content_type") else None,
-                            file_size=doc_data.get("size"),
-                            etag=doc_data.get("etag")
-                        )
-                        session.add(doc)
-                        await session.flush()  # Get the doc.id
-                        docs_synced += 1
-                        if doc_count <= 50:
-                            logger.info(f"      -> NEW document, assigned db_id={doc.id}")
-                    else:
-                        if doc_count <= 50:
-                            logger.info(f"      -> EXISTS in db, db_id={doc.id}")
-
-                    # Track this document ID for processing (whether new or existing)
-                    document_ids_to_process.append(doc.id)
-
-                await session.commit()
-                logger.info(f"")
-                logger.info(f"--- Document iteration complete ---")
-                logger.info(f"  Total documents from Clio iterator: {doc_count}")
-                logger.info(f"  New documents synced to DB: {docs_synced}")
-                logger.info(f"  Document IDs to process: {len(document_ids_to_process)}")
-                if len(document_ids_to_process) <= 20:
-                    logger.info(f"  Document IDs list: {document_ids_to_process}")
-                else:
-                    logger.info(f"  First 10 IDs: {document_ids_to_process[:10]}")
-                    logger.info(f"  Last 10 IDs: {document_ids_to_process[-10:]}")
-
-                # Process Legal Authority folder if specified
-                legal_context = ""
-                if legal_authority_folder_id:
-                    logger.info(f"Processing Legal Authority folder: {legal_authority_folder_id}")
-                    legal_auth_service = LegalAuthorityService()
-                    doc_processor = DocumentProcessor()
-
+                async with ClioClient(
+                    access_token=access_token,
+                    refresh_token=refresh_token,
+                    token_expires_at=clio_integration.token_expires_at,
+                    region=clio_integration.clio_region
+                ) as clio:
                     # Get documents from the legal authority folder
                     async for la_doc in clio.get_documents_in_folder(legal_authority_folder_id):
                         try:
@@ -555,14 +633,14 @@ async def _process_matter_async(
                         except Exception as e:
                             logger.warning(f"Failed to process legal authority doc {la_doc.get('name')}: {e}")
 
-                    # Get legal context for witness extraction
-                    legal_context = await legal_auth_service.get_legal_context_for_witness_extraction(
-                        db=session,
-                        matter_id=matter_id,
-                        document_summary="Analyze witness relevance based on legal claims and defenses in this matter."
-                    )
-                    if legal_context:
-                        logger.info(f"Retrieved legal context: {len(legal_context)} chars")
+                # Get legal context for witness extraction (outside clio context)
+                legal_context = await legal_auth_service.get_legal_context_for_witness_extraction(
+                    db=session,
+                    matter_id=matter_id,
+                    document_summary="Analyze witness relevance based on legal claims and defenses in this matter."
+                )
+                if legal_context:
+                    logger.info(f"Retrieved legal context: {len(legal_context)} chars")
 
             # Get only the documents that were found in the selected folder/scope
             # This ensures we only process what the user selected, not all documents in the matter

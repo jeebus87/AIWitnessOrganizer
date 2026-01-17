@@ -81,6 +81,22 @@ class ApiClient {
     });
   }
 
+  // Sync documents for all matters (background task)
+  async syncAllDocuments(token: string) {
+    return this.request<{ success: boolean; message: string; task_id: string }>("/api/v1/matters/sync-all", {
+      method: "POST",
+      token,
+    });
+  }
+
+  // Sync documents for a specific matter
+  async syncMatterDocuments(token: string, matterId: number) {
+    return this.request<{ success: boolean; message: string; task_id: string }>(`/api/v1/matters/${matterId}/sync`, {
+      method: "POST",
+      token,
+    });
+  }
+
   async processMatter(id: number, token: string, options?: ProcessMatterOptions) {
     return this.request<ProcessingJob>(`/api/v1/matters/${id}/process`, {
       method: "POST",

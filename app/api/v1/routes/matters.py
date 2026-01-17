@@ -16,8 +16,59 @@ from app.api.v1.schemas.witnesses import MatterResponse, MatterListResponse, Doc
 from app.services.clio_client import ClioClient
 from app.api.deps import get_current_user
 from app.api.v1.routes.jobs import renumber_all_jobs
+from app.worker.tasks import sync_matter_documents, sync_all_user_matters
 
 router = APIRouter(prefix="/matters", tags=["Matters"])
+
+
+@router.post("/sync-all")
+async def sync_all_matters_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Trigger background sync for all matters belonging to the current user.
+    Called automatically when user enters the matters page.
+    """
+    # Queue the sync task
+    task = sync_all_user_matters.delay(current_user.id)
+    
+    return {
+        "success": True,
+        "message": "Document sync started in background",
+        "task_id": task.id
+    }
+
+
+@router.post("/{matter_id}/sync")
+async def sync_single_matter_endpoint(
+    matter_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Trigger background sync for a specific matter.
+    """
+    # Verify matter belongs to user
+    result = await db.execute(
+        select(Matter).where(
+            Matter.id == matter_id,
+            Matter.user_id == current_user.id
+        )
+    )
+    matter = result.scalar_one_or_none()
+    
+    if not matter:
+        raise HTTPException(status_code=404, detail="Matter not found")
+    
+    # Queue the sync task
+    task = sync_matter_documents.delay(matter_id, current_user.id)
+    
+    return {
+        "success": True,
+        "message": f"Sync started for matter {matter_id}",
+        "task_id": task.id
+    }
 
 
 @router.delete("/clear")

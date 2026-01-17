@@ -121,6 +121,16 @@ export default function MattersPage() {
     () => api.getMatterFilters(token!)
   );
 
+  // Auto-sync documents when page loads (background task)
+  const [hasAutoSynced, setHasAutoSynced] = useState(false);
+  useEffect(() => {
+    if (token && !hasAutoSynced) {
+      setHasAutoSynced(true);
+      // Fire and forget - don't wait for response
+      api.syncAllDocuments(token).catch(console.error);
+    }
+  }, [token, hasAutoSynced]);
+
   const matters = mattersResponse?.matters;
   const totalPages = mattersResponse?.total_pages || 0;
 
