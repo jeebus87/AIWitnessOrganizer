@@ -156,12 +156,14 @@ async def clio_callback(
             integration.refresh_token_encrypted = refresh_token_encrypted
             integration.token_expires_at = token_expires_at
             integration.clio_user_id = clio_user_id
+            integration.clio_account_id = clio_account_id  # Store account ID
             integration.is_active = True
             integration.updated_at = datetime.utcnow()
         else:
             integration = ClioIntegration(
                 user_id=user.id,
                 clio_user_id=clio_user_id,
+                clio_account_id=clio_account_id,  # Store account ID
                 access_token_encrypted=access_token_encrypted,
                 refresh_token_encrypted=refresh_token_encrypted,
                 token_expires_at=token_expires_at,
