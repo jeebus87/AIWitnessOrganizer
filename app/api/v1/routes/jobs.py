@@ -71,6 +71,20 @@ async def create_job(
         if not matter:
             raise HTTPException(status_code=404, detail="Matter not found")
 
+        # Check for existing active job on this matter
+        result = await db.execute(
+            select(ProcessingJob).where(
+                ProcessingJob.target_matter_id == request.matter_id,
+                ProcessingJob.status.in_([JobStatus.PENDING, JobStatus.PROCESSING])
+            )
+        )
+        existing_job = result.scalar_one_or_none()
+        if existing_job:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Matter already has an active job (Job #{existing_job.job_number}). Please wait for it to complete or cancel it first."
+            )
+
         # Count existing documents for this matter to show initial progress
         from sqlalchemy import func
         from app.db.models import Document

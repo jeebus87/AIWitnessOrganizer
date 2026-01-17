@@ -354,17 +354,25 @@ export default function JobsPage() {
                         {job.matter_name || <span className="text-muted-foreground italic">Full Database</span>}
                       </TableCell>
                       <TableCell>
-                        <Badge
-                          variant="outline"
-                          className={statusConfig[job.status].color}
-                        >
-                          <StatusIcon
-                            className={`mr-1 h-3 w-3 ${
-                              job.status === "processing" ? "animate-spin" : ""
-                            }`}
-                          />
-                          {statusConfig[job.status].label}
-                        </Badge>
+                        <div className="flex flex-col gap-1">
+                          <Badge
+                            variant="outline"
+                            className={statusConfig[job.status].color}
+                            title={job.status === "failed" && job.error_message ? job.error_message : undefined}
+                          >
+                            <StatusIcon
+                              className={`mr-1 h-3 w-3 ${
+                                job.status === "processing" ? "animate-spin" : ""
+                              }`}
+                            />
+                            {statusConfig[job.status].label}
+                          </Badge>
+                          {job.status === "failed" && job.error_message && (
+                            <span className="text-xs text-red-500 max-w-[200px] truncate" title={job.error_message}>
+                              {job.error_message.substring(0, 50)}{job.error_message.length > 50 ? "..." : ""}
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         {/* Show "Counting..." when job is pending/processing but total not yet set by worker */}
