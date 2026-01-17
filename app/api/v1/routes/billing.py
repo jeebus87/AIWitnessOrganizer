@@ -4,13 +4,16 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.security import decrypt_token
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.db.models import User
+from app.db.models import User, ClioIntegration
 from app.services.subscription_service import SubscriptionService
 from app.services.credit_service import CreditService
+from app.services.clio_client import verify_clio_admin_permission
 import stripe
 
 logger = structlog.get_logger()
@@ -58,6 +61,36 @@ async def create_checkout_session_endpoint(
     """
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
+
+    # Quick database check first
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization admins can manage subscriptions"
+        )
+
+    # CRITICAL: Real-time Clio API check for admin permission
+    result = await db.execute(
+        select(ClioIntegration).where(ClioIntegration.user_id == current_user.id)
+    )
+    clio_integration = result.scalar_one_or_none()
+
+    if clio_integration:
+        try:
+            access_token = decrypt_token(clio_integration.access_token_encrypted)
+            is_clio_admin = await verify_clio_admin_permission(access_token)
+
+            if not is_clio_admin:
+                current_user.is_admin = False
+                await db.commit()
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only Clio account owners can manage subscriptions"
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning("Could not verify Clio admin status", error=str(e))
 
     service = SubscriptionService(db)
     checkout_url = await service.create_checkout_session(
@@ -156,19 +189,57 @@ async def create_topup_checkout(
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
 
-    # Verify user is an admin - check database value first for quick rejection
-    if not current_user.is_admin:
-        raise HTTPException(
-            status_code=403,
-            detail="Only organization admins can purchase credits"
-        )
-
     # Verify user has an organization
     if not current_user.organization_id:
         raise HTTPException(
             status_code=400,
             detail="You must belong to an organization to purchase credits"
         )
+
+    # Quick database check first (avoids API call if already not admin)
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization admins can purchase credits"
+        )
+
+    # CRITICAL: Real-time Clio API check for admin permission
+    # Do NOT cache - permissions can change at any time
+    result = await db.execute(
+        select(ClioIntegration).where(ClioIntegration.user_id == current_user.id)
+    )
+    clio_integration = result.scalar_one_or_none()
+
+    if not clio_integration:
+        raise HTTPException(
+            status_code=400,
+            detail="Clio integration not found. Please reconnect your Clio account."
+        )
+
+    try:
+        # Decrypt access token and verify admin permission in real-time
+        access_token = decrypt_token(clio_integration.access_token_encrypted)
+        is_clio_admin = await verify_clio_admin_permission(access_token)
+
+        if not is_clio_admin:
+            # Update database to reflect current state
+            current_user.is_admin = False
+            await db.commit()
+
+            raise HTTPException(
+                status_code=403,
+                detail="You are not authorized to manage billing. Only Clio account owners can purchase credits."
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to verify Clio admin permission", error=str(e), user_id=current_user.id)
+        # On error, fall back to database value but log it
+        if not current_user.is_admin:
+            raise HTTPException(
+                status_code=403,
+                detail="Only organization admins can purchase credits"
+            )
 
     service = SubscriptionService(db)
     checkout_url = await service.create_topup_checkout(

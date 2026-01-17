@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     stripe_price_id_topup_25: Optional[str] = None  # PLACEHOLDER - 25 credits for $12.49
     stripe_price_id_topup_50: Optional[str] = None  # PLACEHOLDER - 50 credits for $24.99
 
+    # Google Custom Search (for legal research fallback)
+    google_custom_search_api_key: Optional[str] = None
+    google_custom_search_cx: Optional[str] = None
+
     # Encryption
     fernet_key: str = ""
 

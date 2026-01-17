@@ -2,10 +2,12 @@
 import hashlib
 import json
 import logging
+import re
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 import boto3
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text, delete
 
@@ -311,3 +313,186 @@ class LegalAuthorityService:
             "total_chunks": total_chunks,
             "filenames": [a.filename for a in authorities]
         }
+
+    # =========================================================================
+    # Online Search Fallback with Privacy Guardrails
+    # =========================================================================
+
+    async def _extract_privacy_safe_query(self, matter_context: str) -> Optional[str]:
+        """
+        Use AI to extract ONLY abstract legal concepts from matter context.
+        CRITICAL: This ensures no PII is sent to external search APIs.
+        """
+        if not self.bedrock_client:
+            logger.error("Bedrock client not initialized for privacy extraction")
+            return None
+
+        try:
+            # Privacy-focused prompt that extracts only legal concepts
+            privacy_prompt = """You are a legal privacy filter. Your task is to extract ONLY abstract legal principles and topics from the provided context.
+
+STRICT RULES:
+1. NEVER include: names, dates, locations, company names, case numbers, addresses, phone numbers, emails, or any identifying information
+2. ONLY output: legal concepts, causes of action, legal standards, jurisdictions, and areas of law
+3. Output should be suitable as a Google search query for legal research
+4. Maximum 10 words
+
+Examples of GOOD outputs:
+- "California hostile work environment employment law standard"
+- "FMLA retaliation burden of proof elements"
+- "Texas breach of fiduciary duty damages"
+
+Examples of BAD outputs (contain PII):
+- "John Smith v. Acme Corp hostile work environment" (has names)
+- "2023 San Francisco employment discrimination" (has date and location)
+
+CONTEXT TO ANALYZE:
+"""
+            response = self.bedrock_client.invoke_model(
+                modelId=settings.bedrock_model_id,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 100,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": f"{privacy_prompt}\n{matter_context[:2000]}"
+                        }
+                    ]
+                })
+            )
+
+            result = json.loads(response["body"].read())
+            safe_query = result.get("content", [{}])[0].get("text", "").strip()
+
+            # Additional validation: check for common PII patterns
+            pii_patterns = [
+                r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',  # Phone numbers
+                r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',  # Emails
+                r'\b\d{1,2}/\d{1,2}/\d{2,4}\b',  # Dates
+                r'\b\d{5}(-\d{4})?\b',  # ZIP codes
+                r'\b(Mr\.|Mrs\.|Ms\.|Dr\.)\s+[A-Z][a-z]+\b',  # Titles with names
+                r'\bv\.\s+[A-Z]',  # Case citation pattern
+            ]
+
+            for pattern in pii_patterns:
+                if re.search(pattern, safe_query, re.IGNORECASE):
+                    logger.warning(f"PII detected in extracted query, rejecting: {safe_query[:50]}...")
+                    return None
+
+            logger.info(f"Privacy-safe query extracted: {safe_query}")
+            return safe_query
+
+        except Exception as e:
+            logger.error(f"Failed to extract privacy-safe query: {e}")
+            return None
+
+    async def search_online_legal_sources(
+        self,
+        matter_context: str,
+        limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        Search online legal sources using privacy-safe queries.
+        Returns list of search results with titles, snippets, and URLs.
+
+        PRIVACY CRITICAL: All queries are sanitized to remove PII before searching.
+        """
+        # Check if Google Custom Search is configured
+        if not settings.google_custom_search_api_key or not settings.google_custom_search_cx:
+            logger.warning("Google Custom Search not configured, skipping online search")
+            return []
+
+        # Extract privacy-safe query
+        safe_query = await self._extract_privacy_safe_query(matter_context)
+        if not safe_query:
+            logger.warning("Could not extract privacy-safe query, skipping online search")
+            return []
+
+        try:
+            # Call Google Custom Search API
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    "https://www.googleapis.com/customsearch/v1",
+                    params={
+                        "key": settings.google_custom_search_api_key,
+                        "cx": settings.google_custom_search_cx,
+                        "q": safe_query,
+                        "num": min(limit, 10),  # Max 10 per request
+                    },
+                    timeout=30.0
+                )
+
+                if response.status_code != 200:
+                    logger.error(f"Google Custom Search failed: {response.status_code} - {response.text}")
+                    return []
+
+                data = response.json()
+                results = []
+
+                for item in data.get("items", []):
+                    results.append({
+                        "title": item.get("title", ""),
+                        "snippet": item.get("snippet", ""),
+                        "url": item.get("link", ""),
+                        "display_url": item.get("displayLink", ""),
+                        "source": "google_search"
+                    })
+
+                logger.info(f"Found {len(results)} online legal sources for query: {safe_query}")
+                return results
+
+        except httpx.TimeoutException:
+            logger.error("Google Custom Search request timed out")
+            return []
+        except Exception as e:
+            logger.error(f"Failed to search online legal sources: {e}")
+            return []
+
+    async def get_legal_context_with_fallback(
+        self,
+        db: AsyncSession,
+        matter_id: int,
+        document_summary: str
+    ) -> str:
+        """
+        Get legal context for AI extraction, with online search fallback.
+
+        Priority:
+        1. Use RAG from Legal Authority folder if available
+        2. Fall back to online search with privacy guardrails
+        """
+        # First try RAG from uploaded Legal Authorities
+        contexts = await self.get_relevant_legal_context(
+            db=db,
+            query=document_summary,
+            matter_id=matter_id,
+            limit=5
+        )
+
+        if contexts:
+            # Format RAG results
+            legal_context = "LEGAL STANDARDS AND CASE LAW FOR THIS MATTER:\n\n"
+            for i, ctx in enumerate(contexts, 1):
+                legal_context += f"[Source {i}: {ctx['filename']}]\n"
+                legal_context += f"{ctx['text']}\n\n"
+            legal_context += "---\nUse the above legal standards to determine witness relevance.\n"
+            return legal_context
+
+        # Fallback: Search online with privacy guardrails
+        logger.info(f"No Legal Authority documents for matter {matter_id}, trying online search")
+        online_results = await self.search_online_legal_sources(document_summary, limit=3)
+
+        if online_results:
+            legal_context = "RELEVANT LEGAL INFORMATION (from online sources):\n\n"
+            for i, result in enumerate(online_results, 1):
+                legal_context += f"[Source {i}: {result['display_url']}]\n"
+                legal_context += f"Title: {result['title']}\n"
+                legal_context += f"{result['snippet']}\n\n"
+            legal_context += "---\nNote: These are search snippets. Full case law should be reviewed.\n"
+            return legal_context
+
+        # No legal context available
+        return ""

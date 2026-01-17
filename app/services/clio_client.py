@@ -553,3 +553,80 @@ async def get_clio_account_info(access_token: str) -> Dict[str, Any]:
         response.raise_for_status()
         data = response.json().get("data", {})
         return data.get("account", {})
+
+
+async def verify_clio_admin_permission(access_token: str) -> bool:
+    """
+    Check Clio API in real-time for admin/billing permission status.
+
+    CRITICAL: This check is performed BEFORE every billing operation.
+    Do NOT cache this result - permissions can change at any time.
+
+    Returns True if user is account owner or has billing management rights.
+    """
+    async with httpx.AsyncClient() as client:
+        # Request user info with account_owner and subscription fields
+        response = await client.get(
+            f"{settings.clio_api_url}/users/who_am_i",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+            },
+            params={"fields": "id,account_owner,subscription_type,enabled"}
+        )
+
+        if response.status_code != 200:
+            # If we can't verify, deny access for safety
+            return False
+
+        data = response.json().get("data", {})
+
+        # Check if user is account owner (has billing rights)
+        is_account_owner = data.get("account_owner", False)
+
+        # In Clio, account_owner is the primary indicator of billing rights
+        # Users who are account owners can manage subscriptions and billing
+        return is_account_owner
+
+
+async def get_clio_user_count(access_token: str) -> int:
+    """
+    Get the count of enabled users in the Clio account.
+    Used for calculating subscription billing.
+    """
+    count = 0
+    async with httpx.AsyncClient() as client:
+        # Get all users with pagination
+        offset = 0
+        page_size = 200
+
+        while True:
+            response = await client.get(
+                f"{settings.clio_api_url}/users",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/json",
+                },
+                params={
+                    "fields": "id,enabled",
+                    "limit": page_size,
+                    "offset": offset
+                }
+            )
+
+            if response.status_code != 200:
+                break
+
+            data = response.json().get("data", [])
+            if not data:
+                break
+
+            # Count only enabled users
+            count += sum(1 for user in data if user.get("enabled", True))
+
+            if len(data) < page_size:
+                break
+
+            offset += page_size
+
+    return count
