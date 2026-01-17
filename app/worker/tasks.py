@@ -371,8 +371,14 @@ async def _process_matter_async(
                     # Single folder only (no subfolders)
                     doc_iterator = clio.get_documents_in_folder(scan_folder_id)
                 else:
-                    # All documents in matter (original behavior)
-                    doc_iterator = clio.get_documents(matter_id=int(matter.clio_matter_id))
+                    # All documents in matter via folder traversal
+                    # This avoids the Clio API offset pagination limit (~10,000)
+                    logger.info(f"Using folder-based traversal to get all documents for matter {matter.clio_matter_id}")
+                    exclude_ids = [legal_authority_folder_id] if legal_authority_folder_id else []
+                    doc_iterator = clio.get_all_matter_documents_via_folders(
+                        matter_id=int(matter.clio_matter_id),
+                        exclude_folder_ids=exclude_ids
+                    )
 
                 async for doc_data in doc_iterator:
                     result = await session.execute(

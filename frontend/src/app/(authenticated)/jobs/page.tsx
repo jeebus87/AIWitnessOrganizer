@@ -72,6 +72,19 @@ export default function JobsPage() {
 
   const jobs = jobsResponse?.jobs;
 
+  // Debug logging for job data
+  useEffect(() => {
+    if (jobs && jobs.length > 0) {
+      console.log("[Jobs Page] Received jobs data:", jobs.map(j => ({
+        id: j.id,
+        job_number: j.job_number,
+        status: j.status,
+        processed: j.processed_documents,
+        total: j.total_documents,
+      })));
+    }
+  }, [jobs]);
+
   // Auto-refresh for active jobs
   useEffect(() => {
     const hasActiveJobs = jobs?.some(
@@ -270,7 +283,9 @@ export default function JobsPage() {
 
                   return (
                     <TableRow key={job.id}>
-                      <TableCell className="font-mono">#{job.job_number ?? job.id}</TableCell>
+                      <TableCell className="font-mono" title={`DB ID: ${job.id}, Job Number: ${job.job_number}`}>
+                        #{job.job_number ?? job.id}
+                      </TableCell>
                       <TableCell className="capitalize">
                         {job.job_type.replace("_", " ")}
                       </TableCell>

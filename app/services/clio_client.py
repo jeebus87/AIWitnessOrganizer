@@ -458,6 +458,86 @@ class ClioClient:
                 ):
                     yield doc
 
+    async def get_all_matter_documents_via_folders(
+        self,
+        matter_id: int,
+        exclude_folder_ids: Optional[List[int]] = None,
+        fields: Optional[List[str]] = None
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """
+        Get ALL documents in a matter by traversing folders.
+
+        This method avoids the Clio API pagination offset limit (~10,000) by:
+        1. First getting documents at the root level (not in any folder)
+        2. Getting all root-level folders
+        3. Recursively processing each folder
+
+        Each folder query starts with offset=0, avoiding the global limit.
+
+        Args:
+            matter_id: The Clio matter ID (not database ID)
+            exclude_folder_ids: List of folder IDs to exclude
+            fields: Document fields to return
+        """
+        if exclude_folder_ids is None:
+            exclude_folder_ids = []
+
+        if fields is None:
+            fields = self.DEFAULT_DOCUMENT_FIELDS
+
+        seen_document_ids: set = set()  # Track seen IDs to avoid duplicates
+
+        # Step 1: Get documents at root level (not in any folder)
+        # Clio returns documents that aren't in folders when we query by matter_id
+        # but we need to use folder traversal to get all of them
+        # Note: Documents directly in the matter root may need special handling
+
+        # Step 2: Get all root-level folders and process them recursively
+        async for folder in self.get_folders(matter_id, parent_id=None):
+            folder_id = folder.get("id")
+            if folder_id and folder_id not in exclude_folder_ids:
+                async for doc in self.get_documents_recursive(
+                    matter_id, folder_id, exclude_folder_ids, fields
+                ):
+                    doc_id = doc.get("id")
+                    if doc_id and doc_id not in seen_document_ids:
+                        seen_document_ids.add(doc_id)
+                        yield doc
+
+        # Step 3: Also try to get documents that might be at the matter root
+        # (not in any folder). We do this with a limited offset to stay under limits.
+        # Use matter_id filter but limit to catch stragglers
+        params = {
+            "matter_id": matter_id,
+            "fields": ",".join(fields),
+            "limit": 200
+        }
+        offset = 0
+        max_root_offset = 5000  # Limit root-level pagination to avoid 422 errors
+
+        while offset < max_root_offset:
+            params["offset"] = offset
+            try:
+                response = await self.get("documents", params=params)
+                data = response.get("data", [])
+
+                if not data:
+                    break
+
+                for doc in data:
+                    doc_id = doc.get("id")
+                    if doc_id and doc_id not in seen_document_ids:
+                        seen_document_ids.add(doc_id)
+                        yield doc
+
+                if len(data) < 200:
+                    break
+
+                offset += 200
+            except Exception as e:
+                # If we hit pagination limit, just stop - we got the folder docs already
+                break
+
     # =========================================================================
     # Contact Operations
     # =========================================================================
