@@ -371,18 +371,49 @@ async def exchange_code_for_tokens(
         return response.json()
 
 
-async def get_clio_user_info(access_token: str) -> Dict[str, Any]:
+async def get_clio_user_info(access_token: str, include_firm: bool = False) -> Dict[str, Any]:
     """
     Get the current Clio user's information.
     Uses the /users/who_am_i endpoint.
+
+    Args:
+        access_token: The Clio access token
+        include_firm: If True, include firm/account information in the response
     """
+    fields = ["id", "email", "name", "first_name", "last_name"]
+    if include_firm:
+        fields.extend(["account"])  # Account contains firm info
+
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{settings.clio_api_url}/users/who_am_i",
             headers={
                 "Authorization": f"Bearer {access_token}",
                 "Accept": "application/json",
-            }
+            },
+            params={"fields": ",".join(fields)}
         )
         response.raise_for_status()
         return response.json().get("data", {})
+
+
+async def get_clio_account_info(access_token: str) -> Dict[str, Any]:
+    """
+    Get the Clio account/firm information.
+    Returns firm name, address, phone, etc.
+    """
+    fields = ["id", "name", "maildrop_address", "phone_number"]
+
+    async with httpx.AsyncClient() as client:
+        # Get account info from the who_am_i endpoint with account fields
+        response = await client.get(
+            f"{settings.clio_api_url}/users/who_am_i",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+            },
+            params={"fields": "account{id,name}"}
+        )
+        response.raise_for_status()
+        data = response.json().get("data", {})
+        return data.get("account", {})

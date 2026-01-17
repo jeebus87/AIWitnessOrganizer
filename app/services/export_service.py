@@ -48,30 +48,104 @@ class ExportService:
             spaceAfter=20
         ))
 
+    def _format_witness_info(self, w: Dict[str, Any]) -> str:
+        """Format witness info combining name, role, and contact"""
+        name = w.get("full_name", "Unknown")
+        role = w.get("role", "").replace("_", " ").title()
+
+        # Format contact info
+        contact_parts = []
+        if w.get("address"):
+            contact_parts.append(w["address"])
+        if w.get("phone"):
+            contact_parts.append(w["phone"])
+        if w.get("email"):
+            contact_parts.append(w["email"])
+
+        if contact_parts:
+            contact_str = ", ".join(contact_parts)
+        else:
+            contact_str = "Contact info unknown at this time"
+
+        return f"{name}, {role}, {contact_str}"
+
+    def _format_source_document(self, w: Dict[str, Any]) -> str:
+        """Format source document with page number if available"""
+        source_doc = w.get("document_filename", "") or ""
+        source_page = w.get("source_page")
+        if source_page:
+            source_doc = f"{source_doc} (Page {source_page})"
+        return source_doc
+
     def witnesses_to_dataframe(
         self,
         witnesses: List[Dict[str, Any]],
         include_document_info: bool = True
     ) -> pd.DataFrame:
-        """Convert witness data to a pandas DataFrame"""
+        """
+        Convert witness data to a pandas DataFrame.
+        Structure matches PDF: Witness Info, Importance, Confidence, Observation, Source Summary, Source Document
+        """
+        # Sort witnesses by importance: HIGH first, then MEDIUM, then LOW
+        importance_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+        sorted_witnesses = sorted(
+            witnesses,
+            key=lambda w: importance_order.get(w.get("importance", "LOW").upper(), 3)
+        )
+
+        # Group witnesses by name to handle multiple observations
+        from collections import OrderedDict
+        witness_groups = OrderedDict()
+        for w in sorted_witnesses:
+            name = w.get("full_name", "Unknown")
+            if name not in witness_groups:
+                witness_groups[name] = []
+            witness_groups[name].append(w)
+
         rows = []
-        for w in witnesses:
-            row = {
-                "Witness Name": w.get("full_name", "Unknown"),
-                "Role": w.get("role", "").replace("_", " ").title(),
-                "Importance": w.get("importance", "LOW"),
-                "Observation": w.get("observation", ""),
-                "Source Quote": w.get("source_quote", ""),
-                "Email": w.get("email", ""),
-                "Phone": w.get("phone", ""),
-                "Confidence": f"{w.get('confidence_score', 0) * 100:.0f}%"
-            }
+        for witness_name, observations in witness_groups.items():
+            first_obs = observations[0]
 
-            if include_document_info:
-                row["Source Document"] = w.get("document_filename", "")
-                row["Matter"] = w.get("matter_name", "")
+            if len(observations) == 1:
+                # Single observation - show everything in one row
+                w = observations[0]
+                row = {
+                    "Witness Info": self._format_witness_info(w),
+                    "Importance": w.get("importance", "LOW"),
+                    "Confidence": f"{w.get('confidence_score', 0) * 100:.0f}%",
+                    "Observation": w.get("observation", "") or "",
+                    "Source Summary": w.get("source_quote", "") or "",
+                    "Source Document": self._format_source_document(w)
+                }
+                rows.append(row)
+            else:
+                # Multiple observations - first row is summary
+                all_observations = [w.get("observation", "") or "" for w in observations]
+                summary_observation = "Multiple observations: " + "; ".join(
+                    [obs[:100] + "..." if len(obs) > 100 else obs for obs in all_observations if obs]
+                )
 
-            rows.append(row)
+                summary_row = {
+                    "Witness Info": self._format_witness_info(first_obs),
+                    "Importance": first_obs.get("importance", "LOW"),
+                    "Confidence": f"{first_obs.get('confidence_score', 0) * 100:.0f}%",
+                    "Observation": summary_observation,
+                    "Source Summary": "See Below",
+                    "Source Document": "See Below"
+                }
+                rows.append(summary_row)
+
+                # Subsequent rows - individual observations
+                for w in observations:
+                    row = {
+                        "Witness Info": "",  # Blank for continuation rows
+                        "Importance": "",
+                        "Confidence": "",
+                        "Observation": w.get("observation", "") or "",
+                        "Source Summary": w.get("source_quote", "") or "",
+                        "Source Document": self._format_source_document(w)
+                    }
+                    rows.append(row)
 
         return pd.DataFrame(rows)
 
@@ -79,10 +153,14 @@ class ExportService:
         self,
         witnesses: List[Dict[str, Any]],
         matter_name: Optional[str] = None,
+        matter_number: Optional[str] = None,
+        firm_name: Optional[str] = None,
+        generated_by: Optional[str] = None,
         include_document_info: bool = True
     ) -> bytes:
         """
         Generate an Excel file with witness data.
+        Structure matches PDF: Witness Info, Importance, Confidence, Observation, Source Summary, Source Document
 
         Returns:
             Excel file as bytes
@@ -93,60 +171,137 @@ class ExportService:
         output = io.BytesIO()
 
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            df.to_excel(writer, sheet_name="Witnesses", index=False)
+            # Start data at row 6 to leave room for header info
+            header_row_start = 6
+            df.to_excel(writer, sheet_name="Witnesses", index=False, startrow=header_row_start)
 
             workbook = writer.book
             worksheet = writer.sheets["Witnesses"]
 
             # Formats
+            title_format = workbook.add_format({
+                "bold": True,
+                "font_size": 18,
+                "font_color": "#1E3A5F"
+            })
+
+            info_format = workbook.add_format({
+                "bold": True,
+                "font_size": 11
+            })
+
+            info_value_format = workbook.add_format({
+                "font_size": 11
+            })
+
             header_format = workbook.add_format({
                 "bold": True,
                 "bg_color": "#1E3A5F",
                 "font_color": "white",
-                "border": 1
+                "border": 1,
+                "text_wrap": True,
+                "valign": "vcenter"
             })
 
             high_format = workbook.add_format({
                 "bg_color": "#FFE6E6",
-                "border": 1
+                "border": 1,
+                "text_wrap": True,
+                "valign": "top"
             })
 
             medium_format = workbook.add_format({
                 "bg_color": "#FFF9E6",
-                "border": 1
+                "border": 1,
+                "text_wrap": True,
+                "valign": "top"
             })
 
             low_format = workbook.add_format({
                 "bg_color": "#E6FFE6",
-                "border": 1
+                "border": 1,
+                "text_wrap": True,
+                "valign": "top"
             })
 
-            # Apply header format
+            continuation_format = workbook.add_format({
+                "bg_color": "#F5F5F5",
+                "border": 1,
+                "text_wrap": True,
+                "valign": "top"
+            })
+
+            # Write header information
+            worksheet.write(0, 0, "Witness Summary Report", title_format)
+
+            row = 1
+            if firm_name:
+                worksheet.write(row, 0, f"Firm: {firm_name}", info_format)
+                row += 1
+
+            if matter_name:
+                matter_display = matter_name
+                if matter_number and matter_number != matter_name:
+                    matter_display = f"{matter_number} - {matter_name}"
+                worksheet.write(row, 0, f"Matter: {matter_display}", info_format)
+                row += 1
+
+            if generated_by:
+                worksheet.write(row, 0, f"Generated by: {generated_by}", info_format)
+                row += 1
+
+            worksheet.write(row, 0, f"Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}", info_format)
+
+            # Apply header format to column headers
             for col_num, value in enumerate(df.columns.values):
-                worksheet.write(0, col_num, value, header_format)
+                worksheet.write(header_row_start, col_num, value, header_format)
 
-            # Apply conditional formatting for importance column (only if data exists)
-            if len(df) > 0 and "Importance" in df.columns:
-                for row_num in range(1, len(df) + 1):
-                    importance = df.iloc[row_num - 1]["Importance"]
-                    if importance == "HIGH":
-                        worksheet.set_row(row_num, None, high_format)
-                    elif importance == "MEDIUM":
-                        worksheet.set_row(row_num, None, medium_format)
-                    else:
-                        worksheet.set_row(row_num, None, low_format)
-
-            # Auto-fit columns (only if data exists)
+            # Track importance for row coloring
+            # We need to track which witness each row belongs to for proper coloring
             if len(df) > 0:
-                for idx, col in enumerate(df.columns):
-                    max_len = max(
-                        df[col].astype(str).map(len).max(),
-                        len(col)
-                    ) + 2
-                    worksheet.set_column(idx, idx, min(max_len, 50))
+                current_importance = None
+                for row_num in range(len(df)):
+                    excel_row = header_row_start + 1 + row_num
+                    importance = df.iloc[row_num]["Importance"]
+                    witness_info = df.iloc[row_num]["Witness Info"]
 
-                # Add auto-filter
-                worksheet.autofilter(0, 0, len(df), len(df.columns) - 1)
+                    # If this is a new witness row (has witness info), update importance
+                    if witness_info:
+                        current_importance = importance
+
+                    # Apply formatting based on importance
+                    if current_importance == "HIGH":
+                        row_format = high_format
+                    elif current_importance == "MEDIUM":
+                        row_format = medium_format
+                    elif current_importance == "LOW":
+                        row_format = low_format
+                    else:
+                        row_format = continuation_format
+
+                    # Write each cell with the appropriate format
+                    for col_num, col_name in enumerate(df.columns):
+                        value = df.iloc[row_num][col_name]
+                        worksheet.write(excel_row, col_num, value, row_format)
+
+            # Set column widths - matching PDF proportions
+            # Witness Info, Importance, Confidence, Observation, Source Summary, Source Document
+            col_widths = [40, 12, 12, 40, 30, 25]
+            for idx, width in enumerate(col_widths):
+                if idx < len(df.columns):
+                    worksheet.set_column(idx, idx, width)
+
+            # Set row height for data rows to accommodate text wrapping
+            if len(df) > 0:
+                for row_num in range(len(df)):
+                    worksheet.set_row(header_row_start + 1 + row_num, 60)
+
+            # Add auto-filter
+            if len(df) > 0:
+                worksheet.autofilter(header_row_start, 0, header_row_start + len(df), len(df.columns) - 1)
+
+            # Freeze panes - freeze header row
+            worksheet.freeze_panes(header_row_start + 1, 0)
 
         output.seek(0)
         return output.getvalue()
@@ -156,6 +311,8 @@ class ExportService:
         witnesses: List[Dict[str, Any]],
         matter_name: Optional[str] = None,
         matter_number: Optional[str] = None,
+        firm_name: Optional[str] = None,
+        generated_by: Optional[str] = None,
         include_cover: bool = True
     ) -> bytes:
         """
@@ -179,7 +336,9 @@ class ExportService:
 
         # Cover page
         if include_cover:
-            elements.extend(self._create_cover_page(matter_name, matter_number))
+            elements.extend(self._create_cover_page(
+                matter_name, matter_number, firm_name, generated_by
+            ))
             elements.append(PageBreak())
 
         # Witness table
@@ -192,13 +351,25 @@ class ExportService:
     def _create_cover_page(
         self,
         matter_name: Optional[str],
-        matter_number: Optional[str]
+        matter_number: Optional[str],
+        firm_name: Optional[str] = None,
+        generated_by: Optional[str] = None
     ) -> List:
         """Create the cover page elements"""
         elements = []
 
+        # Firm name at top if provided
+        if firm_name:
+            elements.append(Spacer(1, 0.5 * inch))
+            elements.append(Paragraph(
+                firm_name,
+                self.styles["Heading2"]
+            ))
+            elements.append(Spacer(1, 1 * inch))
+        else:
+            elements.append(Spacer(1, 2 * inch))
+
         # Title
-        elements.append(Spacer(1, 2 * inch))
         elements.append(Paragraph(
             "Witness Summary Report",
             self.styles["CoverTitle"]
@@ -218,8 +389,13 @@ class ExportService:
                 self.styles["Normal"]
             ))
 
-        # Generated date
+        # Generated by and date
         elements.append(Spacer(1, 0.5 * inch))
+        if generated_by:
+            elements.append(Paragraph(
+                f"<b>Generated by:</b> {generated_by}",
+                self.styles["Normal"]
+            ))
         elements.append(Paragraph(
             f"<b>Generated:</b> {datetime.now().strftime('%B %d, %Y at %I:%M %p')}",
             self.styles["Normal"]
