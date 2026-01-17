@@ -37,8 +37,9 @@ import {
 } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
 import { FilterBar } from "@/components/matters/filter-bar";
+import { FolderSelectionDialog } from "@/components/matters/folder-selection-dialog";
 import { useAuthStore } from "@/store/auth";
-import { api, MatterListResponse, MatterFilters } from "@/lib/api";
+import { api, MatterListResponse, MatterFilters, Matter } from "@/lib/api";
 import { toast } from "sonner";
 
 type SortField = "display_number" | "client_name" | "status" | "practice_area" | "last_synced_at" | "description";
@@ -63,6 +64,8 @@ export default function MattersPage() {
   const [processingMatterId, setProcessingMatterId] = useState<number | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [searchInput, setSearchInput] = useState(search);
+  const [folderDialogOpen, setFolderDialogOpen] = useState(false);
+  const [selectedMatter, setSelectedMatter] = useState<Matter | null>(null);
 
   // Debounce search input
   useEffect(() => {
@@ -138,11 +141,24 @@ export default function MattersPage() {
     }
   };
 
-  const handleProcess = async (matterId: number) => {
-    if (!token) return;
-    setProcessingMatterId(matterId);
+  const handleProcessClick = (matter: Matter) => {
+    setSelectedMatter(matter);
+    setFolderDialogOpen(true);
+  };
+
+  const handleProcessConfirm = async (options: {
+    scanFolderId: number | null;
+    legalAuthorityFolderId: number | null;
+    includeSubfolders: boolean;
+  }) => {
+    if (!token || !selectedMatter) return;
+    setProcessingMatterId(selectedMatter.id);
     try {
-      const job = await api.processMatter(matterId, token);
+      const job = await api.processMatter(selectedMatter.id, token, {
+        scan_folder_id: options.scanFolderId,
+        legal_authority_folder_id: options.legalAuthorityFolderId,
+        include_subfolders: options.includeSubfolders,
+      });
       toast.success(`Processing job started (ID: ${job.id})`);
       router.push("/jobs");
     } catch (error) {
@@ -150,6 +166,7 @@ export default function MattersPage() {
       console.error(error);
     } finally {
       setProcessingMatterId(null);
+      setSelectedMatter(null);
     }
   };
 
@@ -267,7 +284,7 @@ export default function MattersPage() {
                       <TableCell className="text-right">
                         <Button
                           size="sm"
-                          onClick={() => handleProcess(matter.id)}
+                          onClick={() => handleProcessClick(matter)}
                           disabled={processingMatterId === matter.id}
                         >
                           {processingMatterId === matter.id ? (
@@ -321,6 +338,18 @@ export default function MattersPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Folder Selection Dialog */}
+      {selectedMatter && token && (
+        <FolderSelectionDialog
+          open={folderDialogOpen}
+          onOpenChange={setFolderDialogOpen}
+          matterId={selectedMatter.id}
+          matterName={selectedMatter.display_number || `Matter #${selectedMatter.id}`}
+          token={token}
+          onConfirm={handleProcessConfirm}
+        />
+      )}
     </div>
   );
 }

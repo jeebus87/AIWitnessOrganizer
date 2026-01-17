@@ -262,7 +262,10 @@ def process_matter(
     self,
     job_id: int,
     matter_id: int,
-    search_targets: Optional[List[str]] = None
+    search_targets: Optional[List[str]] = None,
+    scan_folder_id: Optional[int] = None,
+    legal_authority_folder_id: Optional[int] = None,
+    include_subfolders: bool = True
 ):
     """
     Process all documents in a matter.
@@ -271,9 +274,13 @@ def process_matter(
         job_id: ProcessingJob ID for progress tracking
         matter_id: Database ID of the matter
         search_targets: Optional list of specific names to search for
+        scan_folder_id: Optional folder ID to scan (None = all documents)
+        legal_authority_folder_id: Optional folder ID to exclude from scanning
+        include_subfolders: Whether to include subfolders when scanning
     """
     return run_async(_process_matter_async(
-        self, job_id, matter_id, search_targets
+        self, job_id, matter_id, search_targets,
+        scan_folder_id, legal_authority_folder_id, include_subfolders
     ))
 
 
@@ -281,7 +288,10 @@ async def _process_matter_async(
     task,
     job_id: int,
     matter_id: int,
-    search_targets: Optional[List[str]] = None
+    search_targets: Optional[List[str]] = None,
+    scan_folder_id: Optional[int] = None,
+    legal_authority_folder_id: Optional[int] = None,
+    include_subfolders: bool = True
 ):
     """Async implementation of matter processing"""
     async with AsyncSessionLocal() as session:
@@ -328,6 +338,10 @@ async def _process_matter_async(
             refresh_token = decrypt_token(clio_integration.refresh_token_encrypted)
 
             logger.info(f"Syncing documents for matter {matter_id} from Clio...")
+            if scan_folder_id:
+                logger.info(f"Scanning specific folder: {scan_folder_id}, include_subfolders={include_subfolders}")
+            if legal_authority_folder_id:
+                logger.info(f"Excluding legal authority folder: {legal_authority_folder_id}")
 
             async with ClioClient(
                 access_token=access_token,
@@ -337,7 +351,24 @@ async def _process_matter_async(
             ) as clio:
                 # Sync documents for this matter from Clio
                 docs_synced = 0
-                async for doc_data in clio.get_documents(matter_id=int(matter.clio_matter_id)):
+
+                # Determine which documents to sync based on folder selection
+                if scan_folder_id and include_subfolders:
+                    # Recursive folder scanning with optional exclusion
+                    exclude_ids = [legal_authority_folder_id] if legal_authority_folder_id else []
+                    doc_iterator = clio.get_documents_recursive(
+                        matter_id=int(matter.clio_matter_id),
+                        folder_id=scan_folder_id,
+                        exclude_folder_ids=exclude_ids
+                    )
+                elif scan_folder_id:
+                    # Single folder only (no subfolders)
+                    doc_iterator = clio.get_documents_in_folder(scan_folder_id)
+                else:
+                    # All documents in matter (original behavior)
+                    doc_iterator = clio.get_documents(matter_id=int(matter.clio_matter_id))
+
+                async for doc_data in doc_iterator:
                     result = await session.execute(
                         select(Document).where(
                             Document.matter_id == matter.id,

@@ -206,14 +206,15 @@ async def get_matter(
     )
 
 
-@router.post("/{matter_id}/process")
-async def process_matter(
+@router.get("/{matter_id}/folders")
+async def get_matter_folders(
     matter_id: int,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Start processing a matter to extract witnesses from its documents.
+    Get the folder tree for a matter from Clio.
+    Returns a nested structure of folders.
     """
     # Verify matter belongs to user
     result = await db.execute(
@@ -227,6 +228,84 @@ async def process_matter(
     if not matter:
         raise HTTPException(status_code=404, detail="Matter not found")
 
+    # Get Clio integration
+    integration_result = await db.execute(
+        select(ClioIntegration).where(
+            ClioIntegration.user_id == current_user.id,
+            ClioIntegration.is_active == True
+        )
+    )
+    integration = integration_result.scalar_one_or_none()
+
+    if not integration:
+        raise HTTPException(status_code=400, detail="Clio integration not connected")
+
+    try:
+        access_token = decrypt_token(integration.access_token_encrypted)
+        refresh_token = decrypt_token(integration.refresh_token_encrypted)
+
+        async with ClioClient(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_expires_at=integration.token_expires_at,
+            region=integration.clio_region
+        ) as clio:
+            folder_tree = await clio.get_folder_tree(int(matter.clio_matter_id))
+            return {"folders": folder_tree}
+
+    except Exception as e:
+        logger.error(f"Failed to get folders: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get folders: {str(e)}")
+
+
+from pydantic import BaseModel
+from typing import Optional, List
+
+class ProcessMatterRequest(BaseModel):
+    scan_folder_id: Optional[int] = None  # Folder to scan for documents (None = all documents)
+    legal_authority_folder_id: Optional[int] = None  # Folder with legal authorities for RAG
+    include_subfolders: bool = True  # Whether to scan subfolders recursively
+
+
+@router.post("/{matter_id}/process")
+async def process_matter(
+    matter_id: int,
+    request: Optional[ProcessMatterRequest] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Start processing a matter to extract witnesses from its documents.
+
+    Args:
+        matter_id: The matter ID to process
+        request: Optional processing options:
+            - scan_folder_id: Specific folder to scan (None = all documents)
+            - legal_authority_folder_id: Folder with case law for AI context
+            - include_subfolders: Whether to include subfolders (default: True)
+    """
+    # Verify matter belongs to user
+    result = await db.execute(
+        select(Matter).where(
+            Matter.id == matter_id,
+            Matter.user_id == current_user.id
+        )
+    )
+    matter = result.scalar_one_or_none()
+
+    if not matter:
+        raise HTTPException(status_code=404, detail="Matter not found")
+
+    # Parse request options
+    scan_folder_id = None
+    legal_authority_folder_id = None
+    include_subfolders = True
+
+    if request:
+        scan_folder_id = request.scan_folder_id
+        legal_authority_folder_id = request.legal_authority_folder_id
+        include_subfolders = request.include_subfolders
+
     # Create job record
     job = ProcessingJob(
         user_id=current_user.id,
@@ -238,12 +317,15 @@ async def process_matter(
     await db.commit()
     await db.refresh(job)
 
-    # Start Celery task
+    # Start Celery task with folder options
     from app.worker.tasks import process_matter as process_matter_task
     task = process_matter_task.delay(
         job_id=job.id,
         matter_id=matter_id,
-        search_targets=None
+        search_targets=None,
+        scan_folder_id=scan_folder_id,
+        legal_authority_folder_id=legal_authority_folder_id,
+        include_subfolders=include_subfolders
     )
 
     # Store task ID

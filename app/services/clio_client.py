@@ -340,6 +340,125 @@ class ClioClient:
         return response.content
 
     # =========================================================================
+    # Folder Operations
+    # =========================================================================
+
+    DEFAULT_FOLDER_FIELDS = [
+        "id",
+        "name",
+        "parent",
+        "created_at",
+        "updated_at",
+    ]
+
+    async def get_folders(
+        self,
+        matter_id: int,
+        parent_id: Optional[int] = None,
+        fields: Optional[List[str]] = None
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """
+        Get folders for a matter.
+
+        Args:
+            matter_id: The matter ID to get folders for
+            parent_id: Optional parent folder ID to get subfolders
+            fields: Fields to return
+        """
+        if fields is None:
+            fields = self.DEFAULT_FOLDER_FIELDS
+
+        params = {"matter_id": matter_id}
+        if parent_id:
+            params["parent_id"] = parent_id
+        if fields:
+            params["fields"] = ",".join(fields)
+
+        async for folder in self.get_paginated("folders", params):
+            yield folder
+
+    async def get_folder(self, folder_id: int) -> Dict[str, Any]:
+        """Get a single folder by ID"""
+        params = {"fields": ",".join(self.DEFAULT_FOLDER_FIELDS)}
+        response = await self.get(f"folders/{folder_id}", params=params)
+        return response.get("data", {})
+
+    async def get_folder_tree(self, matter_id: int) -> List[Dict[str, Any]]:
+        """
+        Get the complete folder tree for a matter.
+        Returns a nested structure with children.
+        """
+        # Get all folders for the matter
+        all_folders = []
+        async for folder in self.get_folders(matter_id):
+            all_folders.append(folder)
+
+        # Build tree structure
+        folder_map = {f["id"]: {**f, "children": []} for f in all_folders}
+        root_folders = []
+
+        for folder in all_folders:
+            parent = folder.get("parent")
+            if parent and parent.get("id") in folder_map:
+                folder_map[parent["id"]]["children"].append(folder_map[folder["id"]])
+            else:
+                root_folders.append(folder_map[folder["id"]])
+
+        return root_folders
+
+    async def get_documents_in_folder(
+        self,
+        folder_id: int,
+        fields: Optional[List[str]] = None
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Get documents in a specific folder"""
+        if fields is None:
+            fields = self.DEFAULT_DOCUMENT_FIELDS
+
+        params = {
+            "folder_id": folder_id,
+            "fields": ",".join(fields)
+        }
+
+        async for doc in self.get_paginated("documents", params):
+            yield doc
+
+    async def get_documents_recursive(
+        self,
+        matter_id: int,
+        folder_id: int,
+        exclude_folder_ids: Optional[List[int]] = None,
+        fields: Optional[List[str]] = None
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """
+        Recursively get all documents in a folder and its subfolders.
+
+        Args:
+            matter_id: The matter ID
+            folder_id: The root folder ID to start from
+            exclude_folder_ids: List of folder IDs to exclude (e.g., Legal Authority folder)
+            fields: Document fields to return
+        """
+        if exclude_folder_ids is None:
+            exclude_folder_ids = []
+
+        if fields is None:
+            fields = self.DEFAULT_DOCUMENT_FIELDS
+
+        # Get documents in the current folder
+        async for doc in self.get_documents_in_folder(folder_id, fields):
+            yield doc
+
+        # Get subfolders and recurse
+        async for subfolder in self.get_folders(matter_id, parent_id=folder_id):
+            subfolder_id = subfolder.get("id")
+            if subfolder_id and subfolder_id not in exclude_folder_ids:
+                async for doc in self.get_documents_recursive(
+                    matter_id, subfolder_id, exclude_folder_ids, fields
+                ):
+                    yield doc
+
+    # =========================================================================
     # Contact Operations
     # =========================================================================
 

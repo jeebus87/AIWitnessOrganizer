@@ -81,12 +81,16 @@ class ApiClient {
     });
   }
 
-  async processMatter(id: number, token: string, searchWitnesses?: string[]) {
+  async processMatter(id: number, token: string, options?: ProcessMatterOptions) {
     return this.request<ProcessingJob>(`/api/v1/matters/${id}/process`, {
       method: "POST",
       token,
-      body: { search_witnesses: searchWitnesses },
+      body: options || {},
     });
+  }
+
+  async getMatterFolders(matterId: number, token: string) {
+    return this.request<FolderTreeResponse>(`/api/v1/matters/${matterId}/folders`, { token });
   }
 
   // Witnesses
@@ -335,6 +339,23 @@ export interface WitnessListResponse {
 export interface JobListResponse {
   jobs: ProcessingJob[];
   total: number;
+}
+
+export interface Folder {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  children: Folder[];
+}
+
+export interface FolderTreeResponse {
+  folders: Folder[];
+}
+
+export interface ProcessMatterOptions {
+  scan_folder_id?: number | null;
+  legal_authority_folder_id?: number | null;
+  include_subfolders?: boolean;
 }
 
 export const api = new ApiClient(API_BASE_URL);

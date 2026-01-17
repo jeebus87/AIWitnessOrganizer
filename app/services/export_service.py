@@ -77,6 +77,48 @@ class ExportService:
             source_doc = f"{source_doc} (Page {source_page})"
         return source_doc
 
+    def _format_relevance(self, w: Dict[str, Any]) -> str:
+        """Format relevance level as user-friendly text with reason"""
+        # Map relevance values to display text
+        relevance_display = {
+            "HIGHLY_RELEVANT": "Highly Relevant",
+            "highly_relevant": "Highly Relevant",
+            "RELEVANT": "Relevant",
+            "relevant": "Relevant",
+            "SOMEWHAT_RELEVANT": "Somewhat Relevant",
+            "somewhat_relevant": "Somewhat Relevant",
+            "NOT_RELEVANT": "Not Relevant",
+            "not_relevant": "Not Relevant",
+            # Legacy importance values fallback
+            "HIGH": "Highly Relevant",
+            "high": "Highly Relevant",
+            "MEDIUM": "Relevant",
+            "medium": "Relevant",
+            "LOW": "Somewhat Relevant",
+            "low": "Somewhat Relevant",
+        }
+
+        # Get relevance (prefer new field, fallback to importance)
+        relevance = w.get("relevance") or w.get("importance") or "RELEVANT"
+        relevance_text = relevance_display.get(str(relevance), "Relevant")
+
+        # Add reason if available
+        relevance_reason = w.get("relevance_reason", "") or ""
+        if relevance_reason:
+            return f"{relevance_text} - {relevance_reason}"
+        return relevance_text
+
+    def _get_relevance_sort_key(self, w: Dict[str, Any]) -> int:
+        """Get sort key for relevance (lower = more relevant = first)"""
+        relevance = str(w.get("relevance") or w.get("importance") or "RELEVANT").upper().replace(" ", "_")
+        relevance_order = {
+            "HIGHLY_RELEVANT": 0, "HIGH": 0,
+            "RELEVANT": 1, "MEDIUM": 1,
+            "SOMEWHAT_RELEVANT": 2, "LOW": 2,
+            "NOT_RELEVANT": 3,
+        }
+        return relevance_order.get(relevance, 1)
+
     def witnesses_to_dataframe(
         self,
         witnesses: List[Dict[str, Any]],
@@ -84,13 +126,12 @@ class ExportService:
     ) -> pd.DataFrame:
         """
         Convert witness data to a pandas DataFrame.
-        Structure matches PDF: Witness Info, Importance, Confidence, Observation, Source Summary, Source Document
+        Structure: Witness Info, Relevance, Confidence, Observation, Source Summary, Source Document
         """
-        # Sort witnesses by importance: HIGH first, then MEDIUM, then LOW
-        importance_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+        # Sort witnesses by relevance: HIGHLY_RELEVANT first, then RELEVANT, etc.
         sorted_witnesses = sorted(
             witnesses,
-            key=lambda w: importance_order.get(w.get("importance", "LOW").upper(), 3)
+            key=lambda w: self._get_relevance_sort_key(w)
         )
 
         # Group witnesses by name to handle multiple observations
@@ -111,7 +152,7 @@ class ExportService:
                 w = observations[0]
                 row = {
                     "Witness Info": self._format_witness_info(w),
-                    "Importance": w.get("importance", "LOW"),
+                    "Relevance": self._format_relevance(w),
                     "Confidence": f"{w.get('confidence_score', 0) * 100:.0f}%",
                     "Observation": w.get("observation", "") or "",
                     "Source Summary": w.get("source_quote", "") or "",
@@ -124,7 +165,7 @@ class ExportService:
 
                 summary_row = {
                     "Witness Info": self._format_witness_info(first_obs),
-                    "Importance": first_obs.get("importance", "LOW"),
+                    "Relevance": self._format_relevance(first_obs),
                     "Confidence": f"{first_obs.get('confidence_score', 0) * 100:.0f}%",
                     "Observation": summary_observation,
                     "Source Summary": "See Below",
@@ -136,7 +177,7 @@ class ExportService:
                 for w in observations:
                     row = {
                         "Witness Info": "",  # Blank for continuation rows
-                        "Importance": "",
+                        "Relevance": "",
                         "Confidence": "",
                         "Observation": w.get("observation", "") or "",
                         "Source Summary": w.get("source_quote", "") or "",
@@ -253,26 +294,29 @@ class ExportService:
             for col_num, value in enumerate(df.columns.values):
                 worksheet.write(header_row_start, col_num, value, header_format)
 
-            # Track importance for row coloring
+            # Track relevance for row coloring
             # We need to track which witness each row belongs to for proper coloring
             if len(df) > 0:
-                current_importance = None
+                current_relevance = None
                 for row_num in range(len(df)):
                     excel_row = header_row_start + 1 + row_num
-                    importance = df.iloc[row_num]["Importance"]
+                    relevance = df.iloc[row_num]["Relevance"]
                     witness_info = df.iloc[row_num]["Witness Info"]
 
-                    # If this is a new witness row (has witness info), update importance
+                    # If this is a new witness row (has witness info), update relevance
                     if witness_info:
-                        current_importance = importance
+                        current_relevance = relevance
 
-                    # Apply formatting based on importance
-                    if current_importance == "HIGH":
+                    # Apply formatting based on relevance (check prefix since it may include reason)
+                    rel_str = str(current_relevance or "").lower()
+                    if rel_str.startswith("highly relevant"):
                         row_format = high_format
-                    elif current_importance == "MEDIUM":
+                    elif rel_str.startswith("relevant"):
                         row_format = medium_format
-                    elif current_importance == "LOW":
+                    elif rel_str.startswith("somewhat relevant"):
                         row_format = low_format
+                    elif rel_str.startswith("not relevant"):
+                        row_format = continuation_format
                     else:
                         row_format = continuation_format
 
@@ -282,8 +326,8 @@ class ExportService:
                         worksheet.write(excel_row, col_num, value, row_format)
 
             # Set column widths - matching PDF proportions
-            # Witness Info, Importance, Confidence, Observation, Source Summary, Source Document
-            col_widths = [35, 12, 12, 45, 35, 30]
+            # Witness Info, Relevance, Confidence, Observation, Source Summary, Source Document
+            col_widths = [35, 40, 12, 45, 35, 30]  # Wider Relevance column for reason text
             for idx, width in enumerate(col_widths):
                 if idx < len(df.columns):
                     worksheet.set_column(idx, idx, width)
@@ -437,11 +481,10 @@ class ExportService:
             ))
             return elements
 
-        # Sort witnesses by importance: HIGH first, then MEDIUM, then LOW
-        importance_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+        # Sort witnesses by relevance: HIGHLY_RELEVANT first, then RELEVANT, etc.
         sorted_witnesses = sorted(
             witnesses,
-            key=lambda w: importance_order.get(w.get("importance", "LOW").upper(), 3)
+            key=lambda w: self._get_relevance_sort_key(w)
         )
 
         # Group witnesses by name to handle multiple observations
@@ -453,8 +496,8 @@ class ExportService:
                 witness_groups[name] = []
             witness_groups[name].append(w)
 
-        # Table headers - new structure
-        headers = ["Witness Info", "Importance", "Confidence", "Observation", "Source Summary", "Source Document"]
+        # Table headers - new structure with Relevance
+        headers = ["Witness Info", "Relevance", "Confidence", "Observation", "Source Summary", "Source Document"]
 
         data = [headers]
 
@@ -495,10 +538,11 @@ class ExportService:
                     source_doc = f"{source_doc} (Page {source_page})"
 
                 confidence = f"{w.get('confidence_score', 0) * 100:.0f}%"
+                relevance_text = self._format_relevance(w)
 
                 row = [
                     Paragraph(witness_info, self.styles["Observation"]),
-                    w.get("importance", "LOW"),
+                    Paragraph(relevance_text, self.styles["Observation"]),
                     confidence,
                     Paragraph(observation, self.styles["Observation"]),
                     Paragraph(source_summary, self.styles["Observation"]),
@@ -512,10 +556,11 @@ class ExportService:
 
                 first_w = observations[0]
                 confidence = f"{first_w.get('confidence_score', 0) * 100:.0f}%"
+                relevance_text = self._format_relevance(first_w)
 
                 summary_row = [
                     Paragraph(witness_info, self.styles["Observation"]),
-                    first_w.get("importance", "LOW"),
+                    Paragraph(relevance_text, self.styles["Observation"]),
                     confidence,
                     Paragraph(summary_observation, self.styles["Observation"]),
                     "See Below",
@@ -535,7 +580,7 @@ class ExportService:
 
                     row = [
                         "",  # Witness Info
-                        "",  # Importance
+                        "",  # Relevance
                         "",  # Confidence
                         Paragraph(observation, self.styles["Observation"]),
                         Paragraph(source_summary, self.styles["Observation"]),
@@ -545,8 +590,8 @@ class ExportService:
 
         # Create table - adjusted column widths for 6 columns
         # Landscape LETTER = 11" wide, minus 1" margins = 10" available
-        # Balance widths to prevent squished columns
-        col_widths = [2.0 * inch, 0.85 * inch, 0.85 * inch, 2.5 * inch, 2.0 * inch, 1.8 * inch]
+        # Witness Info, Relevance (wider for reason text), Confidence, Observation, Source Summary, Source Document
+        col_widths = [1.8 * inch, 1.5 * inch, 0.7 * inch, 2.3 * inch, 1.9 * inch, 1.8 * inch]
 
         table = Table(data, colWidths=col_widths, repeatRows=1, splitByRow=True)
 
@@ -563,7 +608,7 @@ class ExportService:
             # Body
             ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
             ("FONTSIZE", (0, 1), (-1, -1), 8),
-            ("ALIGN", (1, 1), (1, -1), "CENTER"),  # Importance centered (column 1)
+            ("ALIGN", (1, 1), (1, -1), "LEFT"),  # Relevance left-aligned for readability
             ("ALIGN", (2, 1), (2, -1), "CENTER"),  # Confidence centered (column 2)
 
             # Grid
@@ -577,10 +622,11 @@ class ExportService:
             ("RIGHTPADDING", (0, 0), (-1, -1), 4),
         ])
 
-        # Add row colors based on importance - track which rows belong to which witness
+        # Add row colors based on relevance - track which rows belong to which witness
         row_num = 1
         for witness_name, observations in witness_groups.items():
-            importance = observations[0].get("importance", "LOW").upper()
+            # Get relevance level for coloring
+            relevance_key = self._get_relevance_sort_key(observations[0])
             # Calculate number of rows for this witness
             if len(observations) == 1:
                 num_rows = 1
@@ -588,12 +634,14 @@ class ExportService:
                 num_rows = 1 + len(observations)  # Summary row + individual rows
 
             for _ in range(num_rows):
-                if importance == "HIGH":
+                if relevance_key == 0:  # HIGHLY_RELEVANT
                     style.add("BACKGROUND", (0, row_num), (-1, row_num), colors.HexColor("#FFE6E6"))
-                elif importance == "MEDIUM":
+                elif relevance_key == 1:  # RELEVANT
                     style.add("BACKGROUND", (0, row_num), (-1, row_num), colors.HexColor("#FFF9E6"))
-                else:
+                elif relevance_key == 2:  # SOMEWHAT_RELEVANT
                     style.add("BACKGROUND", (0, row_num), (-1, row_num), colors.HexColor("#E6FFE6"))
+                else:  # NOT_RELEVANT
+                    style.add("BACKGROUND", (0, row_num), (-1, row_num), colors.HexColor("#F5F5F5"))
                 row_num += 1
 
         table.setStyle(style)
