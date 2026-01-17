@@ -28,6 +28,11 @@ class JobStatus(str, PyEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
 
+class SyncStatus(str, PyEnum):
+    """Status of a Clio sync operation for a matter"""
+    IDLE = "idle"
+    SYNCING = "syncing"
+    FAILED = "failed"
 
 class WitnessRole(str, PyEnum):
     """Role classification for witnesses"""
@@ -173,6 +178,9 @@ class Matter(Base):
     practice_area = Column(String(255), nullable=True)
     client_name = Column(String(255), nullable=True)
 
+    # Sync status for concurrency control
+    sync_status = Column(Enum(SyncStatus), default=SyncStatus.IDLE, nullable=False)
+
     last_synced_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -200,6 +208,10 @@ class Document(Base):
     file_type = Column(String(128), nullable=True)  # MIME type subtype (pdf, vnd.openxmlformats-officedocument.spreadsheetml.sheet, etc.)
     file_size = Column(BigInteger, nullable=True)  # in bytes (BigInteger for files >2GB)
     etag = Column(String(255), nullable=True)  # For caching
+    clio_folder_id = Column(String(128), nullable=True, index=True)  # Folder in Clio
+
+    # Soft delete for sync (document removed from Clio)
+    is_soft_deleted = Column(Boolean, default=False, nullable=False, index=True)
 
     # Processing status
     is_processed = Column(Boolean, default=False, nullable=False)
@@ -274,6 +286,9 @@ class ProcessingJob(Base):
     target_matter_id = Column(Integer, ForeignKey("matters.id"), nullable=True)
     search_witnesses = Column(JSON, nullable=True)  # List of specific names to search for
     include_archived = Column(Boolean, default=False, nullable=False)
+
+    # Document snapshot for concurrency safety (frozen list at job creation)
+    document_ids_snapshot = Column(JSON, nullable=True)
 
     # Progress tracking
     status = Column(Enum(JobStatus), default=JobStatus.PENDING, nullable=False)

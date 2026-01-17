@@ -14,23 +14,6 @@ from app.worker.tasks import process_matter, process_full_database
 from app.api.deps import get_current_user
 
 
-async def renumber_all_jobs(db: AsyncSession, user_id: int) -> None:
-    """
-    Renumber ALL jobs for a user's organization, ordered by created_at.
-    Jobs are numbered 1, 2, 3, etc. starting from the oldest.
-    This ensures sequential job numbers even after deletions.
-    """
-    # Get all jobs for this user, ordered by created_at (oldest first)
-    result = await db.execute(
-        select(ProcessingJob)
-        .where(ProcessingJob.user_id == user_id)
-        .order_by(ProcessingJob.created_at.asc())
-    )
-    jobs = result.scalars().all()
-
-    # Renumber all jobs sequentially
-    for idx, job in enumerate(jobs, start=1):
-        job.job_number = idx
 
 router = APIRouter(prefix="/jobs", tags=["Processing Jobs"])
 
@@ -108,7 +91,7 @@ async def create_job(
         )
         initial_doc_count = doc_count_result.scalar() or 0
 
-    # Create job record with initial document count (job_number will be assigned after)
+    # Create job record with initial document count
     job = ProcessingJob(
         user_id=current_user.id,
         job_type=request.job_type,
@@ -121,8 +104,8 @@ async def create_job(
     db.add(job)
     await db.flush()  # Flush to get the job ID without committing
 
-    # Renumber ALL jobs for this user (including the new one)
-    await renumber_all_jobs(db, current_user.id)
+    # Set job_number to match database id
+    job.job_number = job.id
 
     await db.commit()
     await db.refresh(job)

@@ -109,6 +109,12 @@ class ApiClient {
     return this.request<FolderTreeResponse>(`/api/v1/matters/${matterId}/folders`, { token });
   }
 
+  // Get document count for a matter (optionally filtered by folder)
+  async getDocumentCount(matterId: number, token: string, folderId?: string | null) {
+    const params = folderId ? `?folder_id=${folderId}` : "";
+    return this.request<DocumentCountResponse>(`/api/v1/matters/${matterId}/documents/count${params}`, { token });
+  }
+
   // Witnesses
   async getWitnesses(token: string, params?: WitnessFilters) {
     const query = params ? "?" + new URLSearchParams(params as Record<string, string>).toString() : "";
@@ -400,6 +406,14 @@ export interface Folder {
 
 export interface FolderTreeResponse {
   folders: Folder[];
+}
+
+export interface DocumentCountResponse {
+  count: number;
+  folder_id: string | null;
+  matter_id: number;
+  sync_status: string;
+  last_synced_at: string | null;
 }
 
 export interface ProcessMatterOptions {

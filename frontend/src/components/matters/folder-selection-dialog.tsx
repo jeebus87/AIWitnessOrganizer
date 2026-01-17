@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { api, Folder } from "@/lib/api";
+import { toast } from "sonner";
 
 interface FolderSelectionDialogProps {
   open: boolean;
@@ -145,6 +146,8 @@ export function FolderSelectionDialog({
   const [expandedFolders, setExpandedFolders] = useState<Set<number>>(new Set());
 
   const [selectionMode, setSelectionMode] = useState<"scan" | "legal">("scan");
+  const [documentCount, setDocumentCount] = useState<number | null>(null);
+  const [countLoading, setCountLoading] = useState(false);
 
   // Fetch folders when dialog opens
   useEffect(() => {
@@ -175,8 +178,35 @@ export function FolderSelectionDialog({
       setLegalAuthorityFolderId(null);
       setIncludeSubfolders(true);
       setSelectionMode("scan");
+      setDocumentCount(null);
     }
   }, [open]);
+
+  // Fetch document count when scan folder changes
+  const fetchDocumentCount = async (folderId: number | null) => {
+    if (!token || !matterId) return;
+
+    setCountLoading(true);
+    try {
+      const folderIdStr = folderId ? folderId.toString() : null;
+      const result = await api.getDocumentCount(matterId, token, folderIdStr);
+      setDocumentCount(result.count);
+
+      // Show toast with document count
+      const folderName = folderId
+        ? folders.flatMap(function findFolder(f): Folder[] {
+            if (f.id === folderId) return [f];
+            return f.children ? f.children.flatMap(findFolder) : [];
+          })[0]?.name || "selected folder"
+        : "all documents";
+
+      toast.info(`${result.count.toLocaleString()} documents in ${folderName}`);
+    } catch (err) {
+      console.error("Failed to fetch document count:", err);
+    } finally {
+      setCountLoading(false);
+    }
+  };
 
   const toggleExpanded = (folderId: number) => {
     setExpandedFolders((prev) => {
@@ -193,6 +223,8 @@ export function FolderSelectionDialog({
   const handleFolderSelect = (folderId: number | null) => {
     if (selectionMode === "scan") {
       setScanFolderId(folderId);
+      // Fetch and display document count when scan folder is selected
+      fetchDocumentCount(folderId);
     } else {
       setLegalAuthorityFolderId(folderId);
     }
@@ -317,9 +349,17 @@ export function FolderSelectionDialog({
             </div>
 
             {/* Selection Summary */}
-            <div className="text-xs text-muted-foreground">
-              {scanFolderId ? "Scanning specific folder" : "Scanning all documents"}
-              {legalAuthorityFolderId && " | Using legal authority folder"}
+            <div className="text-xs text-muted-foreground flex items-center gap-2">
+              <span>
+                {scanFolderId ? "Scanning specific folder" : "Scanning all documents"}
+                {legalAuthorityFolderId && " | Using legal authority folder"}
+              </span>
+              {countLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+              {documentCount !== null && !countLoading && (
+                <span className="font-medium text-primary">
+                  ({documentCount.toLocaleString()} documents)
+                </span>
+              )}
             </div>
           </div>
         </div>

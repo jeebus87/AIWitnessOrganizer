@@ -11,11 +11,11 @@ from sqlalchemy import select, func, update, delete, distinct, asc, desc, text
 
 from app.core.security import decrypt_token
 from app.db.session import get_db
-from app.db.models import Matter, Document, Witness, ClioIntegration, User, ProcessingJob, JobStatus
+from app.db.models import Matter, Document, Witness, ClioIntegration, User, ProcessingJob, JobStatus, SyncStatus
 from app.api.v1.schemas.witnesses import MatterResponse, MatterListResponse, DocumentResponse
 from app.services.clio_client import ClioClient
 from app.api.deps import get_current_user
-from app.api.v1.routes.jobs import renumber_all_jobs
+# renumber_all_jobs removed - job_number now equals job.id
 from app.worker.tasks import sync_matter_documents, sync_all_user_matters
 
 router = APIRouter(prefix="/matters", tags=["Matters"])
@@ -348,6 +348,13 @@ async def process_matter(
     if not matter:
         raise HTTPException(status_code=404, detail="Matter not found")
 
+    # Check if sync is in progress
+    if matter.sync_status == SyncStatus.SYNCING:
+        raise HTTPException(
+            status_code=409,
+            detail="Matter is currently syncing. Please wait for sync to complete."
+        )
+
     # Parse request options
     scan_folder_id = None
     legal_authority_folder_id = None
@@ -358,24 +365,53 @@ async def process_matter(
         legal_authority_folder_id = request.legal_authority_folder_id
         include_subfolders = request.include_subfolders
 
-    # Always start with 0 documents - worker will set the accurate count
-    # after querying Clio for the actual documents to process.
-    # This ensures the UI shows "Counting documents..." until the worker is ready.
-    initial_doc_count = 0
+    # Check if matter needs sync (never synced before)
+    if matter.last_synced_at is None:
+        # Queue sync and return - frontend should poll for sync completion
+        from app.worker.tasks import sync_matter_documents
+        sync_matter_documents.delay(matter.id, current_user.id)
+        raise HTTPException(
+            status_code=202,
+            detail="Matter has never been synced. Sync started - please try again in a moment."
+        )
 
-    # Create job record with initial document count (job_number will be assigned after)
+    # Build document snapshot from local database
+    doc_query = select(Document.id).where(
+        Document.matter_id == matter_id,
+        Document.is_soft_deleted == False
+    )
+
+    # Filter by folder if specified
+    if scan_folder_id:
+        doc_query = doc_query.where(Document.clio_folder_id == str(scan_folder_id))
+
+    # Exclude legal authority folder if specified
+    if legal_authority_folder_id:
+        doc_query = doc_query.where(Document.clio_folder_id != str(legal_authority_folder_id))
+
+    result = await db.execute(doc_query)
+    document_ids = [row[0] for row in result.all()]
+
+    if not document_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="No documents found to process. Try syncing first or selecting a different folder."
+        )
+
+    # Create job record with document snapshot
     job = ProcessingJob(
         user_id=current_user.id,
         job_type="single_matter",
         target_matter_id=matter_id,
         status=JobStatus.PENDING,
-        total_documents=initial_doc_count  # Worker will update with accurate count
+        total_documents=len(document_ids),
+        document_ids_snapshot=document_ids  # Freeze the document list
     )
     db.add(job)
     await db.flush()  # Flush to get the job ID without committing
 
-    # Renumber ALL jobs for this user (including the new one)
-    await renumber_all_jobs(db, current_user.id)
+    # Set job_number to match database id
+    job.job_number = job.id
 
     await db.commit()
     await db.refresh(job)
@@ -399,6 +435,7 @@ async def process_matter(
         "id": job.id,
         "job_number": job.job_number,
         "status": job.status.value,
+        "total_documents": len(document_ids),
         "message": f"Processing started for matter {matter.display_number}"
     }
 
@@ -465,6 +502,57 @@ async def list_matter_documents(
         "total": total,
         "page": page,
         "page_size": page_size
+    }
+
+
+@router.get("/{matter_id}/documents/count")
+async def get_document_count(
+    matter_id: int,
+    folder_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get the count of documents for a matter, optionally filtered by folder.
+    Only counts non-soft-deleted documents.
+
+    Args:
+        matter_id: The matter ID
+        folder_id: Optional Clio folder ID to filter by
+
+    Returns:
+        {count: int, folder_id: str|null, matter_id: int}
+    """
+    # Verify matter belongs to user
+    result = await db.execute(
+        select(Matter).where(
+            Matter.id == matter_id,
+            Matter.user_id == current_user.id
+        )
+    )
+    matter = result.scalar_one_or_none()
+
+    if not matter:
+        raise HTTPException(status_code=404, detail="Matter not found")
+
+    # Build count query - only count non-soft-deleted documents
+    count_query = select(func.count()).select_from(Document).where(
+        Document.matter_id == matter_id,
+        Document.is_soft_deleted == False
+    )
+
+    # Filter by folder if specified
+    if folder_id:
+        count_query = count_query.where(Document.clio_folder_id == folder_id)
+
+    count = await db.scalar(count_query)
+
+    return {
+        "count": count or 0,
+        "folder_id": folder_id,
+        "matter_id": matter_id,
+        "sync_status": matter.sync_status.value if matter.sync_status else "idle",
+        "last_synced_at": matter.last_synced_at.isoformat() if matter.last_synced_at else None
     }
 
 

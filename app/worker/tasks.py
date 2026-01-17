@@ -6,7 +6,7 @@ from typing import List, Optional, Dict, Any
 
 from celery import shared_task, group, chord
 from celery.utils.log import get_task_logger
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
 from app.worker.celery_app import celery_app
@@ -15,7 +15,8 @@ from app.core.config import settings
 from app.core.security import decrypt_token
 from app.db.models import (
     User, ClioIntegration, Matter, Document, Witness,
-    ProcessingJob, JobStatus, WitnessRole, ImportanceLevel, RelevanceLevel
+    ProcessingJob, JobStatus, WitnessRole, ImportanceLevel, RelevanceLevel,
+    SyncStatus
 )
 from app.services.clio_client import ClioClient
 from app.services.document_processor import DocumentProcessor
@@ -46,97 +47,163 @@ def sync_matter_documents(self, matter_id: int, user_id: int):
     return run_async(_sync_matter_documents_async(matter_id, user_id))
 
 
-async def _sync_matter_documents_async(matter_id: int, user_id: int):
-    """Async implementation of document sync"""
+async def _sync_matter_documents_async(matter_id: int, user_id: int, force: bool = False):
+    """
+    Async implementation of document sync with locking and mark-and-sweep.
+
+    Args:
+        matter_id: Database ID of the matter
+        user_id: Database ID of the user
+        force: If True, skip the lock check (for internal use only)
+    """
     async with get_worker_session() as session:
         # Get matter
         result = await session.execute(
             select(Matter).where(Matter.id == matter_id)
         )
         matter = result.scalar_one_or_none()
-        
+
         if not matter:
             logger.error(f"Matter {matter_id} not found for sync")
             return {"success": False, "error": "Matter not found"}
-        
-        # Get user's Clio integration
-        result = await session.execute(
-            select(ClioIntegration).where(ClioIntegration.user_id == user_id)
-        )
-        clio_integration = result.scalar_one_or_none()
-        
-        if not clio_integration:
-            logger.error(f"No Clio integration for user {user_id}")
-            return {"success": False, "error": "Clio integration not found"}
-        
-        # Decrypt tokens
-        access_token = decrypt_token(clio_integration.access_token_encrypted)
-        refresh_token = decrypt_token(clio_integration.refresh_token_encrypted)
-        
-        logger.info(f"Syncing documents for matter {matter_id} (Clio ID: {matter.clio_matter_id})")
-        
-        async with ClioClient(
-            access_token=access_token,
-            refresh_token=refresh_token,
-            token_expires_at=clio_integration.token_expires_at,
-            region=clio_integration.clio_region
-        ) as clio:
-            docs_synced = 0
-            docs_updated = 0
-            
-            # Get all documents in the matter via folder traversal
-            doc_iterator = clio.get_all_matter_documents_via_folders(
-                matter_id=int(matter.clio_matter_id),
-                exclude_folder_ids=[]
+
+        # Check if sync is already in progress (unless force=True)
+        if not force and matter.sync_status == SyncStatus.SYNCING:
+            logger.warning(f"Matter {matter_id} is already syncing, skipping")
+            return {"success": False, "error": "Sync already in progress"}
+
+        # Acquire lock
+        matter.sync_status = SyncStatus.SYNCING
+        await session.commit()
+
+        try:
+            # Get user's Clio integration
+            result = await session.execute(
+                select(ClioIntegration).where(ClioIntegration.user_id == user_id)
             )
-            
-            async for doc_data in doc_iterator:
-                clio_doc_id = str(doc_data["id"])
-                doc_name = doc_data.get("name", "unknown")
-                
+            clio_integration = result.scalar_one_or_none()
+
+            if not clio_integration:
+                logger.error(f"No Clio integration for user {user_id}")
+                matter.sync_status = SyncStatus.FAILED
+                await session.commit()
+                return {"success": False, "error": "Clio integration not found"}
+
+            # Decrypt tokens
+            access_token = decrypt_token(clio_integration.access_token_encrypted)
+            refresh_token = decrypt_token(clio_integration.refresh_token_encrypted)
+
+            logger.info(f"Syncing documents for matter {matter_id} (Clio ID: {matter.clio_matter_id})")
+
+            async with ClioClient(
+                access_token=access_token,
+                refresh_token=refresh_token,
+                token_expires_at=clio_integration.token_expires_at,
+                region=clio_integration.clio_region
+            ) as clio:
+                docs_synced = 0
+                docs_updated = 0
+                docs_soft_deleted = 0
+
+                # STEP 1: Get ALL document IDs from Clio (mark phase)
+                logger.info(f"Fetching all documents from Clio for matter {matter_id}")
+                clio_doc_ids = set()
+                all_clio_docs = []
+
+                doc_iterator = clio.get_all_matter_documents_via_folders(
+                    matter_id=int(matter.clio_matter_id),
+                    exclude_folder_ids=[]
+                )
+
+                async for doc_data in doc_iterator:
+                    clio_doc_ids.add(str(doc_data["id"]))
+                    all_clio_docs.append(doc_data)
+
+                logger.info(f"Found {len(all_clio_docs)} documents in Clio")
+
+                # STEP 2: Soft-delete local docs NOT in Clio (sweep phase)
                 result = await session.execute(
-                    select(Document).where(
+                    select(Document.id, Document.clio_document_id).where(
                         Document.matter_id == matter.id,
-                        Document.clio_document_id == clio_doc_id
+                        Document.is_soft_deleted == False
                     )
                 )
-                doc = result.scalar_one_or_none()
-                
-                if not doc:
-                    # New document
-                    doc = Document(
-                        matter_id=matter.id,
-                        clio_document_id=clio_doc_id,
-                        filename=doc_name,
-                        file_type=doc_data.get("content_type", "").split("/")[-1] if doc_data.get("content_type") else None,
-                        file_size=doc_data.get("size"),
-                        etag=doc_data.get("etag"),
-                        clio_folder_id=str(doc_data.get("parent", {}).get("id")) if doc_data.get("parent") else None
+                local_docs = result.all()
+
+                docs_to_delete_ids = []
+                for doc_id, clio_doc_id in local_docs:
+                    if clio_doc_id not in clio_doc_ids:
+                        docs_to_delete_ids.append(doc_id)
+
+                if docs_to_delete_ids:
+                    await session.execute(
+                        update(Document)
+                        .where(Document.id.in_(docs_to_delete_ids))
+                        .values(is_soft_deleted=True)
                     )
-                    session.add(doc)
-                    docs_synced += 1
-                else:
-                    # Update existing document metadata
-                    doc.filename = doc_name
-                    doc.file_size = doc_data.get("size")
-                    doc.etag = doc_data.get("etag")
-                    doc.clio_folder_id = str(doc_data.get("parent", {}).get("id")) if doc_data.get("parent") else None
-                    docs_updated += 1
-            
+                    docs_soft_deleted = len(docs_to_delete_ids)
+                    logger.info(f"Soft-deleted {docs_soft_deleted} documents no longer in Clio")
+
+                # STEP 3: Upsert documents from Clio
+                for doc_data in all_clio_docs:
+                    clio_doc_id = str(doc_data["id"])
+                    doc_name = doc_data.get("name", "unknown")
+
+                    result = await session.execute(
+                        select(Document).where(
+                            Document.matter_id == matter.id,
+                            Document.clio_document_id == clio_doc_id
+                        )
+                    )
+                    doc = result.scalar_one_or_none()
+
+                    if not doc:
+                        # New document
+                        doc = Document(
+                            matter_id=matter.id,
+                            clio_document_id=clio_doc_id,
+                            filename=doc_name,
+                            file_type=doc_data.get("content_type", "").split("/")[-1] if doc_data.get("content_type") else None,
+                            file_size=doc_data.get("size"),
+                            etag=doc_data.get("etag"),
+                            clio_folder_id=str(doc_data.get("parent", {}).get("id")) if doc_data.get("parent") else None,
+                            is_soft_deleted=False
+                        )
+                        session.add(doc)
+                        docs_synced += 1
+                    else:
+                        # Update existing document metadata and un-delete if needed
+                        doc.filename = doc_name
+                        doc.file_size = doc_data.get("size")
+                        doc.etag = doc_data.get("etag")
+                        doc.clio_folder_id = str(doc_data.get("parent", {}).get("id")) if doc_data.get("parent") else None
+                        doc.is_soft_deleted = False  # Un-delete if it was soft-deleted
+                        docs_updated += 1
+
+                await session.commit()
+
+                # Update matter's last sync time and release lock
+                matter.last_synced_at = datetime.utcnow()
+                matter.sync_status = SyncStatus.IDLE
+                await session.commit()
+
+                logger.info(f"Sync complete for matter {matter_id}: {docs_synced} new, {docs_updated} updated, {docs_soft_deleted} deleted")
+
+                return {
+                    "success": True,
+                    "matter_id": matter_id,
+                    "documents_synced": docs_synced,
+                    "documents_updated": docs_updated,
+                    "documents_deleted": docs_soft_deleted,
+                    "total_documents": len(all_clio_docs)
+                }
+
+        except Exception as e:
+            # Release lock on error
+            logger.error(f"Sync failed for matter {matter_id}: {e}")
+            matter.sync_status = SyncStatus.FAILED
             await session.commit()
-            
-            # Update matter's last sync time
-            matter.last_synced_at = datetime.utcnow()
-            await session.commit()
-            
-            logger.info(f"Sync complete for matter {matter_id}: {docs_synced} new, {docs_updated} updated")
-            
-            return {
-                "success": True,
-                "matter_id": matter_id,
-                "documents_synced": docs_synced,
-                "documents_updated": docs_updated
-            }
+            raise
 
 
 @celery_app.task(bind=True)
@@ -555,40 +622,62 @@ async def _process_matter_async(
             logger.info(f"  legal_authority_folder_id: {legal_authority_folder_id}")
             logger.info(f"{'='*60}")
 
-            # Query documents from database
-            # Note: Folder filtering requires clio_folder_id to be populated via sync
-            logger.info(f"Querying all documents in matter from database")
-            result = await session.execute(
-                select(Document).where(Document.matter_id == matter.id)
-            )
-            docs_in_scope = list(result.scalars().all())
-            
-            # Folder filtering (only works after documents have been synced with folder info)
-            if scan_folder_id:
-                logger.info(f"Folder filter requested: {scan_folder_id}")
-                # Filter by folder if clio_folder_id is populated
-                filtered = [d for d in docs_in_scope if hasattr(d, 'clio_folder_id') and d.clio_folder_id == str(scan_folder_id)]
-                if filtered:
-                    docs_in_scope = filtered
-                    logger.info(f"Filtered to {len(docs_in_scope)} documents in folder")
-                else:
-                    logger.info(f"No folder filtering applied (documents may need re-sync)")
-            
-            # Exclude legal authority folder documents if specified
-            if legal_authority_folder_id:
-                original_count = len(docs_in_scope)
-                docs_in_scope = [d for d in docs_in_scope if not (hasattr(d, 'clio_folder_id') and d.clio_folder_id == str(legal_authority_folder_id))]
-                if len(docs_in_scope) < original_count:
-                    logger.info(f"Excluded {original_count - len(docs_in_scope)} legal authority documents")
+            # Check if job has a document snapshot (preferred - created at job creation time)
+            if job.document_ids_snapshot:
+                logger.info(f"Using document snapshot from job creation ({len(job.document_ids_snapshot)} documents)")
+                document_ids_to_process = job.document_ids_snapshot
 
-            # Filter out already processed documents (for job resume)
-            unprocessed_docs = [d for d in docs_in_scope if not d.is_processed]
-            document_ids_to_process = [d.id for d in unprocessed_docs]
-            
-            if len(docs_in_scope) > len(unprocessed_docs):
-                logger.info(f"RESUME MODE: Skipping {len(docs_in_scope) - len(unprocessed_docs)} already-processed documents")
-            
-            logger.info(f"Found {len(document_ids_to_process)} unprocessed documents in database for processing")
+                # Filter out already processed documents (for job resume)
+                result = await session.execute(
+                    select(Document.id).where(
+                        Document.id.in_(document_ids_to_process),
+                        Document.is_processed == False,
+                        Document.is_soft_deleted == False
+                    )
+                )
+                unprocessed_ids = [row[0] for row in result.all()]
+
+                if len(document_ids_to_process) > len(unprocessed_ids):
+                    logger.info(f"RESUME MODE: Skipping {len(document_ids_to_process) - len(unprocessed_ids)} already-processed documents")
+
+                document_ids_to_process = unprocessed_ids
+            else:
+                # Fallback: Query documents from database (for backwards compatibility)
+                logger.info(f"No snapshot - querying documents from database")
+                result = await session.execute(
+                    select(Document).where(
+                        Document.matter_id == matter.id,
+                        Document.is_soft_deleted == False
+                    )
+                )
+                docs_in_scope = list(result.scalars().all())
+
+                # Folder filtering (only works after documents have been synced with folder info)
+                if scan_folder_id:
+                    logger.info(f"Folder filter requested: {scan_folder_id}")
+                    filtered = [d for d in docs_in_scope if hasattr(d, 'clio_folder_id') and d.clio_folder_id == str(scan_folder_id)]
+                    if filtered:
+                        docs_in_scope = filtered
+                        logger.info(f"Filtered to {len(docs_in_scope)} documents in folder")
+                    else:
+                        logger.info(f"No folder filtering applied (documents may need re-sync)")
+
+                # Exclude legal authority folder documents if specified
+                if legal_authority_folder_id:
+                    original_count = len(docs_in_scope)
+                    docs_in_scope = [d for d in docs_in_scope if not (hasattr(d, 'clio_folder_id') and d.clio_folder_id == str(legal_authority_folder_id))]
+                    if len(docs_in_scope) < original_count:
+                        logger.info(f"Excluded {original_count - len(docs_in_scope)} legal authority documents")
+
+                # Filter out already processed documents (for job resume)
+                unprocessed_docs = [d for d in docs_in_scope if not d.is_processed]
+                document_ids_to_process = [d.id for d in unprocessed_docs]
+
+                if len(docs_in_scope) > len(unprocessed_docs):
+                    logger.info(f"RESUME MODE: Skipping {len(docs_in_scope) - len(unprocessed_docs)} already-processed documents")
+
+            logger.info(f"Found {len(document_ids_to_process)} unprocessed documents for processing")
+
 
             # Process Legal Authority folder if specified (needs Clio access for RAG)
             legal_context = ""

@@ -121,15 +121,10 @@ export default function MattersPage() {
     () => api.getMatterFilters(token!)
   );
 
-  // Auto-sync documents when page loads (background task)
-  const [hasAutoSynced, setHasAutoSynced] = useState(false);
-  useEffect(() => {
-    if (token && !hasAutoSynced) {
-      setHasAutoSynced(true);
-      // Fire and forget - don't wait for response
-      api.syncAllDocuments(token).catch(console.error);
-    }
-  }, [token, hasAutoSynced]);
+  // Auto-sync removed - sync only happens on:
+  // 1. First login
+  // 2. Manual "Sync with Clio" button
+  // 3. Before processing if matter was never synced
 
   const matters = mattersResponse?.matters;
   const totalPages = mattersResponse?.total_pages || 0;
