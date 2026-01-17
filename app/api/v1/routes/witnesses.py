@@ -278,11 +278,17 @@ async def _get_firm_name(db: AsyncSession, user: User) -> Optional[str]:
 async def export_witnesses_pdf(
     current_user: User = Depends(get_current_user),
     matter_id: Optional[int] = None,
+    job_id: Optional[int] = None,
     importance: Optional[List[str]] = Query(None),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Export witnesses to PDF.
+
+    Args:
+        matter_id: Filter by matter (legacy, use job_id for job-specific exports)
+        job_id: Filter by job - only witnesses created by this specific job
+        importance: Filter by importance levels
     """
     # Build query
     query = (
@@ -295,7 +301,10 @@ async def export_witnesses_pdf(
         )
     )
 
-    if matter_id:
+    # Job ID filter takes precedence (more specific)
+    if job_id:
+        query = query.where(Witness.job_id == job_id)
+    elif matter_id:
         query = query.where(Matter.id == matter_id)
 
     if importance:
@@ -305,10 +314,27 @@ async def export_witnesses_pdf(
     result = await db.execute(query)
     witnesses = result.scalars().all()
 
-    # Get matter info if specific matter
+    # Get matter info from job or matter_id
     matter_name = None
     matter_number = None
-    if matter_id:
+    job_number = None
+    if job_id:
+        from app.db.models import ProcessingJob
+        job_result = await db.execute(
+            select(ProcessingJob).where(ProcessingJob.id == job_id)
+        )
+        job = job_result.scalar_one_or_none()
+        if job:
+            job_number = job.job_number
+            if job.target_matter_id:
+                matter_result = await db.execute(
+                    select(Matter).where(Matter.id == job.target_matter_id)
+                )
+                matter = matter_result.scalar_one_or_none()
+                if matter:
+                    matter_name = matter.description
+                    matter_number = matter.display_number
+    elif matter_id:
         matter_result = await db.execute(
             select(Matter).where(Matter.id == matter_id)
         )
@@ -352,7 +378,11 @@ async def export_witnesses_pdf(
         generated_by=generated_by
     )
 
-    filename = f"witnesses_{matter_number or 'all'}_{datetime.now().strftime('%Y%m%d')}.pdf"
+    # Build filename with job number if available
+    if job_number:
+        filename = f"witnesses_job{job_number}_{datetime.now().strftime('%Y%m%d')}.pdf"
+    else:
+        filename = f"witnesses_{matter_number or 'all'}_{datetime.now().strftime('%Y%m%d')}.pdf"
 
     return StreamingResponse(
         iter([pdf_bytes]),
@@ -365,11 +395,17 @@ async def export_witnesses_pdf(
 async def export_witnesses_excel(
     current_user: User = Depends(get_current_user),
     matter_id: Optional[int] = None,
+    job_id: Optional[int] = None,
     importance: Optional[List[str]] = Query(None),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Export witnesses to Excel.
+
+    Args:
+        matter_id: Filter by matter (legacy, use job_id for job-specific exports)
+        job_id: Filter by job - only witnesses created by this specific job
+        importance: Filter by importance levels
     """
     # Build query
     query = (
@@ -382,7 +418,10 @@ async def export_witnesses_excel(
         )
     )
 
-    if matter_id:
+    # Job ID filter takes precedence (more specific)
+    if job_id:
+        query = query.where(Witness.job_id == job_id)
+    elif matter_id:
         query = query.where(Matter.id == matter_id)
 
     if importance:
@@ -392,10 +431,27 @@ async def export_witnesses_excel(
     result = await db.execute(query)
     witnesses = result.scalars().all()
 
-    # Get matter info if specific matter
+    # Get matter info from job or matter_id
     matter_name = None
     matter_number = None
-    if matter_id:
+    job_number = None
+    if job_id:
+        from app.db.models import ProcessingJob
+        job_result = await db.execute(
+            select(ProcessingJob).where(ProcessingJob.id == job_id)
+        )
+        job = job_result.scalar_one_or_none()
+        if job:
+            job_number = job.job_number
+            if job.target_matter_id:
+                matter_result = await db.execute(
+                    select(Matter).where(Matter.id == job.target_matter_id)
+                )
+                matter = matter_result.scalar_one_or_none()
+                if matter:
+                    matter_name = matter.description
+                    matter_number = matter.display_number
+    elif matter_id:
         matter_result = await db.execute(
             select(Matter).where(Matter.id == matter_id)
         )
@@ -440,7 +496,11 @@ async def export_witnesses_excel(
         generated_by=generated_by
     )
 
-    filename = f"witnesses_{matter_number or 'all'}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    # Build filename with job number if available
+    if job_number:
+        filename = f"witnesses_job{job_number}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    else:
+        filename = f"witnesses_{matter_number or 'all'}_{datetime.now().strftime('%Y%m%d')}.xlsx"
 
     return StreamingResponse(
         iter([excel_bytes]),

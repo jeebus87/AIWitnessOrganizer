@@ -225,6 +225,7 @@ class Witness(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    job_id = Column(Integer, ForeignKey("processing_jobs.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Core witness info
     full_name = Column(String(255), nullable=False, index=True)
@@ -254,6 +255,7 @@ class Witness(Base):
 
     # Relationships
     document = relationship("Document", back_populates="witnesses")
+    job = relationship("ProcessingJob", back_populates="witnesses")
 
 
 class ProcessingJob(Base):
@@ -297,6 +299,7 @@ class ProcessingJob(Base):
     # Relationships
     user = relationship("User", back_populates="processing_jobs")
     target_matter = relationship("Matter")
+    witnesses = relationship("Witness", back_populates="job")
 
 
 class ReportCreditUsage(Base):

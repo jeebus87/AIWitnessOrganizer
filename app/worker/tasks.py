@@ -251,6 +251,7 @@ async def _process_single_document_async(
             for w_data in verified_witnesses:
                 witness = Witness(
                     document_id=document.id,
+                    job_id=job_id,  # Track which job created this witness
                     full_name=w_data.full_name,
                     role=_map_role(w_data.role),
                     importance=_map_importance(w_data.importance),

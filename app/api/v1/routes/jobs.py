@@ -441,6 +441,7 @@ async def export_job_pdf(
 ):
     """
     Export witnesses found in a job to PDF.
+    Only exports witnesses created by this specific job.
     """
     from fastapi.responses import RedirectResponse
 
@@ -455,14 +456,11 @@ async def export_job_pdf(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # Redirect to witnesses export with matter_id
-    if job.target_matter_id:
-        return RedirectResponse(
-            url=f"/api/v1/witnesses/export/pdf?matter_id={job.target_matter_id}",
-            status_code=307
-        )
-    else:
-        return RedirectResponse(url="/api/v1/witnesses/export/pdf", status_code=307)
+    # Redirect to witnesses export with job_id to get only witnesses from this job
+    return RedirectResponse(
+        url=f"/api/v1/witnesses/export/pdf?job_id={job_id}",
+        status_code=307
+    )
 
 
 @router.get("/{job_id}/export/excel")
@@ -473,6 +471,7 @@ async def export_job_excel(
 ):
     """
     Export witnesses found in a job to Excel.
+    Only exports witnesses created by this specific job.
     """
     from fastapi.responses import RedirectResponse
 
@@ -487,14 +486,11 @@ async def export_job_excel(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # Redirect to witnesses export with matter_id
-    if job.target_matter_id:
-        return RedirectResponse(
-            url=f"/api/v1/witnesses/export/excel?matter_id={job.target_matter_id}",
-            status_code=307
-        )
-    else:
-        return RedirectResponse(url="/api/v1/witnesses/export/excel", status_code=307)
+    # Redirect to witnesses export with job_id to get only witnesses from this job
+    return RedirectResponse(
+        url=f"/api/v1/witnesses/export/excel?job_id={job_id}",
+        status_code=307
+    )
 
 
 def _job_to_response(job: ProcessingJob) -> JobResponse:
