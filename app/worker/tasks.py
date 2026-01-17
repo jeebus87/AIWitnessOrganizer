@@ -555,37 +555,40 @@ async def _process_matter_async(
             logger.info(f"  legal_authority_folder_id: {legal_authority_folder_id}")
             logger.info(f"{'='*60}")
 
-            # Query documents from database based on folder selection
-            document_ids_to_process = []
-
+            # Query documents from database
+            # Note: Folder filtering requires clio_folder_id to be populated via sync
+            logger.info(f"Querying all documents in matter from database")
+            result = await session.execute(
+                select(Document).where(Document.matter_id == matter.id)
+            )
+            docs_in_scope = list(result.scalars().all())
+            
+            # Folder filtering (only works after documents have been synced with folder info)
             if scan_folder_id:
-                # Filter by specific folder
-                logger.info(f"Querying documents in folder {scan_folder_id} from database")
-                result = await session.execute(
-                    select(Document).where(
-                        Document.matter_id == matter.id,
-                        Document.clio_folder_id == str(scan_folder_id)
-                    )
-                )
-                docs_in_scope = list(result.scalars().all())
-
-                # For subfolders, we'd need folder hierarchy - TODO: implement if needed
-                if include_subfolders:
-                    logger.info(f"Note: Subfolder scanning uses pre-synced folder structure")
-            else:
-                # All documents in matter
-                logger.info(f"Querying all documents in matter from database")
-                result = await session.execute(
-                    select(Document).where(Document.matter_id == matter.id)
-                )
-                docs_in_scope = list(result.scalars().all())
-
-            # Exclude legal authority folder documents
+                logger.info(f"Folder filter requested: {scan_folder_id}")
+                # Filter by folder if clio_folder_id is populated
+                filtered = [d for d in docs_in_scope if hasattr(d, 'clio_folder_id') and d.clio_folder_id == str(scan_folder_id)]
+                if filtered:
+                    docs_in_scope = filtered
+                    logger.info(f"Filtered to {len(docs_in_scope)} documents in folder")
+                else:
+                    logger.info(f"No folder filtering applied (documents may need re-sync)")
+            
+            # Exclude legal authority folder documents if specified
             if legal_authority_folder_id:
-                docs_in_scope = [d for d in docs_in_scope if d.clio_folder_id != str(legal_authority_folder_id)]
+                original_count = len(docs_in_scope)
+                docs_in_scope = [d for d in docs_in_scope if not (hasattr(d, 'clio_folder_id') and d.clio_folder_id == str(legal_authority_folder_id))]
+                if len(docs_in_scope) < original_count:
+                    logger.info(f"Excluded {original_count - len(docs_in_scope)} legal authority documents")
 
-            document_ids_to_process = [d.id for d in docs_in_scope]
-            logger.info(f"Found {len(document_ids_to_process)} documents in database for processing")
+            # Filter out already processed documents (for job resume)
+            unprocessed_docs = [d for d in docs_in_scope if not d.is_processed]
+            document_ids_to_process = [d.id for d in unprocessed_docs]
+            
+            if len(docs_in_scope) > len(unprocessed_docs):
+                logger.info(f"RESUME MODE: Skipping {len(docs_in_scope) - len(unprocessed_docs)} already-processed documents")
+            
+            logger.info(f"Found {len(document_ids_to_process)} unprocessed documents in database for processing")
 
             # Process Legal Authority folder if specified (needs Clio access for RAG)
             legal_context = ""
@@ -642,24 +645,8 @@ async def _process_matter_async(
                 if legal_context:
                     logger.info(f"Retrieved legal context: {len(legal_context)} chars")
 
-            # Get only the documents that were found in the selected folder/scope
-            # This ensures we only process what the user selected, not all documents in the matter
-            # For job recovery: skip documents that are already processed
-            if document_ids_to_process:
-                result = await session.execute(
-                    select(Document).where(
-                        Document.id.in_(document_ids_to_process),
-                        Document.is_processed == False  # Skip already processed (for resume)
-                    )
-                )
-                documents = result.scalars().all()
-
-                # Check if this is a resumed job (some docs already processed)
-                already_processed = len(document_ids_to_process) - len(documents)
-                if already_processed > 0:
-                    logger.info(f"RESUME MODE: Skipping {already_processed} already-processed documents")
-            else:
-                documents = []
+            # Use the already-filtered unprocessed documents (no need for another query)
+            documents = unprocessed_docs
 
             logger.info(f"")
             logger.info(f"{'='*60}")
