@@ -52,6 +52,7 @@ async def create_job(
         )
 
     # Validate matter_id for single_matter jobs
+    initial_doc_count = 0
     if request.job_type == "single_matter":
         if not request.matter_id:
             raise HTTPException(
@@ -70,14 +71,38 @@ async def create_job(
         if not matter:
             raise HTTPException(status_code=404, detail="Matter not found")
 
-    # Create job record (job_number will be assigned after)
+        # Count existing documents for this matter to show initial progress
+        from sqlalchemy import func
+        from app.db.models import Document
+        doc_count_result = await db.execute(
+            select(func.count()).select_from(Document).where(Document.matter_id == request.matter_id)
+        )
+        initial_doc_count = doc_count_result.scalar() or 0
+
+    elif request.job_type == "full_database":
+        # Count all unprocessed documents for the user
+        from sqlalchemy import func
+        from app.db.models import Document
+        doc_count_result = await db.execute(
+            select(func.count())
+            .select_from(Document)
+            .join(Matter)
+            .where(
+                Matter.user_id == current_user.id,
+                Document.is_processed == False
+            )
+        )
+        initial_doc_count = doc_count_result.scalar() or 0
+
+    # Create job record with initial document count (job_number will be assigned after)
     job = ProcessingJob(
         user_id=current_user.id,
         job_type=request.job_type,
         target_matter_id=request.matter_id,
         search_witnesses=request.search_witnesses,
         include_archived=request.include_archived,
-        status=JobStatus.PENDING
+        status=JobStatus.PENDING,
+        total_documents=initial_doc_count  # Set initial count for progress bar
     )
     db.add(job)
     await db.flush()  # Flush to get the job ID without committing

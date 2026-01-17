@@ -307,12 +307,18 @@ async def process_matter(
         legal_authority_folder_id = request.legal_authority_folder_id
         include_subfolders = request.include_subfolders
 
-    # Create job record (job_number will be assigned after)
+    # Count existing documents for this matter to show initial progress in progress bar
+    initial_doc_count = await db.scalar(
+        select(func.count()).select_from(Document).where(Document.matter_id == matter_id)
+    ) or 0
+
+    # Create job record with initial document count (job_number will be assigned after)
     job = ProcessingJob(
         user_id=current_user.id,
         job_type="single_matter",
         target_matter_id=matter_id,
-        status=JobStatus.PENDING
+        status=JobStatus.PENDING,
+        total_documents=initial_doc_count  # Set initial count for progress bar
     )
     db.add(job)
     await db.flush()  # Flush to get the job ID without committing
