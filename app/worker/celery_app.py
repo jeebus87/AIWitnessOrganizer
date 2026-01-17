@@ -1,8 +1,11 @@
 """Celery application configuration"""
 from celery import Celery
+from celery.signals import worker_ready
+import logging
 
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
 
 # Create Celery app
 celery_app = Celery(
@@ -46,3 +49,18 @@ celery_app.conf.update(
     # Beat schedule (if needed for periodic tasks)
     beat_schedule={},
 )
+
+
+@worker_ready.connect
+def on_worker_ready(sender, **kwargs):
+    """
+    Called when the worker is ready to accept tasks.
+    Checks for stuck jobs and resumes them.
+    """
+    logger.info("Worker ready - checking for stuck jobs to resume...")
+
+    # Import here to avoid circular imports
+    from app.worker.tasks import recover_stuck_jobs
+
+    # Delay slightly to ensure worker is fully initialized
+    recover_stuck_jobs.apply_async(countdown=5)

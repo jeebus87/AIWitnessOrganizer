@@ -135,11 +135,11 @@ async def _process_single_document_async(
             if DEBUG_MODE:
                 logger.info(f"DEBUG: Skipping Bedrock processing - just marking document as processed")
 
-                # Update job progress
+                # Update job progress and activity timestamp
                 if job_id:
                     from sqlalchemy import text
                     await session.execute(
-                        text("UPDATE processing_jobs SET processed_documents = processed_documents + 1 WHERE id = :job_id"),
+                        text("UPDATE processing_jobs SET processed_documents = processed_documents + 1, last_activity_at = NOW() WHERE id = :job_id"),
                         {"job_id": job_id}
                     )
                     await session.commit()
@@ -282,11 +282,11 @@ async def _process_single_document_async(
 
             logger.info(f"Document {document_id} processed: {witnesses_created} witnesses found")
 
-            # Update job progress if job_id provided (for parallel processing)
+            # Update job progress and activity timestamp (for parallel processing)
             if job_id:
                 from sqlalchemy import text
                 await session.execute(
-                    text("UPDATE processing_jobs SET processed_documents = processed_documents + 1 WHERE id = :job_id"),
+                    text("UPDATE processing_jobs SET processed_documents = processed_documents + 1, last_activity_at = NOW() WHERE id = :job_id"),
                     {"job_id": job_id}
                 )
                 await session.commit()
@@ -311,11 +311,11 @@ async def _process_single_document_async(
             document.processing_error = error_details[:4000]  # Truncate to fit in column
             await session.commit()
 
-            # Update job progress even on failure (for parallel processing)
+            # Update job progress and activity timestamp even on failure (for parallel processing)
             if job_id:
                 from sqlalchemy import text
                 await session.execute(
-                    text("UPDATE processing_jobs SET processed_documents = processed_documents + 1 WHERE id = :job_id"),
+                    text("UPDATE processing_jobs SET processed_documents = processed_documents + 1, last_activity_at = NOW() WHERE id = :job_id"),
                     {"job_id": job_id}
                 )
                 await session.commit()
@@ -566,11 +566,20 @@ async def _process_matter_async(
 
             # Get only the documents that were found in the selected folder/scope
             # This ensures we only process what the user selected, not all documents in the matter
+            # For job recovery: skip documents that are already processed
             if document_ids_to_process:
                 result = await session.execute(
-                    select(Document).where(Document.id.in_(document_ids_to_process))
+                    select(Document).where(
+                        Document.id.in_(document_ids_to_process),
+                        Document.is_processed == False  # Skip already processed (for resume)
+                    )
                 )
                 documents = result.scalars().all()
+
+                # Check if this is a resumed job (some docs already processed)
+                already_processed = len(document_ids_to_process) - len(documents)
+                if already_processed > 0:
+                    logger.info(f"RESUME MODE: Skipping {already_processed} already-processed documents")
             else:
                 documents = []
 
@@ -908,3 +917,84 @@ def _map_importance(importance_str: str) -> ImportanceLevel:
         "low": ImportanceLevel.LOW,
     }
     return importance_map.get(importance_str.lower(), ImportanceLevel.LOW)
+
+
+@celery_app.task(bind=True)
+def recover_stuck_jobs(self):
+    """
+    Recover jobs that are stuck in 'processing' status with no recent activity.
+    Called on worker startup to resume interrupted jobs.
+    """
+    return run_async(_recover_stuck_jobs_async())
+
+
+async def _recover_stuck_jobs_async():
+    """Async implementation of stuck job recovery"""
+    from datetime import timedelta
+
+    async with get_worker_session() as session:
+        # Find jobs that are "processing" but have no activity for > 5 minutes
+        # These are likely jobs that were interrupted by a worker restart
+        stale_threshold = datetime.utcnow() - timedelta(minutes=5)
+
+        result = await session.execute(
+            select(ProcessingJob).where(
+                ProcessingJob.status == JobStatus.PROCESSING,
+                ProcessingJob.is_resumable == True,
+                # Either no activity timestamp or activity is stale
+                (
+                    (ProcessingJob.last_activity_at == None) |
+                    (ProcessingJob.last_activity_at < stale_threshold)
+                )
+            )
+        )
+        stuck_jobs = result.scalars().all()
+
+        if not stuck_jobs:
+            logger.info("No stuck jobs found to recover")
+            return {"recovered": 0}
+
+        logger.info(f"Found {len(stuck_jobs)} stuck job(s) to recover")
+
+        recovered_count = 0
+        for job in stuck_jobs:
+            try:
+                logger.info(f"Recovering job {job.id} (type: {job.job_type}, matter: {job.target_matter_id})")
+
+                # Update activity timestamp to prevent other workers from also recovering
+                job.last_activity_at = datetime.utcnow()
+                await session.commit()
+
+                # Resume the job based on type
+                if job.job_type == "single_matter" and job.target_matter_id:
+                    # Resume matter processing - will skip already processed documents
+                    process_matter.delay(
+                        job_id=job.id,
+                        matter_id=job.target_matter_id,
+                        search_targets=job.search_witnesses
+                    )
+                    logger.info(f"Resumed single_matter job {job.id} for matter {job.target_matter_id}")
+                    recovered_count += 1
+
+                elif job.job_type == "full_database":
+                    # Resume full database scan
+                    process_full_database.delay(
+                        job_id=job.id,
+                        user_id=job.user_id,
+                        search_targets=job.search_witnesses,
+                        include_archived=job.include_archived
+                    )
+                    logger.info(f"Resumed full_database job {job.id} for user {job.user_id}")
+                    recovered_count += 1
+
+                else:
+                    logger.warning(f"Unknown job type {job.job_type} for job {job.id}, marking as failed")
+                    job.status = JobStatus.FAILED
+                    job.error_message = "Could not recover: unknown job type"
+                    await session.commit()
+
+            except Exception as e:
+                logger.exception(f"Failed to recover job {job.id}: {e}")
+                # Don't mark as failed - let it be retried on next worker restart
+
+        return {"recovered": recovered_count, "total_stuck": len(stuck_jobs)}

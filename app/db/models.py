@@ -292,6 +292,10 @@ class ProcessingJob(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
+    # Job recovery tracking
+    last_activity_at = Column(DateTime, nullable=True)  # Updated on each document processed
+    is_resumable = Column(Boolean, default=True, nullable=False)  # Can this job be resumed if interrupted?
+
     # Archive status
     is_archived = Column(Boolean, default=False, nullable=False)
     archived_at = Column(DateTime, nullable=True)
