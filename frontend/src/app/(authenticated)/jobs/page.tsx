@@ -367,18 +367,28 @@ export default function JobsPage() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-2">
-                          <div className="h-2 w-24 rounded-full bg-muted overflow-hidden">
-                            <div
-                              className="h-full bg-primary transition-all"
-                              style={{ width: `${progress}%` }}
-                            />
+                        {/* Show "Counting..." when job is pending/processing but total not yet set by worker */}
+                        {(job.status === "pending" || job.status === "processing") && job.total_documents === 0 ? (
+                          <div className="flex items-center gap-2">
+                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                            <span className="text-sm text-muted-foreground">
+                              Counting documents...
+                            </span>
                           </div>
-                          <span className="text-sm text-muted-foreground">
-                            {job.processed_documents}/{job.total_documents}
-                            {job.total_documents > 0 && ` (${progress}%)`}
-                          </span>
-                        </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <div className="h-2 w-24 rounded-full bg-muted overflow-hidden">
+                              <div
+                                className="h-full bg-primary transition-all"
+                                style={{ width: `${progress}%` }}
+                              />
+                            </div>
+                            <span className="text-sm text-muted-foreground">
+                              {job.processed_documents}/{job.total_documents}
+                              {job.total_documents > 0 && ` (${progress}%)`}
+                            </span>
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Badge variant="secondary">
