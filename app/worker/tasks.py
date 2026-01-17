@@ -40,7 +40,8 @@ def process_single_document(
     self,
     document_id: int,
     search_targets: Optional[List[str]] = None,
-    legal_context: Optional[str] = None
+    legal_context: Optional[str] = None,
+    job_id: Optional[int] = None
 ):
     """
     Process a single document for witness extraction.
@@ -49,9 +50,10 @@ def process_single_document(
         document_id: Database ID of the document
         search_targets: Optional list of specific names to search for
         legal_context: Optional legal standards context from RAG
+        job_id: Optional job ID for progress tracking
     """
     return run_async(_process_single_document_async(
-        self, document_id, search_targets, legal_context
+        self, document_id, search_targets, legal_context, job_id
     ))
 
 
@@ -59,7 +61,8 @@ async def _process_single_document_async(
     task,
     document_id: int,
     search_targets: Optional[List[str]] = None,
-    legal_context: Optional[str] = None
+    legal_context: Optional[str] = None,
+    job_id: Optional[int] = None
 ):
     """Async implementation of document processing"""
     async with get_worker_session() as session:
@@ -237,6 +240,15 @@ async def _process_single_document_async(
 
             logger.info(f"Document {document_id} processed: {witnesses_created} witnesses found")
 
+            # Update job progress if job_id provided (for parallel processing)
+            if job_id:
+                from sqlalchemy import text
+                await session.execute(
+                    text("UPDATE processing_jobs SET processed_documents = processed_documents + 1 WHERE id = :job_id"),
+                    {"job_id": job_id}
+                )
+                await session.commit()
+
             # Clean up memory after successful processing
             del content
             del extraction_result
@@ -255,6 +267,15 @@ async def _process_single_document_async(
             logger.exception(f"Error processing document {document_id}: {error_details}")
             document.processing_error = error_details[:4000]  # Truncate to fit in column
             await session.commit()
+
+            # Update job progress even on failure (for parallel processing)
+            if job_id:
+                from sqlalchemy import text
+                await session.execute(
+                    text("UPDATE processing_jobs SET processed_documents = processed_documents + 1 WHERE id = :job_id"),
+                    {"job_id": job_id}
+                )
+                await session.commit()
 
             # Clean up memory even on error
             gc.collect()
@@ -472,7 +493,8 @@ async def _process_matter_async(
                 process_single_document.s(
                     document_id=doc.id,
                     search_targets=search_targets,
-                    legal_context=legal_context
+                    legal_context=legal_context,
+                    job_id=job_id
                 )
                 for doc in documents
             )
@@ -648,7 +670,8 @@ async def _process_full_database_async(
             processing_tasks = group(
                 process_single_document.s(
                     document_id=doc.id,
-                    search_targets=search_targets
+                    search_targets=search_targets,
+                    job_id=job_id
                 )
                 for doc in documents
             )
