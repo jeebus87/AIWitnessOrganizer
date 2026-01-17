@@ -1,6 +1,8 @@
 """AWS Bedrock client for Claude 4.5 Sonnet vision-based witness extraction"""
 import json
 import base64
+import time
+import threading
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
@@ -10,6 +12,77 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 from app.core.config import settings
 from app.services.document_processor import ProcessedAsset
+
+
+class TokenBucketRateLimiter:
+    """
+    Thread-safe token bucket rate limiter for API calls.
+
+    Allows bursting up to `capacity` requests, then refills at `rate` per second.
+    This helps smooth out API calls and prevent throttling.
+    """
+
+    def __init__(self, rate: float = 5.0, capacity: float = 10.0):
+        """
+        Initialize the rate limiter.
+
+        Args:
+            rate: Tokens added per second (sustained rate)
+            capacity: Maximum tokens (burst capacity)
+        """
+        self.rate = rate
+        self.capacity = capacity
+        self.tokens = capacity
+        self.last_time = time.monotonic()
+        self.lock = threading.Lock()
+
+    def acquire(self, tokens: float = 1.0, block: bool = True, timeout: Optional[float] = None) -> bool:
+        """
+        Acquire tokens from the bucket.
+
+        Args:
+            tokens: Number of tokens to acquire
+            block: If True, wait for tokens to be available
+            timeout: Maximum time to wait (None = wait forever)
+
+        Returns:
+            True if tokens were acquired, False if timeout/non-blocking failed
+        """
+        start_time = time.monotonic()
+
+        while True:
+            with self.lock:
+                # Refill tokens based on time elapsed
+                now = time.monotonic()
+                elapsed = now - self.last_time
+                self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+                self.last_time = now
+
+                if self.tokens >= tokens:
+                    self.tokens -= tokens
+                    return True
+
+                if not block:
+                    return False
+
+                # Calculate wait time
+                tokens_needed = tokens - self.tokens
+                wait_time = tokens_needed / self.rate
+
+            # Check timeout
+            if timeout is not None:
+                elapsed_total = time.monotonic() - start_time
+                if elapsed_total + wait_time > timeout:
+                    return False
+                wait_time = min(wait_time, timeout - elapsed_total)
+
+            # Wait and retry
+            time.sleep(min(wait_time, 1.0))  # Check at least every second
+
+
+# Global rate limiter shared across all BedrockClient instances
+# Allows 5 requests/second sustained, with burst up to 10
+_bedrock_rate_limiter = TokenBucketRateLimiter(rate=5.0, capacity=10.0)
 
 
 @dataclass
@@ -244,11 +317,20 @@ Respond with valid JSON only."""
 
     @retry(
         retry=retry_if_exception_type(BedrockThrottlingError),
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=2, min=4, max=120)
+        stop=stop_after_attempt(8),  # More attempts for better resilience
+        wait=wait_exponential(multiplier=3, min=10, max=300)  # Longer delays: 10s min, 5min max
     )
     def _invoke_model(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Invoke the Bedrock model with retry logic"""
+        """Invoke the Bedrock model with rate limiting and retry logic"""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Acquire rate limiter token before making request
+        # This smooths out bursts and prevents overwhelming the API
+        logger.debug("Acquiring rate limiter token...")
+        _bedrock_rate_limiter.acquire(tokens=1.0, timeout=60.0)
+        logger.debug("Rate limiter token acquired, making Bedrock request")
+
         body = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": 8192,
@@ -268,6 +350,7 @@ Respond with valid JSON only."""
             return response_body
 
         except self.client.exceptions.ThrottlingException as e:
+            logger.warning(f"Bedrock throttling detected, will retry with backoff: {e}")
             raise BedrockThrottlingError(str(e))
 
     def _parse_response(self, response: Dict[str, Any]) -> ExtractionResult:
