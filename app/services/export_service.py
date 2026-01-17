@@ -648,3 +648,207 @@ class ExportService:
         elements.append(table)
 
         return elements
+
+    def _create_relevancy_section(self, relevancy_data: Dict[str, Any]) -> List:
+        """
+        Create the relevancy analysis section showing allegations, defenses,
+        and which witnesses relate to each claim.
+        """
+        elements = []
+
+        allegations = relevancy_data.get("allegations", [])
+        defenses = relevancy_data.get("defenses", [])
+        witness_summary = relevancy_data.get("witness_summary", [])
+
+        if not allegations and not defenses:
+            return elements
+
+        # Section header
+        elements.append(PageBreak())
+        elements.append(Paragraph(
+            "Relevancy Analysis",
+            self.styles["Heading1"]
+        ))
+        elements.append(Spacer(1, 0.25 * inch))
+        elements.append(Paragraph(
+            "This section shows the relationship between identified witnesses and the case allegations/defenses.",
+            self.styles["Normal"]
+        ))
+        elements.append(Spacer(1, 0.25 * inch))
+
+        # Allegations section
+        if allegations:
+            elements.append(Paragraph("Case Allegations", self.styles["Heading2"]))
+            elements.append(Spacer(1, 0.1 * inch))
+
+            allegations_data = [["#", "Allegation", "Linked Witnesses"]]
+            for alleg in allegations:
+                linked = alleg.get("linked_witnesses", [])
+                if linked:
+                    witness_text = "\n".join([
+                        f"• {w.get('witness_name', 'Unknown')} ({w.get('relationship', 'neutral')})"
+                        for w in linked
+                    ])
+                else:
+                    witness_text = "No linked witnesses"
+
+                allegations_data.append([
+                    str(alleg.get("number", "")),
+                    Paragraph(alleg.get("text", ""), self.styles["Observation"]),
+                    Paragraph(witness_text, self.styles["Observation"])
+                ])
+
+            alleg_table = Table(
+                allegations_data,
+                colWidths=[0.5 * inch, 5 * inch, 4 * inch],
+                repeatRows=1
+            )
+            alleg_table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#8B0000")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]))
+            elements.append(alleg_table)
+            elements.append(Spacer(1, 0.25 * inch))
+
+        # Defenses section
+        if defenses:
+            elements.append(Paragraph("Case Defenses", self.styles["Heading2"]))
+            elements.append(Spacer(1, 0.1 * inch))
+
+            defenses_data = [["#", "Defense", "Linked Witnesses"]]
+            for defense in defenses:
+                linked = defense.get("linked_witnesses", [])
+                if linked:
+                    witness_text = "\n".join([
+                        f"• {w.get('witness_name', 'Unknown')} ({w.get('relationship', 'neutral')})"
+                        for w in linked
+                    ])
+                else:
+                    witness_text = "No linked witnesses"
+
+                defenses_data.append([
+                    str(defense.get("number", "")),
+                    Paragraph(defense.get("text", ""), self.styles["Observation"]),
+                    Paragraph(witness_text, self.styles["Observation"])
+                ])
+
+            def_table = Table(
+                defenses_data,
+                colWidths=[0.5 * inch, 5 * inch, 4 * inch],
+                repeatRows=1
+            )
+            def_table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#006400")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]))
+            elements.append(def_table)
+            elements.append(Spacer(1, 0.25 * inch))
+
+        # Witness-Claim Breakdown
+        if witness_summary:
+            elements.append(Paragraph("Witness Relevancy Breakdown", self.styles["Heading2"]))
+            elements.append(Spacer(1, 0.1 * inch))
+
+            breakdown_data = [["Witness", "Relevant To"]]
+            for witness in witness_summary:
+                claim_links = witness.get("claim_links", [])
+                if claim_links:
+                    links_text = "\n".join([
+                        f"• {link.get('claim_type', '').title()} #{link.get('claim_number', '')} "
+                        f"({link.get('relationship', 'neutral')}): {link.get('explanation', '')[:80]}"
+                        for link in claim_links
+                    ])
+                else:
+                    links_text = "No specific claim links"
+
+                breakdown_data.append([
+                    Paragraph(witness.get("name", "Unknown"), self.styles["WitnessName"]),
+                    Paragraph(links_text, self.styles["Observation"])
+                ])
+
+            breakdown_table = Table(
+                breakdown_data,
+                colWidths=[2.5 * inch, 7 * inch],
+                repeatRows=1
+            )
+            breakdown_table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A5F")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]))
+            elements.append(breakdown_table)
+
+        return elements
+
+    def generate_pdf_with_relevancy(
+        self,
+        witnesses: List[Dict[str, Any]],
+        relevancy_data: Optional[Dict[str, Any]] = None,
+        matter_name: Optional[str] = None,
+        matter_number: Optional[str] = None,
+        firm_name: Optional[str] = None,
+        generated_by: Optional[str] = None,
+        include_cover: bool = True
+    ) -> bytes:
+        """
+        Generate a PDF report with witness data and relevancy analysis.
+
+        Args:
+            witnesses: List of witness dictionaries
+            relevancy_data: Optional dictionary with allegations, defenses, and witness links
+            matter_name: Name of the matter
+            matter_number: Matter number
+            firm_name: Name of the law firm
+            generated_by: User who generated the report
+            include_cover: Whether to include cover page
+
+        Returns:
+            PDF file as bytes
+        """
+        output = io.BytesIO()
+
+        doc = SimpleDocTemplate(
+            output,
+            pagesize=landscape(LETTER),
+            rightMargin=0.5 * inch,
+            leftMargin=0.5 * inch,
+            topMargin=0.5 * inch,
+            bottomMargin=0.5 * inch
+        )
+
+        elements = []
+
+        # Cover page
+        if include_cover:
+            elements.extend(self._create_cover_page(
+                matter_name, matter_number, firm_name, generated_by
+            ))
+            elements.append(PageBreak())
+
+        # Witness table
+        elements.extend(self._create_witness_table(witnesses))
+
+        # Relevancy analysis section (if data provided)
+        if relevancy_data:
+            elements.extend(self._create_relevancy_section(relevancy_data))
+
+        doc.build(elements)
+        output.seek(0)
+        return output.getvalue()

@@ -209,6 +209,7 @@ class Document(Base):
     file_size = Column(BigInteger, nullable=True)  # in bytes (BigInteger for files >2GB)
     etag = Column(String(255), nullable=True)  # For caching
     clio_folder_id = Column(String(128), nullable=True, index=True)  # Folder in Clio
+    content_hash = Column(String(64), nullable=True, index=True)  # SHA-256 hash for content caching
 
     # Soft delete for sync (document removed from Clio)
     is_soft_deleted = Column(Boolean, default=False, nullable=False, index=True)
@@ -231,6 +232,39 @@ class Document(Base):
     witnesses = relationship("Witness", back_populates="document")
 
 
+class CanonicalWitness(Base):
+    """Deduplicated witness per matter - consolidates same witness across multiple documents"""
+    __tablename__ = "canonical_witnesses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    matter_id = Column(Integer, ForeignKey("matters.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Core witness info (best values from all matching witnesses)
+    full_name = Column(String(255), nullable=False, index=True)
+    role = Column(Enum(WitnessRole), nullable=False)
+    relevance = Column(Enum(RelevanceLevel), nullable=True, default=RelevanceLevel.RELEVANT)
+    relevance_reason = Column(Text, nullable=True)
+
+    # Merged observations from all documents: [{doc_id, page, text, filename}, ...]
+    merged_observations = Column(JSON, nullable=True)
+
+    # Best contact info from all sources
+    email = Column(String(255), nullable=True)
+    phone = Column(String(100), nullable=True)
+    address = Column(Text, nullable=True)
+
+    # Statistics
+    source_document_count = Column(Integer, default=1, nullable=False)
+    max_confidence_score = Column(Float, nullable=True)  # Highest confidence from any source
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    matter = relationship("Matter")
+    source_witnesses = relationship("Witness", back_populates="canonical_witness")
+
+
 class Witness(Base):
     """Extracted witness information"""
     __tablename__ = "witnesses"
@@ -238,6 +272,7 @@ class Witness(Base):
     id = Column(Integer, primary_key=True, index=True)
     document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
     job_id = Column(Integer, ForeignKey("processing_jobs.id", ondelete="SET NULL"), nullable=True, index=True)
+    canonical_witness_id = Column(Integer, ForeignKey("canonical_witnesses.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Core witness info
     full_name = Column(String(255), nullable=False, index=True)
@@ -268,6 +303,7 @@ class Witness(Base):
     # Relationships
     document = relationship("Document", back_populates="witnesses")
     job = relationship("ProcessingJob", back_populates="witnesses")
+    canonical_witness = relationship("CanonicalWitness", back_populates="source_witnesses")
 
 
 class ProcessingJob(Base):
@@ -403,3 +439,72 @@ class LegalAuthorityChunk(Base):
 
     # Relationships
     legal_authority = relationship("LegalAuthority", back_populates="chunks")
+
+
+class ClaimType(str, PyEnum):
+    """Type of legal claim"""
+    ALLEGATION = "allegation"  # Claim from plaintiff
+    DEFENSE = "defense"        # Defense from defendant
+
+
+class CaseClaim(Base):
+    """
+    Central repository for allegations and defenses extracted from case documents.
+    These are extracted from pleadings (complaint/answer) and discovery documents.
+    """
+    __tablename__ = "case_claims"
+
+    id = Column(Integer, primary_key=True, index=True)
+    matter_id = Column(Integer, ForeignKey("matters.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    claim_type = Column(Enum(ClaimType), nullable=False)  # allegation or defense
+    claim_number = Column(Integer, nullable=False)  # Sequential: Allegation #1, #2, etc.
+    claim_text = Column(Text, nullable=False)  # The actual allegation/defense text
+
+    # Source tracking
+    source_document_id = Column(Integer, ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
+    source_page = Column(Integer, nullable=True)
+    extraction_method = Column(String(20), nullable=False, default="discovery")  # "pleading", "discovery", "manual"
+
+    confidence_score = Column(Float, nullable=True)
+    is_verified = Column(Boolean, default=False, nullable=False)  # User confirmed
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    matter = relationship("Matter")
+    source_document = relationship("Document")
+    witness_links = relationship("WitnessClaimLink", back_populates="case_claim", cascade="all, delete-orphan")
+
+    # Composite unique constraint: one claim number per type per matter
+    __table_args__ = (
+        Index("ix_case_claims_matter_type_number", "matter_id", "claim_type", "claim_number", unique=True),
+    )
+
+
+class WitnessClaimLink(Base):
+    """
+    Many-to-many relationship linking witnesses to specific allegations/defenses.
+    Tracks why each witness is relevant to each claim.
+    """
+    __tablename__ = "witness_claim_links"
+
+    id = Column(Integer, primary_key=True, index=True)
+    witness_id = Column(Integer, ForeignKey("witnesses.id", ondelete="CASCADE"), nullable=False, index=True)
+    case_claim_id = Column(Integer, ForeignKey("case_claims.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # How this witness relates to this claim
+    relevance_explanation = Column(Text, nullable=True)  # Why this witness relates to this claim
+    supports_or_undermines = Column(String(20), nullable=False, default="neutral")  # "supports", "undermines", "neutral"
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    # Relationships
+    witness = relationship("Witness")
+    case_claim = relationship("CaseClaim", back_populates="witness_links")
+
+    # Composite unique constraint: one link per witness per claim
+    __table_args__ = (
+        Index("ix_witness_claim_links_unique", "witness_id", "case_claim_id", unique=True),
+    )

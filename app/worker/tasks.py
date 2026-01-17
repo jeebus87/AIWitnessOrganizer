@@ -318,12 +318,39 @@ async def _process_single_document_async(
 
                 content = await clio.download_document(int(document.clio_document_id))
 
+            # === CONTENT HASH CACHING ===
+            # Calculate file hash upfront for caching
+            processor = DocumentProcessor()
+            file_hash = processor.get_file_hash(content)
+
+            # Check if document is unchanged and already processed (skip re-processing)
+            if document.content_hash == file_hash and document.is_processed:
+                logger.info(f"Document {document_id} unchanged (hash match), skipping re-processing")
+
+                # Still update job progress
+                if job_id:
+                    from sqlalchemy import text
+                    await session.execute(
+                        text("UPDATE processing_jobs SET processed_documents = processed_documents + 1, last_activity_at = NOW() WHERE id = :job_id"),
+                        {"job_id": job_id}
+                    )
+                    await session.commit()
+
+                return {
+                    "success": True,
+                    "document_id": document_id,
+                    "witnesses_found": 0,
+                    "tokens_used": 0,
+                    "cached": True,
+                    "message": "Document unchanged, skipped re-processing"
+                }
+
             # === DEBUG MODE: Skip Bedrock processing ===
             DEBUG_MODE = False  # Set to True to skip AI processing for debugging
 
             logger.info(f"")
             logger.info(f"{'='*60}")
-            logger.info(f"=== PROCESSING DOCUMENT - DEBUG MODE ===")
+            logger.info(f"=== PROCESSING DOCUMENT ===")
             logger.info(f"{'='*60}")
             logger.info(f"  Document ID (db): {document_id}")
             logger.info(f"  Clio Document ID: {document.clio_document_id}")
@@ -331,6 +358,8 @@ async def _process_single_document_async(
             logger.info(f"  File type: {document.file_type}")
             logger.info(f"  File size (from Clio): {document.file_size}")
             logger.info(f"  Downloaded content size: {len(content)} bytes")
+            logger.info(f"  Content hash: {file_hash}")
+            logger.info(f"  Previous hash: {document.content_hash}")
             logger.info(f"  Matter ID: {document.matter_id}")
             logger.info(f"  Job ID: {job_id}")
             logger.info(f"  DEBUG_MODE: {DEBUG_MODE}")
@@ -359,12 +388,8 @@ async def _process_single_document_async(
 
             # === END DEBUG MODE ===
 
-            # Process document
-            processor = DocumentProcessor()
+            # Initialize AI client (processor already created above for hash)
             bedrock = BedrockClient()
-
-            # Calculate file hash upfront for caching (needed for both paths)
-            file_hash = processor.get_file_hash(content)
 
             # Check if this is a large PDF that needs chunked processing
             # Large = > 20MB, which typically means 100+ pages
@@ -471,9 +496,10 @@ async def _process_single_document_async(
                 session.add(witness)
                 witnesses_created += 1
 
-            # Update document status
+            # Update document status and save content hash for caching
             document.is_processed = True
             document.processed_at = datetime.utcnow()
+            document.content_hash = file_hash  # Save hash for future cache checks
             tokens_used = extraction_result.input_tokens + extraction_result.output_tokens
             document.analysis_cache = {
                 "witnesses_count": witnesses_created,

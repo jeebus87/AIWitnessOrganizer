@@ -206,6 +206,76 @@ If no witnesses are found, return: {"witnesses": []}
 Do not include any text before or after the JSON object."""
 
 
+# System prompt for extracting claims from pleadings
+PLEADING_EXTRACTION_SYSTEM_PROMPT = """You are an expert legal AI assistant specializing in analyzing legal pleadings (complaints, petitions, answers, and other court filings).
+
+Your task is to extract the core ALLEGATIONS (claims by plaintiff) and DEFENSES (responses by defendant) from legal documents.
+
+IMPORTANT GUIDELINES:
+1. Extract each distinct factual allegation or legal claim as a separate numbered item
+2. For complaints/petitions: Extract ALLEGATIONS - the specific factual claims and causes of action
+3. For answers/responses: Extract DEFENSES - both denials and affirmative defenses
+4. Be concise but capture the essential substance of each claim
+5. Include the page number where each claim appears if visible
+6. Assign a confidence score (0.0-1.0) based on how clearly the claim is stated
+
+EXAMPLES OF GOOD EXTRACTIONS:
+
+Allegations (from complaint):
+1. "Plaintiff was subjected to hostile work environment from January through December 2023"
+2. "Defendant terminated Plaintiff in retaliation for reporting harassment"
+3. "Defendant failed to reasonably accommodate Plaintiff's documented disability"
+
+Defenses (from answer):
+1. "Defendant denies creating a hostile work environment; workplace conduct was consensual"
+2. "Termination was based on documented performance issues unrelated to any protected activity"
+3. "Plaintiff never requested accommodation and Defendant had no knowledge of any disability"
+
+CRITICAL: Respond ONLY with valid JSON matching this exact schema:
+{
+  "allegations": [
+    {
+      "number": 1,
+      "text": "string describing the allegation",
+      "page": number_or_null,
+      "confidence": 0.0_to_1.0
+    }
+  ],
+  "defenses": [
+    {
+      "number": 1,
+      "text": "string describing the defense",
+      "page": number_or_null,
+      "confidence": 0.0_to_1.0
+    }
+  ]
+}
+
+If no allegations or defenses are found, return empty arrays: {"allegations": [], "defenses": []}
+Do not include any text before or after the JSON object."""
+
+
+# Prompt for witness extraction WITH existing claims context
+WITNESS_WITH_CLAIMS_CONTEXT = """CASE CONTEXT - Known Allegations and Defenses:
+
+{claims_context}
+
+For each witness found, ALSO analyze their relevance to the specific allegations and defenses listed above.
+
+In addition to the standard witness fields, include a "claimLinks" array for each witness showing which claims they relate to:
+
+"claimLinks": [
+  {{
+    "claimNumber": 1,
+    "claimType": "allegation" or "defense",
+    "relationship": "supports" or "undermines" or "neutral",
+    "explanation": "Brief explanation of how witness relates to this claim"
+  }}
+]
+
+Only include claim links where the witness has actual relevance to the claim."""
+
+
 class BedrockThrottlingError(Exception):
     """Raised when AWS Bedrock throttles requests (rate limit)"""
     pass
@@ -780,3 +850,147 @@ CRITICAL: Respond ONLY with valid JSON:
         except Exception as e:
             logger.error(f"Verification error: {e}, returning original witnesses")
             return witnesses
+
+    async def extract_claims(
+        self,
+        assets: List[ProcessedAsset],
+        document_type: str = "unknown"
+    ) -> Dict[str, Any]:
+        """
+        Extract allegations and defenses from a legal pleading document.
+
+        Args:
+            assets: List of ProcessedAsset from document processing
+            document_type: Hint about document type ("complaint", "answer", "unknown")
+
+        Returns:
+            Dictionary with 'allegations' and 'defenses' lists, plus token usage
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        logger.info(f"Extracting claims from {document_type} document ({len(assets)} assets)")
+
+        # Build content array
+        content = []
+
+        # Add document type hint
+        if document_type != "unknown":
+            content.append({
+                "type": "text",
+                "text": f"This document appears to be a {document_type}. Please extract the relevant claims."
+            })
+
+        # Add assets (images or text)
+        for asset in assets:
+            if asset.asset_type == "image":
+                img_data = base64.b64encode(asset.content).decode("utf-8")
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": asset.media_type,
+                        "data": img_data
+                    }
+                })
+            else:
+                # Text content
+                try:
+                    text = asset.content.decode("utf-8")
+                except:
+                    text = str(asset.content)
+
+                content.append({
+                    "type": "text",
+                    "text": f"[Page {asset.page_number or 'unknown'}]\n{text}"
+                })
+
+        # Add extraction instruction
+        content.append({
+            "type": "text",
+            "text": "Please analyze this legal document and extract all allegations and defenses as instructed."
+        })
+
+        messages = [{
+            "role": "user",
+            "content": content
+        }]
+
+        try:
+            # Use rate limiter
+            _bedrock_rate_limiter.acquire()
+
+            # Get current model from fallback chain
+            model_id, model_name = self._get_current_model()
+            logger.info(f"Using model {model_name} for claims extraction")
+
+            # Build request body
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 4096,
+                "temperature": 0.1,
+                "system": PLEADING_EXTRACTION_SYSTEM_PROMPT,
+                "messages": messages
+            }
+
+            response = self.client.invoke_model(
+                modelId=model_id,
+                body=json.dumps(body)
+            )
+
+            response_body = json.loads(response["body"].read())
+            response_text = response_body.get("content", [{}])[0].get("text", "{}")
+
+            # Parse usage
+            usage = response_body.get("usage", {})
+            input_tokens = usage.get("input_tokens", 0)
+            output_tokens = usage.get("output_tokens", 0)
+
+            # Parse JSON response
+            try:
+                # Clean up response text
+                response_text = response_text.strip()
+                if response_text.startswith("```json"):
+                    response_text = response_text[7:]
+                if response_text.startswith("```"):
+                    response_text = response_text[3:]
+                if response_text.endswith("```"):
+                    response_text = response_text[:-3]
+
+                data = json.loads(response_text.strip())
+
+                allegations = data.get("allegations", [])
+                defenses = data.get("defenses", [])
+
+                logger.info(f"Extracted {len(allegations)} allegations and {len(defenses)} defenses")
+
+                return {
+                    "success": True,
+                    "allegations": allegations,
+                    "defenses": defenses,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens
+                }
+
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse claims response: {e}")
+                return {
+                    "success": False,
+                    "error": f"Failed to parse response: {e}",
+                    "allegations": [],
+                    "defenses": [],
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "raw_response": response_text[:500]
+                }
+
+        except Exception as e:
+            logger.error(f"Claims extraction error: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "allegations": [],
+                "defenses": [],
+                "input_tokens": 0,
+                "output_tokens": 0
+            }
