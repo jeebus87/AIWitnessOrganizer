@@ -204,6 +204,7 @@ class SubscriptionService:
                 await self.db.commit()
 
             # Create checkout session with quantity (per-seat billing)
+            # Include 14-day free trial for new subscriptions
             session = stripe.checkout.Session.create(
                 customer=org.stripe_customer_id,
                 payment_method_types=["card"],
@@ -218,6 +219,7 @@ class SubscriptionService:
                 cancel_url=cancel_url,
                 allow_promotion_codes=True,
                 subscription_data={
+                    "trial_period_days": 14,  # 14-day free trial
                     "metadata": {
                         "organization_id": str(org.id),
                         "user_count": str(user_count)
@@ -405,15 +407,20 @@ class SubscriptionService:
                 sub = stripe.Subscription.retrieve(subscription_id)
                 user_count = int(metadata.get("user_count", 1))
 
+                # Detect if subscription is in trial period
+                is_trial = sub.status == "trialing"
+                status = "trialing" if is_trial else "active"
+                period_end = sub.trial_end if is_trial else sub.current_period_end
+
                 await self.db.execute(
                     update(Organization)
                     .where(Organization.id == int(org_id))
                     .values(
                         stripe_subscription_id=subscription_id,
-                        subscription_status="active",
+                        subscription_status=status,
                         subscription_tier="firm",
                         user_count=user_count,
-                        current_period_end=datetime.fromtimestamp(sub.current_period_end)
+                        current_period_end=datetime.fromtimestamp(period_end) if period_end else None
                     )
                 )
                 await self.db.commit()
@@ -421,7 +428,9 @@ class SubscriptionService:
                 logger.info(
                     "Subscription activated",
                     org_id=org_id,
-                    user_count=user_count
+                    user_count=user_count,
+                    status=status,
+                    is_trial=is_trial
                 )
 
         elif mode == "payment" and metadata.get("type") == "topup":

@@ -56,9 +56,10 @@ class CreditService:
             )
             org = org_result.scalar_one_or_none()
 
-        is_paid = org and org.subscription_status == "active"
+        # Active or trialing subscriptions get unlimited credits
+        is_paid = org and org.subscription_status in ("active", "trialing")
 
-        # Paid users have unlimited credits
+        # Paid/trialing users have unlimited credits
         if is_paid:
             return {
                 "daily_remaining": self.FREE_DAILY_CREDITS,  # Still track for analytics
