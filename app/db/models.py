@@ -197,7 +197,7 @@ class Document(Base):
     parent_document_id = Column(Integer, ForeignKey("documents.id"), nullable=True)  # For nested attachments
 
     filename = Column(String(512), nullable=False)
-    file_type = Column(String(50), nullable=True)  # pdf, msg, eml, jpg, png, etc.
+    file_type = Column(String(128), nullable=True)  # MIME type subtype (pdf, vnd.openxmlformats-officedocument.spreadsheetml.sheet, etc.)
     file_size = Column(Integer, nullable=True)  # in bytes
     etag = Column(String(255), nullable=True)  # For caching
 

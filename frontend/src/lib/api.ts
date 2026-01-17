@@ -240,6 +240,7 @@ export type JobStatus = "pending" | "processing" | "completed" | "failed" | "can
 
 export interface ProcessingJob {
   id: number;
+  job_number: number | null;  // Sequential job number per organization
   user_id: number;
   celery_task_id: string;
   job_type: string;

@@ -343,6 +343,7 @@ def _job_to_response(job: ProcessingJob) -> JobResponse:
 
     return JobResponse(
         id=job.id,
+        job_number=job.job_number,
         job_type=job.job_type,
         status=job.status.value,
         matter_name=matter_name,

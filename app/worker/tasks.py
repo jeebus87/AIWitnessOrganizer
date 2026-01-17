@@ -10,9 +10,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.worker.celery_app import celery_app
+from app.worker.db import get_worker_session
 from app.core.config import settings
 from app.core.security import decrypt_token
-from app.db.session import AsyncSessionLocal
 from app.db.models import (
     User, ClioIntegration, Matter, Document, Witness,
     ProcessingJob, JobStatus, WitnessRole, ImportanceLevel, RelevanceLevel
@@ -62,7 +62,7 @@ async def _process_single_document_async(
     legal_context: Optional[str] = None
 ):
     """Async implementation of document processing"""
-    async with AsyncSessionLocal() as session:
+    async with get_worker_session() as session:
         # Get document with related data
         result = await session.execute(
             select(Document)
@@ -300,7 +300,7 @@ async def _process_matter_async(
     include_subfolders: bool = True
 ):
     """Async implementation of matter processing"""
-    async with AsyncSessionLocal() as session:
+    async with get_worker_session() as session:
         # Update job status
         result = await session.execute(
             select(ProcessingJob).where(ProcessingJob.id == job_id)
@@ -539,7 +539,7 @@ async def _process_full_database_async(
     include_archived: bool = False
 ):
     """Async implementation of full database processing"""
-    async with AsyncSessionLocal() as session:
+    async with get_worker_session() as session:
         # Update job status
         result = await session.execute(
             select(ProcessingJob).where(ProcessingJob.id == job_id)

@@ -270,7 +270,7 @@ export default function JobsPage() {
 
                   return (
                     <TableRow key={job.id}>
-                      <TableCell className="font-mono">#{job.id}</TableCell>
+                      <TableCell className="font-mono">#{job.job_number ?? job.id}</TableCell>
                       <TableCell className="capitalize">
                         {job.job_type.replace("_", " ")}
                       </TableCell>
@@ -297,6 +297,7 @@ export default function JobsPage() {
                           </div>
                           <span className="text-sm text-muted-foreground">
                             {job.processed_documents}/{job.total_documents}
+                            {job.total_documents > 0 && ` (${progress}%)`}
                           </span>
                         </div>
                       </TableCell>

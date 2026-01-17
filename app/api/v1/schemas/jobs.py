@@ -27,6 +27,7 @@ class JobCreateRequest(BaseModel):
 class JobResponse(BaseModel):
     """Processing job response"""
     id: int
+    job_number: Optional[int] = None  # Sequential job number per organization
     job_type: str
     status: str
     matter_name: Optional[str] = None
