@@ -218,7 +218,8 @@ class BedrockDailyLimitError(Exception):
 
 # Model IDs for fallback logic
 SONNET_MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-HAIKU_MODEL_ID = "us.anthropic.claude-haiku-4-5-20250929-v1:0"
+# Claude 3.5 Haiku (no 4.5 Haiku exists - different naming convention)
+HAIKU_MODEL_ID = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
 
 # Track if we've hit daily limit (shared across instances)
 _daily_limit_hit = threading.Event()
