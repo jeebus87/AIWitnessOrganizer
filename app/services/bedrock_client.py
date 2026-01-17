@@ -207,8 +207,21 @@ Do not include any text before or after the JSON object."""
 
 
 class BedrockThrottlingError(Exception):
-    """Raised when AWS Bedrock throttles requests"""
+    """Raised when AWS Bedrock throttles requests (rate limit)"""
     pass
+
+
+class BedrockDailyLimitError(Exception):
+    """Raised when AWS Bedrock daily token limit is exceeded"""
+    pass
+
+
+# Model IDs for fallback logic
+SONNET_MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+HAIKU_MODEL_ID = "us.anthropic.claude-haiku-4-5-20250929-v1:0"
+
+# Track if we've hit daily limit (shared across instances)
+_daily_limit_hit = threading.Event()
 
 
 class BedrockClient:
@@ -223,8 +236,13 @@ class BedrockClient:
         model_id: Optional[str] = None,
         region: Optional[str] = None
     ):
-        self.model_id = model_id or settings.bedrock_model_id
+        # Use Sonnet as primary, with Haiku as fallback
+        self.primary_model_id = model_id or settings.bedrock_model_id or SONNET_MODEL_ID
+        self.fallback_model_id = HAIKU_MODEL_ID
         self.region = region or settings.aws_region
+
+        # Current model starts as primary, switches to fallback if daily limit hit
+        self._current_model_id = self.primary_model_id
 
         # Configure boto3 client with retries and extended timeout
         # Large PDFs with 40+ pages can take several minutes to process
@@ -315,15 +333,36 @@ Respond with valid JSON only."""
 
         return [{"role": "user", "content": content}]
 
+    @property
+    def model_id(self) -> str:
+        """Get current model ID, checking if we should use fallback"""
+        # If daily limit was hit globally, use fallback
+        if _daily_limit_hit.is_set() and "sonnet" in self._current_model_id.lower():
+            return self.fallback_model_id
+        return self._current_model_id
+
+    def _switch_to_fallback(self):
+        """Switch to fallback model (Haiku) when daily limit is hit"""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        if self._current_model_id != self.fallback_model_id:
+            logger.warning(f"Switching from {self._current_model_id} to fallback model {self.fallback_model_id} due to daily limit")
+            self._current_model_id = self.fallback_model_id
+            _daily_limit_hit.set()  # Signal all instances to use fallback
+
     @retry(
         retry=retry_if_exception_type(BedrockThrottlingError),
         stop=stop_after_attempt(8),  # More attempts for better resilience
         wait=wait_exponential(multiplier=3, min=10, max=300)  # Longer delays: 10s min, 5min max
     )
     def _invoke_model(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Invoke the Bedrock model with rate limiting and retry logic"""
+        """Invoke the Bedrock model with rate limiting, retry logic, and automatic fallback"""
         import logging
         logger = logging.getLogger(__name__)
+
+        # Check if we should already be using fallback
+        current_model = self.model_id
 
         # Acquire rate limiter token before making request
         # This smooths out bursts and prevents overwhelming the API
@@ -340,7 +379,7 @@ Respond with valid JSON only."""
 
         try:
             response = self.client.invoke_model(
-                modelId=self.model_id,
+                modelId=current_model,
                 contentType="application/json",
                 accept="application/json",
                 body=json.dumps(body)
@@ -350,8 +389,39 @@ Respond with valid JSON only."""
             return response_body
 
         except self.client.exceptions.ThrottlingException as e:
-            logger.warning(f"Bedrock throttling detected, will retry with backoff: {e}")
-            raise BedrockThrottlingError(str(e))
+            error_msg = str(e)
+
+            # Check if this is a daily token limit error (not just rate limiting)
+            if "Too many tokens" in error_msg and "day" in error_msg:
+                logger.warning(f"Daily token limit hit for {current_model}: {e}")
+
+                # If we're on Sonnet, switch to Haiku and retry immediately
+                if "sonnet" in current_model.lower():
+                    self._switch_to_fallback()
+                    logger.info(f"Retrying with fallback model {self.fallback_model_id}...")
+
+                    # Retry with Haiku immediately (no backoff needed for model switch)
+                    try:
+                        response = self.client.invoke_model(
+                            modelId=self.fallback_model_id,
+                            contentType="application/json",
+                            accept="application/json",
+                            body=json.dumps(body)
+                        )
+                        response_body = json.loads(response["body"].read())
+                        logger.info(f"Fallback to {self.fallback_model_id} succeeded!")
+                        return response_body
+                    except self.client.exceptions.ThrottlingException as e2:
+                        # Even Haiku is throttled - this is bad
+                        logger.error(f"Fallback model also throttled: {e2}")
+                        raise BedrockThrottlingError(str(e2))
+                else:
+                    # Already on fallback model and still hitting daily limit
+                    raise BedrockDailyLimitError(f"Daily limit hit even on fallback model: {e}")
+            else:
+                # Regular rate limiting (RPM), use backoff retry
+                logger.warning(f"Bedrock throttling detected, will retry with backoff: {e}")
+                raise BedrockThrottlingError(str(e))
 
     def _parse_response(self, response: Dict[str, Any]) -> ExtractionResult:
         """Parse the Claude response into structured WitnessData"""
@@ -524,11 +594,25 @@ Respond with valid JSON only."""
 
         # Invoke model
         try:
-            logger.info(f"Calling Bedrock model {self.model_id}...")
+            current_model = self.model_id
+            logger.info(f"Calling Bedrock model {current_model}...")
             response = self._invoke_model(messages)
             result = self._parse_response(response)
+
+            # Log which model was actually used (might have fallen back)
+            actual_model = self.model_id
+            if actual_model != current_model:
+                logger.info(f"Model switched during request: {current_model} -> {actual_model}")
+
             logger.info(f"Bedrock returned {len(result.witnesses)} witnesses, success={result.success}, tokens={result.input_tokens}+{result.output_tokens}")
             return result
+        except BedrockDailyLimitError as e:
+            logger.error(f"Daily limit exhausted on all models: {e}")
+            return ExtractionResult(
+                success=False,
+                witnesses=[],
+                error=f"Daily token limit exhausted: {e}"
+            )
         except BedrockThrottlingError as e:
             return ExtractionResult(
                 success=False,
