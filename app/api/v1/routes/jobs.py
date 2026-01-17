@@ -14,25 +14,23 @@ from app.worker.tasks import process_matter, process_full_database
 from app.api.deps import get_current_user
 
 
-async def get_next_job_number(db: AsyncSession, organization_id: int) -> int:
-    """Atomically increment and return the next job number for an organization"""
-    if not organization_id:
-        return None
-
-    # Use INSERT ... ON CONFLICT to handle race conditions
-    # This ensures the counter is created if it doesn't exist
+async def renumber_all_jobs(db: AsyncSession, user_id: int) -> None:
+    """
+    Renumber ALL jobs for a user's organization, ordered by created_at.
+    Jobs are numbered 1, 2, 3, etc. starting from the oldest.
+    This ensures sequential job numbers even after deletions.
+    """
+    # Get all jobs for this user, ordered by created_at (oldest first)
     result = await db.execute(
-        text("""
-            INSERT INTO organization_job_counters (organization_id, job_counter)
-            VALUES (:org_id, 1)
-            ON CONFLICT (organization_id)
-            DO UPDATE SET job_counter = organization_job_counters.job_counter + 1
-            RETURNING job_counter
-        """),
-        {"org_id": organization_id}
+        select(ProcessingJob)
+        .where(ProcessingJob.user_id == user_id)
+        .order_by(ProcessingJob.created_at.asc())
     )
-    job_number = result.scalar_one()
-    return job_number
+    jobs = result.scalars().all()
+
+    # Renumber all jobs sequentially
+    for idx, job in enumerate(jobs, start=1):
+        job.job_number = idx
 
 router = APIRouter(prefix="/jobs", tags=["Processing Jobs"])
 
@@ -72,22 +70,21 @@ async def create_job(
         if not matter:
             raise HTTPException(status_code=404, detail="Matter not found")
 
-    # Get sequential job number for the organization
-    job_number = None
-    if current_user.organization_id:
-        job_number = await get_next_job_number(db, current_user.organization_id)
-
-    # Create job record
+    # Create job record (job_number will be assigned after)
     job = ProcessingJob(
         user_id=current_user.id,
         job_type=request.job_type,
         target_matter_id=request.matter_id,
         search_witnesses=request.search_witnesses,
         include_archived=request.include_archived,
-        status=JobStatus.PENDING,
-        job_number=job_number
+        status=JobStatus.PENDING
     )
     db.add(job)
+    await db.flush()  # Flush to get the job ID without committing
+
+    # Renumber ALL jobs for this user (including the new one)
+    await renumber_all_jobs(db, current_user.id)
+
     await db.commit()
     await db.refresh(job)
 

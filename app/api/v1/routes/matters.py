@@ -15,25 +15,7 @@ from app.db.models import Matter, Document, Witness, ClioIntegration, User, Proc
 from app.api.v1.schemas.witnesses import MatterResponse, MatterListResponse, DocumentResponse
 from app.services.clio_client import ClioClient
 from app.api.deps import get_current_user
-
-
-async def get_next_job_number(db: AsyncSession, organization_id: int) -> int:
-    """Atomically increment and return the next job number for an organization"""
-    if not organization_id:
-        return None
-
-    result = await db.execute(
-        text("""
-            INSERT INTO organization_job_counters (organization_id, job_counter)
-            VALUES (:org_id, 1)
-            ON CONFLICT (organization_id)
-            DO UPDATE SET job_counter = organization_job_counters.job_counter + 1
-            RETURNING job_counter
-        """),
-        {"org_id": organization_id}
-    )
-    job_number = result.scalar_one()
-    return job_number
+from app.api.v1.routes.jobs import renumber_all_jobs
 
 router = APIRouter(prefix="/matters", tags=["Matters"])
 
@@ -325,20 +307,19 @@ async def process_matter(
         legal_authority_folder_id = request.legal_authority_folder_id
         include_subfolders = request.include_subfolders
 
-    # Get sequential job number for the organization
-    job_number = None
-    if current_user.organization_id:
-        job_number = await get_next_job_number(db, current_user.organization_id)
-
-    # Create job record
+    # Create job record (job_number will be assigned after)
     job = ProcessingJob(
         user_id=current_user.id,
         job_type="single_matter",
         target_matter_id=matter_id,
-        status=JobStatus.PENDING,
-        job_number=job_number
+        status=JobStatus.PENDING
     )
     db.add(job)
+    await db.flush()  # Flush to get the job ID without committing
+
+    # Renumber ALL jobs for this user (including the new one)
+    await renumber_all_jobs(db, current_user.id)
+
     await db.commit()
     await db.refresh(job)
 
