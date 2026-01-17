@@ -297,32 +297,60 @@ class ExportService:
             # Combined witness info
             witness_info = f"{name}, {role}, {contact_str}"
 
-            # Add rows for each observation
-            for idx, w in enumerate(observations):
+            # Handle single vs multiple observations differently
+            if len(observations) == 1:
+                # Single observation - show everything in one row
+                w = observations[0]
                 observation = w.get("observation", "") or ""
-                source_summary = w.get("source_quote", "") or ""  # source_quote column stores source_summary
+                source_summary = w.get("source_quote", "") or ""
 
-                # Format source document with page number
                 source_doc = w.get("document_filename", "") or ""
                 source_page = w.get("source_page")
                 if source_page:
                     source_doc = f"{source_doc} (Page {source_page})"
 
-                # Format confidence
                 confidence = f"{w.get('confidence_score', 0) * 100:.0f}%"
 
-                if idx == 0:
-                    # First row - include all info
-                    row = [
-                        Paragraph(witness_info, self.styles["Observation"]),
-                        w.get("importance", "LOW"),
-                        confidence,
-                        Paragraph(observation, self.styles["Observation"]),
-                        Paragraph(source_summary, self.styles["Observation"]),
-                        Paragraph(source_doc, self.styles["Observation"])
-                    ]
-                else:
-                    # Subsequent rows - leave columns 1-3 blank
+                row = [
+                    Paragraph(witness_info, self.styles["Observation"]),
+                    w.get("importance", "LOW"),
+                    confidence,
+                    Paragraph(observation, self.styles["Observation"]),
+                    Paragraph(source_summary, self.styles["Observation"]),
+                    Paragraph(source_doc, self.styles["Observation"])
+                ]
+                data.append(row)
+            else:
+                # Multiple observations
+                # First row: summary of all observations with "See Below"
+                all_observations = [w.get("observation", "") or "" for w in observations]
+                summary_observation = "Multiple observations: " + "; ".join(
+                    [obs[:100] + "..." if len(obs) > 100 else obs for obs in all_observations if obs]
+                )
+
+                first_w = observations[0]
+                confidence = f"{first_w.get('confidence_score', 0) * 100:.0f}%"
+
+                summary_row = [
+                    Paragraph(witness_info, self.styles["Observation"]),
+                    first_w.get("importance", "LOW"),
+                    confidence,
+                    Paragraph(summary_observation, self.styles["Observation"]),
+                    "See Below",
+                    "See Below"
+                ]
+                data.append(summary_row)
+
+                # Subsequent rows - individual observations
+                for w in observations:
+                    observation = w.get("observation", "") or ""
+                    source_summary = w.get("source_quote", "") or ""
+
+                    source_doc = w.get("document_filename", "") or ""
+                    source_page = w.get("source_page")
+                    if source_page:
+                        source_doc = f"{source_doc} (Page {source_page})"
+
                     row = [
                         "",  # Witness Info
                         "",  # Importance
@@ -331,7 +359,7 @@ class ExportService:
                         Paragraph(source_summary, self.styles["Observation"]),
                         Paragraph(source_doc, self.styles["Observation"])
                     ]
-                data.append(row)
+                    data.append(row)
 
         # Create table - adjusted column widths for 6 columns
         col_widths = [2.5 * inch, 0.7 * inch, 0.7 * inch, 2.5 * inch, 2 * inch, 1.5 * inch]
@@ -369,7 +397,13 @@ class ExportService:
         row_num = 1
         for witness_name, observations in witness_groups.items():
             importance = observations[0].get("importance", "LOW").upper()
-            for _ in observations:
+            # Calculate number of rows for this witness
+            if len(observations) == 1:
+                num_rows = 1
+            else:
+                num_rows = 1 + len(observations)  # Summary row + individual rows
+
+            for _ in range(num_rows):
                 if importance == "HIGH":
                     style.add("BACKGROUND", (0, row_num), (-1, row_num), colors.HexColor("#FFE6E6"))
                 elif importance == "MEDIUM":
