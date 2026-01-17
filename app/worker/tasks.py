@@ -95,6 +95,16 @@ async def _process_single_document_async(
                 token_expires_at=clio_integration.token_expires_at,
                 region=clio_integration.clio_region
             ) as clio:
+                # Refresh document info if filename is unknown
+                if document.filename == "unknown" or not document.filename:
+                    logger.info(f"Refreshing document info from Clio for document {document.id}")
+                    doc_info = await clio.get_document(int(document.clio_document_id))
+                    if doc_info.get("name"):
+                        document.filename = doc_info["name"]
+                        document.file_type = doc_info.get("content_type", "").split("/")[-1] if doc_info.get("content_type") else None
+                        await session.commit()
+                        logger.info(f"Updated document filename to: {document.filename}")
+
                 content = await clio.download_document(int(document.clio_document_id))
 
             # Process document

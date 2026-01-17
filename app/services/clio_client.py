@@ -314,7 +314,9 @@ class ClioClient:
 
     async def get_document(self, document_id: int) -> Dict[str, Any]:
         """Get a single document by ID"""
-        response = await self.get(f"documents/{document_id}")
+        # Request default fields to ensure we get name, content_type, etc.
+        params = {"fields": ",".join(self.DEFAULT_DOCUMENT_FIELDS)}
+        response = await self.get(f"documents/{document_id}", params=params)
         return response.get("data", {})
 
     async def download_document(self, document_id: int) -> bytes:
