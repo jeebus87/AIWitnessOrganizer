@@ -184,6 +184,49 @@ async def list_jobs(
     )
 
 
+@router.post("/queue/purge")
+async def purge_queue(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Purge all pending tasks from the Celery queue.
+    Also marks any pending/processing jobs as cancelled.
+    """
+    from app.worker.celery_app import celery_app
+
+    # Purge the Celery queue
+    purged = celery_app.control.purge()
+
+    # Mark any pending/processing jobs as cancelled
+    result = await db.execute(
+        select(ProcessingJob).where(
+            ProcessingJob.user_id == current_user.id,
+            ProcessingJob.status.in_([JobStatus.PENDING, JobStatus.PROCESSING])
+        )
+    )
+    jobs = result.scalars().all()
+
+    cancelled_count = 0
+    for job in jobs:
+        job.status = JobStatus.CANCELLED
+        job.completed_at = datetime.utcnow()
+        job.error_message = "Queue purged by user"
+        cancelled_count += 1
+
+        # Revoke the task if it exists
+        if job.celery_task_id:
+            celery_app.control.revoke(job.celery_task_id, terminate=True)
+
+    await db.commit()
+
+    return {
+        "success": True,
+        "tasks_purged": purged or 0,
+        "jobs_cancelled": cancelled_count
+    }
+
+
 @router.get("/{job_id}", response_model=JobResponse)
 async def get_job(
     job_id: int,
@@ -388,49 +431,6 @@ async def clear_finished_jobs(
     await db.commit()
 
     return {"success": True, "deleted_count": result.rowcount}
-
-
-@router.post("/queue/purge")
-async def purge_queue(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Purge all pending tasks from the Celery queue.
-    Also marks any pending/processing jobs as cancelled.
-    """
-    from app.worker.celery_app import celery_app
-
-    # Purge the Celery queue
-    purged = celery_app.control.purge()
-
-    # Mark any pending/processing jobs as cancelled
-    result = await db.execute(
-        select(ProcessingJob).where(
-            ProcessingJob.user_id == current_user.id,
-            ProcessingJob.status.in_([JobStatus.PENDING, JobStatus.PROCESSING])
-        )
-    )
-    jobs = result.scalars().all()
-
-    cancelled_count = 0
-    for job in jobs:
-        job.status = JobStatus.CANCELLED
-        job.completed_at = datetime.utcnow()
-        job.error_message = "Queue purged by user"
-        cancelled_count += 1
-
-        # Revoke the task if it exists
-        if job.celery_task_id:
-            celery_app.control.revoke(job.celery_task_id, terminate=True)
-
-    await db.commit()
-
-    return {
-        "success": True,
-        "tasks_purged": purged or 0,
-        "jobs_cancelled": cancelled_count
-    }
 
 
 @router.get("/{job_id}/export/pdf")
