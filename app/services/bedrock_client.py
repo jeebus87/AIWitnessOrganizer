@@ -216,12 +216,32 @@ class BedrockDailyLimitError(Exception):
     pass
 
 
-# Model IDs for fallback logic (using US cross-region inference profiles)
-SONNET_MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-HAIKU_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+# Model fallback chain - ordered by reasoning capability (best to worst)
+# When daily limit is hit on one model, cascade to the next
+# Sonnet 4.5 is primary (user increasing limits), then ordered by reasoning per Gemini analysis
+MODEL_FALLBACK_CHAIN = [
+    # Primary model (user's main model with increased limits)
+    ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", "Sonnet 4.5"),
+    # Opus tier - best reasoning (expensive but excellent for legal analysis)
+    ("us.anthropic.claude-opus-4-5-20251101-v1:0", "Opus 4.5"),
+    ("us.anthropic.claude-opus-4-1-20250805-v1:0", "Opus 4.1"),
+    ("us.anthropic.claude-opus-4-20250514-v1:0", "Opus 4"),
+    ("us.anthropic.claude-3-opus-20240229-v1:0", "Opus 3"),
+    # Sonnet tier - great balance of reasoning and speed
+    ("us.anthropic.claude-sonnet-4-20250514-v1:0", "Sonnet 4"),
+    ("us.anthropic.claude-3-7-sonnet-20250219-v1:0", "Sonnet 3.7"),
+    ("us.anthropic.claude-3-5-sonnet-20241022-v2:0", "Sonnet 3.5 v2"),
+    ("us.anthropic.claude-3-5-sonnet-20240620-v1:0", "Sonnet 3.5"),
+    ("us.anthropic.claude-3-sonnet-20240229-v1:0", "Sonnet 3"),
+    # Haiku tier - fastest, least powerful reasoning (last resort)
+    ("us.anthropic.claude-haiku-4-5-20251001-v1:0", "Haiku 4.5"),
+    ("us.anthropic.claude-3-5-haiku-20241022-v1:0", "Haiku 3.5"),
+    ("us.anthropic.claude-3-haiku-20240307-v1:0", "Haiku 3"),
+]
 
-# Track if we've hit daily limit (shared across instances)
-_daily_limit_hit = threading.Event()
+# Track current position in fallback chain (shared across instances)
+_current_model_index = 0
+_model_index_lock = threading.Lock()
 
 
 class BedrockClient:
@@ -236,13 +256,8 @@ class BedrockClient:
         model_id: Optional[str] = None,
         region: Optional[str] = None
     ):
-        # Use Sonnet as primary, with Haiku as fallback
-        self.primary_model_id = model_id or settings.bedrock_model_id or SONNET_MODEL_ID
-        self.fallback_model_id = HAIKU_MODEL_ID
         self.region = region or settings.aws_region
-
-        # Current model starts as primary, switches to fallback if daily limit hit
-        self._current_model_id = self.primary_model_id
+        # Model selection handled by fallback chain (see MODEL_FALLBACK_CHAIN)
 
         # Configure boto3 client with retries and extended timeout
         # Large PDFs with 40+ pages can take several minutes to process
@@ -335,21 +350,43 @@ Respond with valid JSON only."""
 
     @property
     def model_id(self) -> str:
-        """Get current model ID, checking if we should use fallback"""
-        # If daily limit was hit globally, use fallback
-        if _daily_limit_hit.is_set() and "sonnet" in self._current_model_id.lower():
-            return self.fallback_model_id
-        return self._current_model_id
+        """Get current model ID from the fallback chain"""
+        global _current_model_index
+        with _model_index_lock:
+            if _current_model_index < len(MODEL_FALLBACK_CHAIN):
+                return MODEL_FALLBACK_CHAIN[_current_model_index][0]
+            # All models exhausted, return last one (will fail but that's expected)
+            return MODEL_FALLBACK_CHAIN[-1][0]
 
-    def _switch_to_fallback(self):
-        """Switch to fallback model (Haiku) when daily limit is hit"""
+    @property
+    def model_name(self) -> str:
+        """Get human-readable name of current model"""
+        global _current_model_index
+        with _model_index_lock:
+            if _current_model_index < len(MODEL_FALLBACK_CHAIN):
+                return MODEL_FALLBACK_CHAIN[_current_model_index][1]
+            return MODEL_FALLBACK_CHAIN[-1][1]
+
+    def _advance_to_next_model(self) -> bool:
+        """
+        Move to next model in fallback chain when daily limit is hit.
+        Returns True if there's another model to try, False if exhausted.
+        """
+        global _current_model_index
         import logging
         logger = logging.getLogger(__name__)
 
-        if self._current_model_id != self.fallback_model_id:
-            logger.warning(f"Switching from {self._current_model_id} to fallback model {self.fallback_model_id} due to daily limit")
-            self._current_model_id = self.fallback_model_id
-            _daily_limit_hit.set()  # Signal all instances to use fallback
+        with _model_index_lock:
+            current_name = MODEL_FALLBACK_CHAIN[_current_model_index][1] if _current_model_index < len(MODEL_FALLBACK_CHAIN) else "unknown"
+
+            if _current_model_index < len(MODEL_FALLBACK_CHAIN) - 1:
+                _current_model_index += 1
+                next_model_id, next_model_name = MODEL_FALLBACK_CHAIN[_current_model_index]
+                logger.warning(f"Daily limit hit on {current_name}, advancing to {next_model_name}")
+                return True
+            else:
+                logger.error(f"All models in fallback chain exhausted! Currently on {current_name}")
+                return False
 
     @retry(
         retry=retry_if_exception_type(BedrockThrottlingError),
@@ -393,34 +430,40 @@ Respond with valid JSON only."""
 
             # Check if this is a daily token limit error (not just rate limiting)
             if "Too many tokens" in error_msg and "day" in error_msg:
-                logger.warning(f"Daily token limit hit for {current_model}: {e}")
+                logger.warning(f"Daily token limit hit for {self.model_name} ({current_model}): {e}")
 
-                # If we're on Sonnet, switch to Haiku and retry immediately
-                if "sonnet" in current_model.lower():
-                    self._switch_to_fallback()
-                    logger.info(f"Retrying with fallback model {self.fallback_model_id}...")
+                # Try to advance to next model in fallback chain
+                if self._advance_to_next_model():
+                    next_model = self.model_id
+                    logger.info(f"Retrying with next model in chain: {self.model_name}...")
 
-                    # Retry with Haiku immediately (no backoff needed for model switch)
+                    # Retry with next model immediately (no backoff needed for model switch)
                     try:
                         response = self.client.invoke_model(
-                            modelId=self.fallback_model_id,
+                            modelId=next_model,
                             contentType="application/json",
                             accept="application/json",
                             body=json.dumps(body)
                         )
                         response_body = json.loads(response["body"].read())
-                        logger.info(f"Fallback to {self.fallback_model_id} succeeded!")
+                        logger.info(f"Fallback to {self.model_name} succeeded!")
                         return response_body
                     except self.client.exceptions.ThrottlingException as e2:
-                        # Even Haiku is throttled - this is bad
-                        logger.error(f"Fallback model also throttled: {e2}")
-                        raise BedrockThrottlingError(str(e2))
+                        # Next model also has issues - recurse to try next in chain
+                        error_msg2 = str(e2)
+                        if "Too many tokens" in error_msg2 and "day" in error_msg2:
+                            # Recursive call to keep advancing through chain
+                            return self._invoke_model(messages)
+                        else:
+                            # Regular rate limit, use backoff
+                            logger.warning(f"Next model throttled (rate limit): {e2}")
+                            raise BedrockThrottlingError(str(e2))
                 else:
-                    # Already on fallback model and still hitting daily limit
-                    raise BedrockDailyLimitError(f"Daily limit hit even on fallback model: {e}")
+                    # All models in chain exhausted
+                    raise BedrockDailyLimitError(f"All models exhausted! Last error: {e}")
             else:
                 # Regular rate limiting (RPM), use backoff retry
-                logger.warning(f"Bedrock throttling detected, will retry with backoff: {e}")
+                logger.warning(f"Bedrock throttling detected on {self.model_name}, will retry with backoff: {e}")
                 raise BedrockThrottlingError(str(e))
 
     def _parse_response(self, response: Dict[str, Any]) -> ExtractionResult:
@@ -595,14 +638,16 @@ Respond with valid JSON only."""
         # Invoke model
         try:
             current_model = self.model_id
-            logger.info(f"Calling Bedrock model {current_model}...")
+            current_name = self.model_name
+            logger.info(f"Calling Bedrock model {current_name}...")
             response = self._invoke_model(messages)
             result = self._parse_response(response)
 
             # Log which model was actually used (might have fallen back)
             actual_model = self.model_id
+            actual_name = self.model_name
             if actual_model != current_model:
-                logger.info(f"Model switched during request: {current_model} -> {actual_model}")
+                logger.info(f"Model switched during request: {current_name} -> {actual_name}")
 
             logger.info(f"Bedrock returned {len(result.witnesses)} witnesses, success={result.success}, tokens={result.input_tokens}+{result.output_tokens}")
             return result
