@@ -283,12 +283,27 @@ class ClioClient:
     # Document Operations
     # =========================================================================
 
+    # Default fields needed for documents - Clio API returns only id/etag without explicit fields
+    DEFAULT_DOCUMENT_FIELDS = [
+        "id",
+        "name",
+        "content_type",
+        "size",
+        "etag",
+        "created_at",
+        "updated_at",
+    ]
+
     async def get_documents(
         self,
         matter_id: Optional[int] = None,
         fields: Optional[List[str]] = None
     ) -> AsyncIterator[Dict[str, Any]]:
         """Get all documents, optionally filtered by matter"""
+        # Use default fields if none specified - Clio returns only id/etag otherwise!
+        if fields is None:
+            fields = self.DEFAULT_DOCUMENT_FIELDS
+
         params = {}
         if matter_id:
             params["matter_id"] = matter_id
