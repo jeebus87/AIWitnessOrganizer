@@ -37,7 +37,7 @@ celery_app.conf.update(
 
     # Worker settings
     worker_prefetch_multiplier=1,  # One task at a time
-    worker_concurrency=4,  # 4 concurrent workers
+    worker_concurrency=8,  # 8 concurrent workers for parallel document processing
 
     # Retry settings
     task_default_retry_delay=60,  # 1 minute

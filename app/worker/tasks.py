@@ -4,7 +4,7 @@ import gc
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
-from celery import shared_task
+from celery import shared_task, group, chord
 from celery.utils.log import get_task_logger
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -457,52 +457,36 @@ async def _process_matter_async(
             job.total_documents = len(documents)
             await session.commit()
 
-            total_witnesses = 0
-            failed_count = 0
+            if not documents:
+                job.status = JobStatus.COMPLETED
+                job.completed_at = datetime.utcnow()
+                await session.commit()
+                logger.info(f"No documents to process for job {job_id}")
+                return {"success": True, "job_id": job_id, "documents_processed": 0, "witnesses_found": 0, "failed": 0}
 
-            for doc in documents:
-                try:
-                    # Process each document with legal context
-                    doc_result = await _process_single_document_async(
-                        task, doc.id, search_targets, legal_context
-                    )
+            # PARALLEL PROCESSING: Create a group of tasks to process documents concurrently
+            # This dramatically speeds up processing for large jobs (10k+ documents)
+            logger.info(f"Launching parallel processing for {len(documents)} documents")
 
-                    if doc_result.get("success"):
-                        total_witnesses += doc_result.get("witnesses_found", 0)
-                    else:
-                        failed_count += 1
+            processing_tasks = group(
+                process_single_document.s(
+                    document_id=doc.id,
+                    search_targets=search_targets,
+                    legal_context=legal_context
+                )
+                for doc in documents
+            )
 
-                    job.processed_documents += 1
-                    await session.commit()
+            # Use chord to run finalize_job after all documents are processed
+            processing_chord = chord(processing_tasks, finalize_job.s(job_id=job_id))
+            processing_chord.apply_async()
 
-                except Exception as e:
-                    logger.error(f"Failed to process document {doc.id}: {e}")
-                    failed_count += 1
-                    job.processed_documents += 1
-                    await session.commit()
-
-                # Force garbage collection after each document to prevent memory buildup
-                gc.collect()
-
-            # Update job completion
-            job.status = JobStatus.COMPLETED
-            job.completed_at = datetime.utcnow()
-            job.total_witnesses_found = total_witnesses
-            job.failed_documents = failed_count
-            job.result_summary = {
-                "total_documents": len(documents),
-                "processed": job.processed_documents,
-                "failed": failed_count,
-                "witnesses_found": total_witnesses
-            }
-            await session.commit()
+            logger.info(f"Started parallel processing for job {job_id} with {len(documents)} documents")
 
             return {
                 "success": True,
                 "job_id": job_id,
-                "documents_processed": job.processed_documents,
-                "witnesses_found": total_witnesses,
-                "failed": failed_count
+                "message": f"Started processing {len(documents)} documents in parallel"
             }
 
         except Exception as e:
@@ -651,52 +635,34 @@ async def _process_full_database_async(
             job.total_documents = len(documents)
             await session.commit()
 
-            total_witnesses = 0
-            failed_count = 0
+            if not documents:
+                job.status = JobStatus.COMPLETED
+                job.completed_at = datetime.utcnow()
+                await session.commit()
+                logger.info(f"No documents to process for job {job_id}")
+                return {"success": True, "job_id": job_id, "documents_processed": 0, "witnesses_found": 0, "failed": 0}
 
-            for doc in documents:
-                try:
-                    doc_result = await _process_single_document_async(
-                        task, doc.id, search_targets
-                    )
+            # PARALLEL PROCESSING: Create a group of tasks to process documents concurrently
+            logger.info(f"Launching parallel processing for {len(documents)} documents")
 
-                    if doc_result.get("success"):
-                        total_witnesses += doc_result.get("witnesses_found", 0)
-                    else:
-                        failed_count += 1
+            processing_tasks = group(
+                process_single_document.s(
+                    document_id=doc.id,
+                    search_targets=search_targets
+                )
+                for doc in documents
+            )
 
-                    job.processed_documents += 1
-                    await session.commit()
+            # Use chord to run finalize_job after all documents are processed
+            processing_chord = chord(processing_tasks, finalize_job.s(job_id=job_id))
+            processing_chord.apply_async()
 
-                except Exception as e:
-                    logger.error(f"Failed to process document {doc.id}: {e}")
-                    failed_count += 1
-                    job.processed_documents += 1
-                    await session.commit()
-
-                # Force garbage collection after each document to prevent memory buildup
-                gc.collect()
-
-            # Update job completion
-            job.status = JobStatus.COMPLETED
-            job.completed_at = datetime.utcnow()
-            job.total_witnesses_found = total_witnesses
-            job.failed_documents = failed_count
-            job.result_summary = {
-                "matters_synced": matters_synced,
-                "total_documents": len(documents),
-                "processed": job.processed_documents,
-                "failed": failed_count,
-                "witnesses_found": total_witnesses
-            }
-            await session.commit()
+            logger.info(f"Started parallel processing for job {job_id} with {len(documents)} documents")
 
             return {
                 "success": True,
                 "job_id": job_id,
-                "matters_synced": matters_synced,
-                "documents_processed": job.processed_documents,
-                "witnesses_found": total_witnesses
+                "message": f"Started processing {len(documents)} documents in parallel"
             }
 
         except Exception as e:
@@ -707,6 +673,72 @@ async def _process_full_database_async(
 
             logger.exception(f"Full database job {job_id} failed")
             return {"success": False, "error": str(e)}
+
+
+@celery_app.task(bind=True)
+def finalize_job(self, results: List[Dict[str, Any]], job_id: int):
+    """
+    Finalize a processing job after all documents have been processed in parallel.
+    This task is used as a callback in a Celery chord.
+
+    Args:
+        results: List of results from all process_single_document tasks
+        job_id: ProcessingJob ID to finalize
+    """
+    return run_async(_finalize_job_async(self, results, job_id))
+
+
+async def _finalize_job_async(
+    task,
+    results: List[Dict[str, Any]],
+    job_id: int
+):
+    """Async implementation of job finalization"""
+    async with get_worker_session() as session:
+        result = await session.execute(
+            select(ProcessingJob).where(ProcessingJob.id == job_id)
+        )
+        job = result.scalar_one_or_none()
+
+        if not job:
+            logger.error(f"Finalize job: Job {job_id} not found")
+            return {"success": False, "error": "Job not found"}
+
+        total_witnesses = 0
+        failed_count = 0
+        successful_count = 0
+
+        for res in results:
+            if isinstance(res, dict) and res.get("success"):
+                total_witnesses += res.get("witnesses_found", 0)
+                successful_count += 1
+            else:
+                failed_count += 1
+
+        job.processed_documents = successful_count + failed_count
+
+        # Update job completion
+        job.status = JobStatus.COMPLETED
+        job.completed_at = datetime.utcnow()
+        job.total_witnesses_found = total_witnesses
+        job.failed_documents = failed_count
+        job.result_summary = {
+            "total_documents": job.total_documents,
+            "processed": job.processed_documents,
+            "failed": failed_count,
+            "witnesses_found": total_witnesses
+        }
+        await session.commit()
+
+        logger.info(f"Job {job_id} finalized. Processed: {job.processed_documents}, Witnesses: {total_witnesses}, Failed: {failed_count}")
+
+        return {
+            "success": True,
+            "job_id": job_id,
+            "documents_processed": job.processed_documents,
+            "witnesses_found": total_witnesses,
+            "failed": failed_count
+        }
 
 
 def _map_role(role_str: str) -> WitnessRole:
