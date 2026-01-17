@@ -125,13 +125,16 @@ class BedrockClient:
         self.model_id = model_id or settings.bedrock_model_id
         self.region = region or settings.aws_region
 
-        # Configure boto3 client with retries
+        # Configure boto3 client with retries and extended timeout
+        # Large PDFs with 40+ pages can take several minutes to process
         config = Config(
             region_name=self.region,
             retries={
                 "max_attempts": 3,
                 "mode": "adaptive"
-            }
+            },
+            read_timeout=600,  # 10 minutes for large document processing
+            connect_timeout=30
         )
 
         self.client = boto3.client(

@@ -244,15 +244,17 @@ async def _process_single_document_async(
             }
 
         except Exception as e:
-            logger.exception(f"Error processing document {document_id}")
-            document.processing_error = str(e)
+            import traceback
+            error_details = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+            logger.exception(f"Error processing document {document_id}: {error_details}")
+            document.processing_error = error_details[:4000]  # Truncate to fit in column
             await session.commit()
 
             # Clean up memory even on error
             gc.collect()
 
-            # Retry if retries remaining
-            raise task.retry(exc=e, countdown=60)
+            # Return failure instead of retrying indefinitely
+            return {"success": False, "error": str(e), "document_id": document_id}
 
 
 @celery_app.task(bind=True)
