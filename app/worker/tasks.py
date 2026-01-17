@@ -15,11 +15,12 @@ from app.core.security import decrypt_token
 from app.db.session import AsyncSessionLocal
 from app.db.models import (
     User, ClioIntegration, Matter, Document, Witness,
-    ProcessingJob, JobStatus, WitnessRole, ImportanceLevel
+    ProcessingJob, JobStatus, WitnessRole, ImportanceLevel, RelevanceLevel
 )
 from app.services.clio_client import ClioClient
 from app.services.document_processor import DocumentProcessor
 from app.services.bedrock_client import BedrockClient
+from app.services.legal_authority_service import LegalAuthorityService
 
 logger = get_task_logger(__name__)
 
@@ -38,7 +39,8 @@ def run_async(coro):
 def process_single_document(
     self,
     document_id: int,
-    search_targets: Optional[List[str]] = None
+    search_targets: Optional[List[str]] = None,
+    legal_context: Optional[str] = None
 ):
     """
     Process a single document for witness extraction.
@@ -46,16 +48,18 @@ def process_single_document(
     Args:
         document_id: Database ID of the document
         search_targets: Optional list of specific names to search for
+        legal_context: Optional legal standards context from RAG
     """
     return run_async(_process_single_document_async(
-        self, document_id, search_targets
+        self, document_id, search_targets, legal_context
     ))
 
 
 async def _process_single_document_async(
     task,
     document_id: int,
-    search_targets: Optional[List[str]] = None
+    search_targets: Optional[List[str]] = None,
+    legal_context: Optional[str] = None
 ):
     """Async implementation of document processing"""
     async with AsyncSessionLocal() as session:
@@ -139,7 +143,8 @@ async def _process_single_document_async(
                     # Extract witnesses from this chunk
                     extraction_result = await bedrock.extract_witnesses(
                         assets=chunk_assets,
-                        search_targets=search_targets
+                        search_targets=search_targets,
+                        legal_context=legal_context
                     )
                     
                     if extraction_result.success:
@@ -175,7 +180,8 @@ async def _process_single_document_async(
                 # Extract witnesses using AI
                 extraction_result = await bedrock.extract_witnesses(
                     assets=proc_result.assets,
-                    search_targets=search_targets
+                    search_targets=search_targets,
+                    legal_context=legal_context
                 )
 
                 if not extraction_result.success:
@@ -392,6 +398,50 @@ async def _process_matter_async(
                 await session.commit()
                 logger.info(f"Synced {docs_synced} new documents for matter {matter_id}")
 
+                # Process Legal Authority folder if specified
+                legal_context = ""
+                if legal_authority_folder_id:
+                    logger.info(f"Processing Legal Authority folder: {legal_authority_folder_id}")
+                    legal_auth_service = LegalAuthorityService()
+                    doc_processor = DocumentProcessor()
+
+                    # Get documents from the legal authority folder
+                    async for la_doc in clio.get_documents_in_folder(legal_authority_folder_id):
+                        try:
+                            # Download and process the legal authority document
+                            doc_content = await clio.download_document(la_doc["id"])
+                            if doc_content:
+                                # Extract text from the document
+                                assets = await doc_processor.process(doc_content, la_doc.get("name", "document"))
+                                # Combine all text from assets
+                                doc_text = ""
+                                for asset in assets:
+                                    if asset.asset_type in ("text", "email_body"):
+                                        doc_text += asset.content.decode("utf-8", errors="replace") + "\n"
+
+                                if doc_text.strip():
+                                    # Process and embed the legal authority document
+                                    await legal_auth_service.process_legal_authority_document(
+                                        db=session,
+                                        matter_id=matter_id,
+                                        document_text=doc_text,
+                                        filename=la_doc.get("name", "unknown"),
+                                        clio_document_id=str(la_doc["id"]),
+                                        clio_folder_id=str(legal_authority_folder_id)
+                                    )
+                                    logger.info(f"Processed legal authority: {la_doc.get('name')}")
+                        except Exception as e:
+                            logger.warning(f"Failed to process legal authority doc {la_doc.get('name')}: {e}")
+
+                    # Get legal context for witness extraction
+                    legal_context = await legal_auth_service.get_legal_context_for_witness_extraction(
+                        db=session,
+                        matter_id=matter_id,
+                        document_summary="Analyze witness relevance based on legal claims and defenses in this matter."
+                    )
+                    if legal_context:
+                        logger.info(f"Retrieved legal context: {len(legal_context)} chars")
+
             # Get all documents for this matter (now including newly synced ones)
             result = await session.execute(
                 select(Document).where(Document.matter_id == matter_id)
@@ -406,9 +456,9 @@ async def _process_matter_async(
 
             for doc in documents:
                 try:
-                    # Process each document
+                    # Process each document with legal context
                     doc_result = await _process_single_document_async(
-                        task, doc.id, search_targets
+                        task, doc.id, search_targets, legal_context
                     )
 
                     if doc_result.get("success"):

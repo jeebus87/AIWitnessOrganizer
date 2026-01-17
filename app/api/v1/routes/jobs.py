@@ -4,14 +4,35 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import joinedload
 
 from app.db.session import get_db
-from app.db.models import ProcessingJob, Matter, JobStatus, User
+from app.db.models import ProcessingJob, Matter, JobStatus, User, OrganizationJobCounter
 from app.api.v1.schemas.jobs import JobCreateRequest, JobResponse, JobListResponse
 from app.worker.tasks import process_matter, process_full_database
 from app.api.deps import get_current_user
+
+
+async def get_next_job_number(db: AsyncSession, organization_id: int) -> int:
+    """Atomically increment and return the next job number for an organization"""
+    if not organization_id:
+        return None
+
+    # Use INSERT ... ON CONFLICT to handle race conditions
+    # This ensures the counter is created if it doesn't exist
+    result = await db.execute(
+        text("""
+            INSERT INTO organization_job_counters (organization_id, job_counter)
+            VALUES (:org_id, 1)
+            ON CONFLICT (organization_id)
+            DO UPDATE SET job_counter = organization_job_counters.job_counter + 1
+            RETURNING job_counter
+        """),
+        {"org_id": organization_id}
+    )
+    job_number = result.scalar_one()
+    return job_number
 
 router = APIRouter(prefix="/jobs", tags=["Processing Jobs"])
 
@@ -51,6 +72,11 @@ async def create_job(
         if not matter:
             raise HTTPException(status_code=404, detail="Matter not found")
 
+    # Get sequential job number for the organization
+    job_number = None
+    if current_user.organization_id:
+        job_number = await get_next_job_number(db, current_user.organization_id)
+
     # Create job record
     job = ProcessingJob(
         user_id=current_user.id,
@@ -58,7 +84,8 @@ async def create_job(
         target_matter_id=request.matter_id,
         search_witnesses=request.search_witnesses,
         include_archived=request.include_archived,
-        status=JobStatus.PENDING
+        status=JobStatus.PENDING,
+        job_number=job_number
     )
     db.add(job)
     await db.commit()

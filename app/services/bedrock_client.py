@@ -175,10 +175,18 @@ class BedrockClient:
     def _build_messages(
         self,
         assets: List[ProcessedAsset],
-        search_targets: Optional[List[str]] = None
+        search_targets: Optional[List[str]] = None,
+        legal_context: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Build the messages array for Claude API"""
         content = []
+
+        # Add legal context first if available (RAG from Legal Authority folder)
+        if legal_context:
+            content.append({
+                "type": "text",
+                "text": legal_context
+            })
 
         # Add images
         for asset in assets:
@@ -213,14 +221,17 @@ For other individuals present in the document:
 - Only include them if they directly interact with the target individuals
 - Mark their importance as LOW unless they provide significant testimony
 
+{"Use the LEGAL STANDARDS provided above to determine relevance and relevance reasons." if legal_context else ""}
+
 Respond with valid JSON only."""
         else:
-            prompt = """Analyze the provided document(s) and extract information about ALL witnesses and key individuals mentioned.
+            prompt = f"""Analyze the provided document(s) and extract information about ALL witnesses and key individuals mentioned.
 
 For each person identified:
 - Extract their name, role, and relevance to the case
 - Rate their importance (HIGH, MEDIUM, LOW) based on their testimony or involvement
 - Include any contact information found
+{"- Use the LEGAL STANDARDS provided above to determine relevance and explain the relevance reason in terms of the legal claims and defenses." if legal_context else ""}
 
 Respond with valid JSON only."""
 
@@ -383,7 +394,8 @@ Respond with valid JSON only."""
     async def extract_witnesses(
         self,
         assets: List[ProcessedAsset],
-        search_targets: Optional[List[str]] = None
+        search_targets: Optional[List[str]] = None,
+        legal_context: Optional[str] = None
     ) -> ExtractionResult:
         """
         Extract witnesses from document assets using Claude vision.
@@ -391,15 +403,18 @@ Respond with valid JSON only."""
         Args:
             assets: List of ProcessedAsset objects (images and text)
             search_targets: Optional list of specific names to search for
+            legal_context: Optional legal standards context from RAG (Legal Authority folder)
 
         Returns:
             ExtractionResult with list of WitnessData
         """
         import logging
         logger = logging.getLogger(__name__)
-        
+
         logger.info(f"extract_witnesses called with {len(assets)} assets, types: {[a.asset_type for a in assets]}")
-        
+        if legal_context:
+            logger.info(f"Legal context provided: {len(legal_context)} chars")
+
         if not assets:
             logger.warning("No assets provided to extract_witnesses")
             return ExtractionResult(
@@ -421,8 +436,8 @@ Respond with valid JSON only."""
                 error="No valid assets to process"
             )
 
-        # Build messages
-        messages = self._build_messages(valid_assets, search_targets)
+        # Build messages with legal context
+        messages = self._build_messages(valid_assets, search_targets, legal_context)
 
         # Invoke model
         try:
@@ -448,6 +463,7 @@ Respond with valid JSON only."""
         self,
         assets: List[ProcessedAsset],
         search_targets: Optional[List[str]] = None,
+        legal_context: Optional[str] = None,
         batch_size: int = 10
     ) -> List[ExtractionResult]:
         """
@@ -458,6 +474,7 @@ Respond with valid JSON only."""
         Args:
             assets: List of ProcessedAsset objects
             search_targets: Optional list of specific names to search for
+            legal_context: Optional legal standards context from RAG
             batch_size: Number of assets per batch (max images per request)
 
         Returns:
@@ -468,7 +485,7 @@ Respond with valid JSON only."""
         # Group assets into batches
         for i in range(0, len(assets), batch_size):
             batch = assets[i:i + batch_size]
-            result = await self.extract_witnesses(batch, search_targets)
+            result = await self.extract_witnesses(batch, search_targets, legal_context)
             results.append(result)
 
         return results

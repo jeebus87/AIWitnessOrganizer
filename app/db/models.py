@@ -264,6 +264,9 @@ class ProcessingJob(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     celery_task_id = Column(String(255), nullable=True, index=True)
 
+    # Sequential job number per organization (e.g., "Job #42")
+    job_number = Column(Integer, nullable=True, index=True)
+
     # Job configuration
     job_type = Column(String(50), nullable=False)  # single_matter, full_database
     target_matter_id = Column(Integer, ForeignKey("matters.id"), nullable=True)
@@ -331,3 +334,46 @@ class CreditPurchase(Base):
     # Relationships
     organization = relationship("Organization")
     purchased_by = relationship("User")
+
+
+class LegalAuthority(Base):
+    """Legal authority document (case law, statutes) for RAG context"""
+    __tablename__ = "legal_authorities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    matter_id = Column(Integer, ForeignKey("matters.id", ondelete="CASCADE"), nullable=False)
+    clio_document_id = Column(String(128), nullable=True, index=True)
+    clio_folder_id = Column(String(128), nullable=True)
+
+    filename = Column(String(512), nullable=False)
+    content_hash = Column(String(64), nullable=True)  # SHA-256 for deduplication
+    total_chunks = Column(Integer, default=0, nullable=False)
+
+    # Processing status
+    is_processed = Column(Boolean, default=False, nullable=False)
+    processing_error = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    matter = relationship("Matter")
+    chunks = relationship("LegalAuthorityChunk", back_populates="legal_authority", cascade="all, delete-orphan")
+
+
+class LegalAuthorityChunk(Base):
+    """Text chunk with embedding for semantic search"""
+    __tablename__ = "legal_authority_chunks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    legal_authority_id = Column(Integer, ForeignKey("legal_authorities.id", ondelete="CASCADE"), nullable=False)
+
+    chunk_index = Column(Integer, nullable=False)
+    chunk_text = Column(Text, nullable=False)
+    # Note: embedding column uses pgvector - added via raw SQL migration
+    # embedding = Column(Vector(1536))  # Amazon Titan embeddings are 1536 dimensions
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    # Relationships
+    legal_authority = relationship("LegalAuthority", back_populates="chunks")

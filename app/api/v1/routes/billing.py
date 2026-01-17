@@ -156,6 +156,20 @@ async def create_topup_checkout(
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
 
+    # Verify user is an admin - check database value first for quick rejection
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Only organization admins can purchase credits"
+        )
+
+    # Verify user has an organization
+    if not current_user.organization_id:
+        raise HTTPException(
+            status_code=400,
+            detail="You must belong to an organization to purchase credits"
+        )
+
     service = SubscriptionService(db)
     checkout_url = await service.create_topup_checkout(
         user_id=current_user.id,
