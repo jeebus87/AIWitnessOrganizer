@@ -207,38 +207,49 @@ class ClioClient:
         page_size: int = 200
     ) -> AsyncIterator[Dict[str, Any]]:
         """
-        Iterate through paginated Clio API results using offset-based pagination.
+        Iterate through paginated Clio API results using cursor-based pagination.
         Yields individual items from the 'data' array.
 
-        Uses offset pagination instead of cursor pagination because Clio's
-        cursor-based pagination returns the same page_token repeatedly.
+        Uses cursor pagination with order=id(asc) to bypass the 10,000 offset limit.
+        The API returns a meta.paging.next URL to fetch the next page.
         """
         params = params or {}
         params["limit"] = page_size
-        offset = 0
+        params["order"] = "id(asc)"  # Required for cursor-based pagination
+        # Don't use offset - cursor pagination handles this via the next URL
+
         seen_ids: set = set()  # Track seen IDs to detect duplicates
+        next_url: Optional[str] = None
+        is_first_request = True
 
         while True:
-            params["offset"] = offset
-            response = await self.get(endpoint, params=params)
+            if is_first_request:
+                response = await self.get(endpoint, params=params)
+                is_first_request = False
+            else:
+                # Use the next URL directly (it includes cursor parameter)
+                response = await self.get(next_url)
+
             data = response.get("data", [])
 
             if not data:
                 break
 
-            # Check for duplicate IDs (indicates we've wrapped around)
+            # Yield items, checking for duplicates
             for item in data:
                 item_id = item.get("id")
                 if item_id in seen_ids:
-                    return  # Stop iteration completely
+                    return  # Stop iteration if we see duplicates
                 seen_ids.add(item_id)
                 yield item
 
-            # If we got fewer items than page_size, we've reached the end
-            if len(data) < page_size:
-                break
+            # Check for next page URL in cursor pagination
+            meta = response.get("meta", {})
+            paging = meta.get("paging", {})
+            next_url = paging.get("next")
 
-            offset += page_size
+            if not next_url:
+                break  # No more pages
 
     # =========================================================================
     # Matter Operations
@@ -465,78 +476,24 @@ class ClioClient:
         fields: Optional[List[str]] = None
     ) -> AsyncIterator[Dict[str, Any]]:
         """
-        Get ALL documents in a matter by traversing folders.
+        Get ALL documents in a matter using cursor-based pagination.
 
-        This method avoids the Clio API pagination offset limit (~10,000) by:
-        1. First getting documents at the root level (not in any folder)
-        2. Getting all root-level folders
-        3. Recursively processing each folder
-
-        Each folder query starts with offset=0, avoiding the global limit.
+        Now that get_paginated uses cursor pagination with order=id(asc),
+        this method simply fetches all documents for the matter directly.
+        Cursor pagination bypasses the 10,000 offset limit.
 
         Args:
             matter_id: The Clio matter ID (not database ID)
-            exclude_folder_ids: List of folder IDs to exclude
+            exclude_folder_ids: List of folder IDs to exclude (not used with direct query)
             fields: Document fields to return
         """
-        if exclude_folder_ids is None:
-            exclude_folder_ids = []
-
         if fields is None:
             fields = self.DEFAULT_DOCUMENT_FIELDS
 
-        seen_document_ids: set = set()  # Track seen IDs to avoid duplicates
-
-        # Step 1: Get documents at root level (not in any folder)
-        # Clio returns documents that aren't in folders when we query by matter_id
-        # but we need to use folder traversal to get all of them
-        # Note: Documents directly in the matter root may need special handling
-
-        # Step 2: Get all root-level folders and process them recursively
-        async for folder in self.get_folders(matter_id, parent_id=None):
-            folder_id = folder.get("id")
-            if folder_id and folder_id not in exclude_folder_ids:
-                async for doc in self.get_documents_recursive(
-                    matter_id, folder_id, exclude_folder_ids, fields
-                ):
-                    doc_id = doc.get("id")
-                    if doc_id and doc_id not in seen_document_ids:
-                        seen_document_ids.add(doc_id)
-                        yield doc
-
-        # Step 3: Also try to get documents that might be at the matter root
-        # (not in any folder). We do this with a limited offset to stay under limits.
-        # Use matter_id filter but limit to catch stragglers
-        params = {
-            "matter_id": matter_id,
-            "fields": ",".join(fields),
-            "limit": 200
-        }
-        offset = 0
-        max_root_offset = 5000  # Limit root-level pagination to avoid 422 errors
-
-        while offset < max_root_offset:
-            params["offset"] = offset
-            try:
-                response = await self.get("documents", params=params)
-                data = response.get("data", [])
-
-                if not data:
-                    break
-
-                for doc in data:
-                    doc_id = doc.get("id")
-                    if doc_id and doc_id not in seen_document_ids:
-                        seen_document_ids.add(doc_id)
-                        yield doc
-
-                if len(data) < 200:
-                    break
-
-                offset += 200
-            except Exception as e:
-                # If we hit pagination limit, just stop - we got the folder docs already
-                break
+        # With cursor-based pagination, we can fetch all documents directly
+        # The get_paginated method now uses order=id(asc) which enables cursor pagination
+        async for doc in self.get_documents(matter_id=matter_id, fields=fields):
+            yield doc
 
     # =========================================================================
     # Contact Operations
