@@ -259,58 +259,82 @@ class ExportService:
             key=lambda w: importance_order.get(w.get("importance", "LOW").upper(), 3)
         )
 
-        # Table data - match Excel columns
-        headers = ["Witness Name", "Role", "Importance", "Observation", "Source Summary", "Source Document", "Contact", "Confidence"]
+        # Group witnesses by name to handle multiple observations
+        from collections import OrderedDict
+        witness_groups = OrderedDict()
+        for w in sorted_witnesses:
+            name = w.get("full_name", "Unknown")
+            if name not in witness_groups:
+                witness_groups[name] = []
+            witness_groups[name].append(w)
+
+        # Table headers - new structure
+        headers = ["Witness Info", "Importance", "Confidence", "Observation", "Source Summary", "Source Document"]
 
         data = [headers]
 
-        for w in sorted_witnesses:
-            # Full observation (no truncation)
-            observation = w.get("observation", "") or ""
-            source_summary = w.get("source_quote", "") or ""  # source_quote column stores source_summary
+        for witness_name, observations in witness_groups.items():
+            first_obs = observations[0]
 
-            # Format source document with page number
-            source_doc = w.get("document_filename", "") or ""
-            source_page = w.get("source_page")
-            if source_page:
-                source_doc = f"{source_doc} (Page {source_page})"
+            # Build witness info: Name, Role, Contact
+            name = first_obs.get("full_name", "Unknown")
+            role = first_obs.get("role", "").replace("_", " ").title()
 
-            # Format contact info as: [address], [phone], and [email]
+            # Format contact info
             contact_parts = []
-            if w.get("address"):
-                contact_parts.append(w["address"])
-            if w.get("phone"):
-                contact_parts.append(w["phone"])
-            if w.get("email"):
-                contact_parts.append(w["email"])
+            if first_obs.get("address"):
+                contact_parts.append(first_obs["address"])
+            if first_obs.get("phone"):
+                contact_parts.append(first_obs["phone"])
+            if first_obs.get("email"):
+                contact_parts.append(first_obs["email"])
 
             if contact_parts:
-                if len(contact_parts) == 1:
-                    contact = contact_parts[0]
-                elif len(contact_parts) == 2:
-                    contact = f"{contact_parts[0]} and {contact_parts[1]}"
-                else:
-                    contact = f"{contact_parts[0]}, {contact_parts[1]}, and {contact_parts[2]}"
+                contact_str = ", ".join(contact_parts)
             else:
-                contact = "Contact info unknown at this time"
+                contact_str = "Contact info unknown at this time"
 
-            # Format confidence
-            confidence = f"{w.get('confidence_score', 0) * 100:.0f}%"
+            # Combined witness info
+            witness_info = f"{name}, {role}, {contact_str}"
 
-            row = [
-                Paragraph(w.get("full_name", "Unknown"), self.styles["WitnessName"]),
-                w.get("role", "").replace("_", " ").title(),
-                w.get("importance", "LOW"),
-                Paragraph(observation, self.styles["Observation"]),
-                Paragraph(source_summary, self.styles["Observation"]),
-                Paragraph(source_doc, self.styles["Observation"]),
-                Paragraph(contact, self.styles["Observation"]),
-                confidence
-            ]
-            data.append(row)
+            # Add rows for each observation
+            for idx, w in enumerate(observations):
+                observation = w.get("observation", "") or ""
+                source_summary = w.get("source_quote", "") or ""  # source_quote column stores source_summary
 
-        # Create table - adjusted column widths for 8 columns
-        col_widths = [1.1 * inch, 0.7 * inch, 0.6 * inch, 2 * inch, 1.5 * inch, 1.2 * inch, 1.8 * inch, 0.5 * inch]
+                # Format source document with page number
+                source_doc = w.get("document_filename", "") or ""
+                source_page = w.get("source_page")
+                if source_page:
+                    source_doc = f"{source_doc} (Page {source_page})"
+
+                # Format confidence
+                confidence = f"{w.get('confidence_score', 0) * 100:.0f}%"
+
+                if idx == 0:
+                    # First row - include all info
+                    row = [
+                        Paragraph(witness_info, self.styles["Observation"]),
+                        w.get("importance", "LOW"),
+                        confidence,
+                        Paragraph(observation, self.styles["Observation"]),
+                        Paragraph(source_summary, self.styles["Observation"]),
+                        Paragraph(source_doc, self.styles["Observation"])
+                    ]
+                else:
+                    # Subsequent rows - leave columns 1-3 blank
+                    row = [
+                        "",  # Witness Info
+                        "",  # Importance
+                        "",  # Confidence
+                        Paragraph(observation, self.styles["Observation"]),
+                        Paragraph(source_summary, self.styles["Observation"]),
+                        Paragraph(source_doc, self.styles["Observation"])
+                    ]
+                data.append(row)
+
+        # Create table - adjusted column widths for 6 columns
+        col_widths = [2.5 * inch, 0.7 * inch, 0.7 * inch, 2.5 * inch, 2 * inch, 1.5 * inch]
 
         table = Table(data, colWidths=col_widths, repeatRows=1)
 
@@ -327,8 +351,8 @@ class ExportService:
             # Body
             ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
             ("FONTSIZE", (0, 1), (-1, -1), 8),
-            ("ALIGN", (2, 1), (2, -1), "CENTER"),  # Importance centered
-            ("ALIGN", (7, 1), (7, -1), "CENTER"),  # Confidence centered
+            ("ALIGN", (1, 1), (1, -1), "CENTER"),  # Importance centered (column 1)
+            ("ALIGN", (2, 1), (2, -1), "CENTER"),  # Confidence centered (column 2)
 
             # Grid
             ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
@@ -341,15 +365,18 @@ class ExportService:
             ("RIGHTPADDING", (0, 0), (-1, -1), 4),
         ])
 
-        # Add row colors based on importance
-        for i, w in enumerate(witnesses, start=1):
-            importance = w.get("importance", "LOW")
-            if importance == "HIGH":
-                style.add("BACKGROUND", (0, i), (-1, i), colors.HexColor("#FFE6E6"))
-            elif importance == "MEDIUM":
-                style.add("BACKGROUND", (0, i), (-1, i), colors.HexColor("#FFF9E6"))
-            else:
-                style.add("BACKGROUND", (0, i), (-1, i), colors.HexColor("#E6FFE6"))
+        # Add row colors based on importance - track which rows belong to which witness
+        row_num = 1
+        for witness_name, observations in witness_groups.items():
+            importance = observations[0].get("importance", "LOW").upper()
+            for _ in observations:
+                if importance == "HIGH":
+                    style.add("BACKGROUND", (0, row_num), (-1, row_num), colors.HexColor("#FFE6E6"))
+                elif importance == "MEDIUM":
+                    style.add("BACKGROUND", (0, row_num), (-1, row_num), colors.HexColor("#FFF9E6"))
+                else:
+                    style.add("BACKGROUND", (0, row_num), (-1, row_num), colors.HexColor("#E6FFE6"))
+                row_num += 1
 
         table.setStyle(style)
         elements.append(table)
