@@ -171,6 +171,13 @@ async def list_jobs(
     result = await db.execute(query)
     jobs = result.scalars().all()
 
+    # Debug: Log progress for active jobs
+    import logging
+    logger = logging.getLogger(__name__)
+    for j in jobs:
+        if j.status in (JobStatus.PENDING, JobStatus.PROCESSING):
+            logger.info(f"=== API RETURNING JOB {j.id} === status={j.status.value}, processed={j.processed_documents}/{j.total_documents}")
+
     return JobListResponse(
         jobs=[_job_to_response(j) for j in jobs],
         total=total

@@ -307,10 +307,15 @@ async def process_matter(
         legal_authority_folder_id = request.legal_authority_folder_id
         include_subfolders = request.include_subfolders
 
-    # Count existing documents for this matter to show initial progress in progress bar
-    initial_doc_count = await db.scalar(
-        select(func.count()).select_from(Document).where(Document.matter_id == matter_id)
-    ) or 0
+    # Count existing documents for initial progress bar display
+    # Only count if scanning all documents in matter (no folder selected)
+    # If a specific folder is selected, we can't know the count until worker queries Clio
+    if scan_folder_id:
+        initial_doc_count = 0  # Worker will set accurate count after querying Clio
+    else:
+        initial_doc_count = await db.scalar(
+            select(func.count()).select_from(Document).where(Document.matter_id == matter_id)
+        ) or 0
 
     # Create job record with initial document count (job_number will be assigned after)
     job = ProcessingJob(
@@ -318,7 +323,7 @@ async def process_matter(
         job_type="single_matter",
         target_matter_id=matter_id,
         status=JobStatus.PENDING,
-        total_documents=initial_doc_count  # Set initial count for progress bar
+        total_documents=initial_doc_count  # Worker will update with accurate count
     )
     db.add(job)
     await db.flush()  # Flush to get the job ID without committing
@@ -346,6 +351,7 @@ async def process_matter(
 
     return {
         "id": job.id,
+        "job_number": job.job_number,
         "status": job.status.value,
         "message": f"Processing started for matter {matter.display_number}"
     }

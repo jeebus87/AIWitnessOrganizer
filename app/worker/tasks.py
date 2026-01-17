@@ -248,6 +248,7 @@ async def _process_single_document_async(
                     {"job_id": job_id}
                 )
                 await session.commit()
+                logger.info(f"=== PROGRESS UPDATE === Job {job_id}: incremented processed_documents (doc {document_id} SUCCESS)")
 
             # Clean up memory after successful processing
             del content
@@ -276,6 +277,7 @@ async def _process_single_document_async(
                     {"job_id": job_id}
                 )
                 await session.commit()
+                logger.info(f"=== PROGRESS UPDATE === Job {job_id}: incremented processed_documents (doc {document_id} FAILED)")
 
             # Clean up memory even on error
             gc.collect()
@@ -364,7 +366,14 @@ async def _process_matter_async(
             access_token = decrypt_token(clio_integration.access_token_encrypted)
             refresh_token = decrypt_token(clio_integration.refresh_token_encrypted)
 
-            logger.info(f"Syncing documents for matter {matter_id} from Clio...")
+            logger.info(f"=== PROCESSING MATTER ===")
+            logger.info(f"  Database matter_id: {matter_id}")
+            logger.info(f"  Clio matter_id: {matter.clio_matter_id}")
+            logger.info(f"  Matter description: {matter.description}")
+            logger.info(f"  Job ID: {job_id}")
+            logger.info(f"  scan_folder_id: {scan_folder_id}")
+            logger.info(f"  legal_authority_folder_id: {legal_authority_folder_id}")
+            logger.info(f"  include_subfolders: {include_subfolders}")
             if scan_folder_id:
                 logger.info(f"Scanning specific folder: {scan_folder_id}, include_subfolders={include_subfolders}")
             if legal_authority_folder_id:
@@ -376,7 +385,8 @@ async def _process_matter_async(
                 token_expires_at=clio_integration.token_expires_at,
                 region=clio_integration.clio_region
             ) as clio:
-                # Sync documents for this matter from Clio
+                # Track document IDs to process (only documents from selected folder/scope)
+                document_ids_to_process = []
                 docs_synced = 0
 
                 # Determine which documents to sync based on folder selection
@@ -420,10 +430,14 @@ async def _process_matter_async(
                             etag=doc_data.get("etag")
                         )
                         session.add(doc)
+                        await session.flush()  # Get the doc.id
                         docs_synced += 1
 
+                    # Track this document ID for processing (whether new or existing)
+                    document_ids_to_process.append(doc.id)
+
                 await session.commit()
-                logger.info(f"Synced {docs_synced} new documents for matter {matter_id}")
+                logger.info(f"Synced {docs_synced} new documents, {len(document_ids_to_process)} total to process for matter {matter_id}")
 
                 # Process Legal Authority folder if specified
                 legal_context = ""
@@ -469,14 +483,26 @@ async def _process_matter_async(
                     if legal_context:
                         logger.info(f"Retrieved legal context: {len(legal_context)} chars")
 
-            # Get all documents for this matter (now including newly synced ones)
-            result = await session.execute(
-                select(Document).where(Document.matter_id == matter_id)
-            )
-            documents = result.scalars().all()
+            # Get only the documents that were found in the selected folder/scope
+            # This ensures we only process what the user selected, not all documents in the matter
+            if document_ids_to_process:
+                result = await session.execute(
+                    select(Document).where(Document.id.in_(document_ids_to_process))
+                )
+                documents = result.scalars().all()
+            else:
+                documents = []
+
+            logger.info(f"=== DOCUMENT COUNT UPDATE ===")
+            logger.info(f"  Job ID: {job_id}")
+            logger.info(f"  Database matter_id: {matter_id}")
+            logger.info(f"  scan_folder_id: {scan_folder_id}")
+            logger.info(f"  Documents to process: {len(documents)} (from {len(document_ids_to_process)} IDs)")
+            logger.info(f"  Setting job.total_documents = {len(documents)}")
 
             job.total_documents = len(documents)
             await session.commit()
+            logger.info(f"  Committed total_documents update to database")
 
             if not documents:
                 job.status = JobStatus.COMPLETED

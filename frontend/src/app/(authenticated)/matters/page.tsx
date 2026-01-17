@@ -159,7 +159,7 @@ export default function MattersPage() {
         legal_authority_folder_id: options.legalAuthorityFolderId,
         include_subfolders: options.includeSubfolders,
       });
-      toast.success(`Processing job started (ID: ${job.id})`);
+      toast.success(`Processing started - Job #${job.job_number}`);
       router.push("/jobs");
     } catch (error) {
       toast.error("Failed to start processing");
