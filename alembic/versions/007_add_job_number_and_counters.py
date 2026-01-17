@@ -16,22 +16,51 @@ branch_labels = None
 depends_on = None
 
 
+def column_exists(conn, table_name, column_name):
+    """Check if a column exists in a table."""
+    result = conn.execute(text(f"""
+        SELECT EXISTS(
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = '{table_name}' AND column_name = '{column_name}'
+        )
+    """))
+    return result.scalar()
+
+
+def table_exists(conn, table_name):
+    """Check if a table exists in the database."""
+    result = conn.execute(text(f"""
+        SELECT EXISTS(
+            SELECT 1 FROM information_schema.tables WHERE table_name = '{table_name}'
+        )
+    """))
+    return result.scalar()
+
+
+def index_exists(conn, index_name):
+    """Check if an index exists in the database."""
+    result = conn.execute(text(f"""
+        SELECT EXISTS(
+            SELECT 1 FROM pg_indexes WHERE indexname = '{index_name}'
+        )
+    """))
+    return result.scalar()
+
+
 def upgrade() -> None:
-    # Add job_number column to processing_jobs
-    op.add_column('processing_jobs', sa.Column('job_number', sa.Integer(), nullable=True))
-    op.create_index('ix_processing_jobs_job_number', 'processing_jobs', ['job_number'])
+    conn = op.get_bind()
+
+    # Add job_number column to processing_jobs if it doesn't exist
+    if not column_exists(conn, 'processing_jobs', 'job_number'):
+        op.add_column('processing_jobs', sa.Column('job_number', sa.Integer(), nullable=True))
+
+    # Create index if it doesn't exist
+    if not index_exists(conn, 'ix_processing_jobs_job_number'):
+        op.create_index('ix_processing_jobs_job_number', 'processing_jobs', ['job_number'])
 
     # Create organization_job_counters table if it doesn't exist
     # (It may have been created in migration 005)
-    conn = op.get_bind()
-    result = conn.execute(text("""
-        SELECT EXISTS(
-            SELECT 1 FROM information_schema.tables WHERE table_name = 'organization_job_counters'
-        )
-    """))
-    table_exists = result.scalar()
-
-    if not table_exists:
+    if not table_exists(conn, 'organization_job_counters'):
         op.create_table(
             'organization_job_counters',
             sa.Column('organization_id', sa.Integer(), nullable=False),
