@@ -286,7 +286,7 @@ class ExportService:
 
             # Set column widths - matching PDF proportions
             # Witness Info, Importance, Confidence, Observation, Source Summary, Source Document
-            col_widths = [40, 12, 12, 40, 30, 25]
+            col_widths = [35, 12, 12, 45, 35, 30]
             for idx, width in enumerate(col_widths):
                 if idx < len(df.columns):
                     worksheet.set_column(idx, idx, width)
@@ -551,8 +551,8 @@ class ExportService:
 
         # Create table - adjusted column widths for 6 columns
         # Landscape LETTER = 11" wide, minus 1" margins = 10" available
-        # Witness Info: 2.2", Importance: 0.65", Confidence: 0.65", Observation: 2.8", Source Summary: 2.0", Source Document: 1.7"
-        col_widths = [2.2 * inch, 0.65 * inch, 0.65 * inch, 2.8 * inch, 2.0 * inch, 1.7 * inch]
+        # Balance widths to prevent squished columns
+        col_widths = [2.0 * inch, 0.85 * inch, 0.85 * inch, 2.5 * inch, 2.0 * inch, 1.8 * inch]
 
         table = Table(data, colWidths=col_widths, repeatRows=1, splitByRow=True)
 
