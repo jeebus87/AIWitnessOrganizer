@@ -145,7 +145,8 @@ class LegalAuthorityService:
                 embedding = await self._get_embedding(chunk_text)
 
                 if embedding:
-                    # Insert chunk with embedding using raw SQL (pgvector)
+                    # Insert chunk with embedding as JSON text (fallback for no pgvector)
+                    embedding_json = json.dumps(embedding)
                     await db.execute(
                         text("""
                             INSERT INTO legal_authority_chunks
@@ -156,7 +157,7 @@ class LegalAuthorityService:
                             "legal_authority_id": legal_auth.id,
                             "chunk_index": idx,
                             "chunk_text": chunk_text,
-                            "embedding": f"[{','.join(map(str, embedding))}]"
+                            "embedding": embedding_json
                         }
                     )
 
@@ -175,6 +176,16 @@ class LegalAuthorityService:
             await db.commit()
             return None
 
+    def _cosine_similarity(self, a: List[float], b: List[float]) -> float:
+        """Compute cosine similarity between two vectors"""
+        import math
+        dot_product = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(x * x for x in b))
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot_product / (norm_a * norm_b)
+
     async def get_relevant_legal_context(
         self,
         db: AsyncSession,
@@ -191,8 +202,8 @@ class LegalAuthorityService:
             return []
 
         try:
-            # Similarity search using pgvector
-            # Uses cosine distance (1 - cosine_similarity)
+            # Fallback: Load all chunks and compute similarity in Python
+            # (Since pgvector is not available on Railway)
             result = await db.execute(
                 text("""
                     SELECT
@@ -200,33 +211,38 @@ class LegalAuthorityService:
                         lac.chunk_text,
                         lac.chunk_index,
                         la.filename,
-                        1 - (lac.embedding <=> :query_embedding::vector) as similarity
+                        lac.embedding
                     FROM legal_authority_chunks lac
                     JOIN legal_authorities la ON lac.legal_authority_id = la.id
                     WHERE la.matter_id = :matter_id
                         AND la.is_processed = true
-                    ORDER BY lac.embedding <=> :query_embedding::vector
-                    LIMIT :limit
+                        AND lac.embedding IS NOT NULL
                 """),
-                {
-                    "query_embedding": f"[{','.join(map(str, query_embedding))}]",
-                    "matter_id": matter_id,
-                    "limit": limit
-                }
+                {"matter_id": matter_id}
             )
 
             rows = result.fetchall()
 
-            return [
-                {
-                    "id": row[0],
-                    "text": row[1],
-                    "chunk_index": row[2],
-                    "filename": row[3],
-                    "similarity": float(row[4]) if row[4] else 0.0
-                }
-                for row in rows
-            ]
+            # Compute similarities in Python
+            chunks_with_similarity = []
+            for row in rows:
+                try:
+                    chunk_embedding = json.loads(row[4]) if row[4] else None
+                    if chunk_embedding:
+                        similarity = self._cosine_similarity(query_embedding, chunk_embedding)
+                        chunks_with_similarity.append({
+                            "id": row[0],
+                            "text": row[1],
+                            "chunk_index": row[2],
+                            "filename": row[3],
+                            "similarity": similarity
+                        })
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+            # Sort by similarity and return top results
+            chunks_with_similarity.sort(key=lambda x: x["similarity"], reverse=True)
+            return chunks_with_similarity[:limit]
 
         except Exception as e:
             logger.error(f"Failed to search legal context: {e}")
