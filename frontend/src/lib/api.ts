@@ -153,6 +153,38 @@ class ApiClient {
       token,
     });
   }
+
+  async createSubscriptionCheckout(token: string, userCount: number = 1) {
+    return this.request<{ url: string }>("/api/v1/billing/checkout", {
+      method: "POST",
+      token,
+      body: { user_count: userCount },
+    });
+  }
+
+  async createTopupCheckout(token: string, packageId: string) {
+    return this.request<{ url: string }>("/api/v1/billing/credits/topup", {
+      method: "POST",
+      token,
+      body: { package: packageId },
+    });
+  }
+
+  async getCredits(token: string) {
+    return this.request<CreditInfo>("/api/v1/billing/credits", { token });
+  }
+
+  async getSubscriptionStatus(token: string) {
+    return this.request<SubscriptionStatus>("/api/v1/billing/status", { token });
+  }
+
+  async updateOrganizationName(token: string, name: string) {
+    return this.request<{ id: number; name: string; updated: boolean }>("/api/v1/billing/organization/name", {
+      method: "PUT",
+      token,
+      body: { name },
+    });
+  }
 }
 
 // Types
@@ -226,13 +258,42 @@ export interface WitnessFilters {
   search?: string;
 }
 
+export interface Organization {
+  id: number;
+  name: string;
+  subscription_status: string;
+  subscription_tier: string;
+  user_count: number;
+  bonus_credits: number;
+  current_period_end: string | null;
+}
+
 export interface UserProfile {
   id: number;
   email: string;
   display_name: string;
   subscription_tier: string;
+  is_admin: boolean;
   clio_connected: boolean;
   created_at: string;
+  organization: Organization | null;
+}
+
+export interface CreditInfo {
+  daily_remaining: number;
+  bonus_remaining: number;
+  is_paid: boolean;
+  unlimited: boolean;
+}
+
+export interface SubscriptionStatus {
+  status: string;
+  tier: string;
+  is_admin: boolean;
+  user_count: number;
+  organization_name: string | null;
+  current_period_end: string | null;
+  bonus_credits: number;
 }
 
 // Paginated response types

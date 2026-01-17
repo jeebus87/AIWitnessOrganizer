@@ -29,7 +29,7 @@ export function Header() {
             <div className="container mx-auto px-4 h-16 flex items-center justify-between">
                 <Link href="/" className="flex items-center space-x-2">
                     <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400">
-                        AI Witness Finder
+                        AI Witness Organizer
                     </span>
                 </Link>
 

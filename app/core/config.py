@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     stripe_secret_key: Optional[str] = None
     stripe_publishable_key: Optional[str] = None
     stripe_webhook_secret: Optional[str] = None
+    stripe_price_id_monthly: Optional[str] = None  # PLACEHOLDER - Firm plan monthly price
+    stripe_price_id_topup_10: Optional[str] = None  # PLACEHOLDER - 10 credits for $4.99
+    stripe_price_id_topup_25: Optional[str] = None  # PLACEHOLDER - 25 credits for $12.49
+    stripe_price_id_topup_50: Optional[str] = None  # PLACEHOLDER - 50 credits for $24.99
 
     # Encryption
     fernet_key: str = ""

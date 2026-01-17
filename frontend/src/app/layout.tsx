@@ -8,7 +8,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "AI Witness Finder",
+  title: "AI Witness Organizer",
   description: "Automated Legal Witness Extraction System",
 };
 

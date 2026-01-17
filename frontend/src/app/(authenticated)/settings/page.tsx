@@ -1,6 +1,7 @@
 "use client";
 
-import { ExternalLink, CheckCircle } from "lucide-react";
+import { useState, useEffect } from "react";
+import { ExternalLink, CheckCircle, Edit2, Save, X, CreditCard, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -11,73 +12,203 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
 import { useAuthStore } from "@/store/auth";
+import { toast } from "sonner";
+
+// Top-up packages
+const TOPUP_PACKAGES = [
+  { id: "small", credits: 10, price: "$4.99", perCredit: "$0.50" },
+  { id: "medium", credits: 25, price: "$12.49", perCredit: "$0.50" },
+  { id: "large", credits: 50, price: "$24.99", perCredit: "$0.50" },
+];
 
 export default function SettingsPage() {
-  const { userProfile, token } = useAuthStore();
+  const { userProfile, token, fetchUserProfile } = useAuthStore();
+  const [isEditingFirmName, setIsEditingFirmName] = useState(false);
+  const [firmName, setFirmName] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [credits, setCredits] = useState<{
+    daily_remaining: number;
+    bonus_remaining: number;
+    is_paid: boolean;
+    unlimited: boolean;
+  } | null>(null);
+
+  const isAdmin = userProfile?.is_admin || false;
+  const organization = userProfile?.organization;
+
+  // Fetch credits on mount
+  useEffect(() => {
+    const fetchCredits = async () => {
+      if (!token) return;
+      try {
+        const api = await import("@/lib/api").then((m) => m.api);
+        const data = await api.getCredits(token);
+        setCredits(data);
+      } catch (e) {
+        console.error("Failed to fetch credits:", e);
+      }
+    };
+    fetchCredits();
+  }, [token]);
+
+  // Initialize firm name
+  useEffect(() => {
+    if (organization?.name) {
+      setFirmName(organization.name);
+    }
+  }, [organization?.name]);
+
+  const handleSaveFirmName = async () => {
+    if (!token || !firmName.trim()) return;
+    setIsSaving(true);
+    try {
+      const api = await import("@/lib/api").then((m) => m.api);
+      await api.updateOrganizationName(token, firmName.trim());
+      await fetchUserProfile();
+      setIsEditingFirmName(false);
+      toast.success("Firm name updated");
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to update firm name");
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const handlePortal = async () => {
     if (!token) return;
     try {
-      const { url } = await import("@/lib/api").then(m => m.api.createPortalSession(token));
+      const api = await import("@/lib/api").then((m) => m.api);
+      const { url } = await api.createPortalSession(token);
       window.location.href = url;
     } catch (e) {
       console.error(e);
-      // toast.error("Failed to access billing portal");
+      toast.error("Failed to access billing portal");
     }
   };
 
-  const handleUpgrade = async () => {
+  const handleSubscribe = async () => {
     if (!token) return;
     try {
-      // Replace with actual Stripe Price ID from env or constants
-      const priceId = "price_1SpkLsBS2VKrUF7RJJty99ye";
-      const { url } = await import("@/lib/api").then(m => m.api.createCheckoutSession(token, priceId));
+      const api = await import("@/lib/api").then((m) => m.api);
+      const userCount = organization?.user_count || 1;
+      const { url } = await api.createSubscriptionCheckout(token, userCount);
       window.location.href = url;
     } catch (e) {
       console.error(e);
+      toast.error("Failed to start checkout");
     }
   };
+
+  const handleTopup = async (packageId: string) => {
+    if (!token || !isAdmin) return;
+    try {
+      const api = await import("@/lib/api").then((m) => m.api);
+      const { url } = await api.createTopupCheckout(token, packageId);
+      window.location.href = url;
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to start checkout");
+    }
+  };
+
+  const isPaidPlan = organization?.subscription_tier === "firm" || organization?.subscription_status === "active";
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
         <p className="text-muted-foreground">
-          Manage your account and integrations
+          Manage your firm and billing settings
         </p>
       </div>
 
       <div className="grid gap-6">
+        {/* Firm Information */}
         <Card>
           <CardHeader>
-            <CardTitle>Account</CardTitle>
-            <CardDescription>Your account information</CardDescription>
+            <CardTitle>Firm Information</CardTitle>
+            <CardDescription>Your law firm details</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-2">
-              <div className="text-sm font-medium">Email</div>
-              <div className="text-muted-foreground">{userProfile?.email || "—"}</div>
+              <div className="text-sm font-medium">Firm Name</div>
+              {isEditingFirmName ? (
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={firmName}
+                    onChange={(e) => setFirmName(e.target.value)}
+                    className="max-w-xs"
+                    placeholder="Enter firm name"
+                  />
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={handleSaveFirmName}
+                    disabled={isSaving}
+                  >
+                    {isSaving ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Save className="h-4 w-4" />
+                    )}
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => {
+                      setIsEditingFirmName(false);
+                      setFirmName(organization?.name || "");
+                    }}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">
+                    {organization?.name || "Not set"}
+                  </span>
+                  {isAdmin && (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-6 w-6"
+                      onClick={() => setIsEditingFirmName(true)}
+                    >
+                      <Edit2 className="h-3 w-3" />
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
             <Separator />
             <div className="grid gap-2">
-              <div className="text-sm font-medium">Display Name</div>
+              <div className="text-sm font-medium">Your Name</div>
               <div className="text-muted-foreground">
                 {userProfile?.display_name || "Not set"}
               </div>
             </div>
             <Separator />
             <div className="grid gap-2">
-              <div className="text-sm font-medium">Subscription</div>
+              <div className="text-sm font-medium">Email</div>
+              <div className="text-muted-foreground">{userProfile?.email || "—"}</div>
+            </div>
+            <Separator />
+            <div className="grid gap-2">
+              <div className="text-sm font-medium">Role</div>
               <div>
-                <Badge variant="secondary" className="capitalize">
-                  {userProfile?.subscription_tier || "Free"}
+                <Badge variant={isAdmin ? "default" : "secondary"}>
+                  {isAdmin ? "Admin" : "Member"}
                 </Badge>
               </div>
             </div>
           </CardContent>
         </Card>
 
+        {/* Clio Integration */}
         <Card>
           <CardHeader>
             <CardTitle>Clio Integration</CardTitle>
@@ -112,42 +243,116 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
+        {/* Report Credits */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Report Credits</CardTitle>
+            <CardDescription>
+              Credits are used when generating witness reports
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="rounded-lg border p-4">
+                <div className="text-2xl font-bold">
+                  {credits?.unlimited ? "∞" : credits?.daily_remaining ?? "—"}
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  {credits?.unlimited ? "Unlimited (Firm Plan)" : "Daily Credits Remaining"}
+                </div>
+              </div>
+              <div className="rounded-lg border p-4">
+                <div className="text-2xl font-bold">
+                  {organization?.bonus_credits ?? credits?.bonus_remaining ?? 0}
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  Bonus Credits
+                </div>
+              </div>
+            </div>
+
+            {!isPaidPlan && (
+              <div className="text-sm text-muted-foreground">
+                Free plan includes {10} reports per user per day. Upgrade to Firm Plan for unlimited reports.
+              </div>
+            )}
+
+            {/* Top-up Section (Admin only) */}
+            {isAdmin && (
+              <>
+                <Separator />
+                <div>
+                  <div className="font-medium mb-3">Buy More Credits</div>
+                  <div className="grid grid-cols-3 gap-3">
+                    {TOPUP_PACKAGES.map((pkg) => (
+                      <button
+                        key={pkg.id}
+                        onClick={() => handleTopup(pkg.id)}
+                        className="rounded-lg border p-3 text-center hover:border-primary hover:bg-primary/5 transition-colors"
+                      >
+                        <div className="text-lg font-bold">{pkg.credits}</div>
+                        <div className="text-xs text-muted-foreground">credits</div>
+                        <div className="text-sm font-medium mt-1">{pkg.price}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Subscription */}
         <Card>
           <CardHeader>
             <CardTitle>Subscription</CardTitle>
             <CardDescription>
-              Manage your subscription and billing
+              Manage your firm&apos;s subscription and billing
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="rounded-lg border p-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="font-medium capitalize">
-                    {userProfile?.subscription_tier || "Free"} Plan
+                  <div className="font-medium capitalize flex items-center gap-2">
+                    {isPaidPlan ? "Firm Plan" : "Free Plan"}
+                    <Badge variant={isPaidPlan ? "default" : "secondary"}>
+                      {organization?.subscription_status || "free"}
+                    </Badge>
                   </div>
                   <div className="text-sm text-muted-foreground">
-                    {userProfile?.subscription_tier === "free"
-                      ? "Limited features and processing"
-                      : `Full access to all features`}
+                    {isPaidPlan
+                      ? `${organization?.user_count || 1} user(s) • $29.99/user/month`
+                      : "10 reports per user per day"}
                   </div>
+                  {organization?.current_period_end && isPaidPlan && (
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Renews: {new Date(organization.current_period_end).toLocaleDateString()}
+                    </div>
+                  )}
                 </div>
-                {userProfile?.subscription_tier === "free" ? (
-                  <Button onClick={handleUpgrade}>
-                    Upgrade to Pro
-                  </Button>
-                ) : (
-                  <Button variant="outline" onClick={handlePortal}>
-                    <ExternalLink className="mr-2 h-4 w-4" />
-                    Manage Billing
-                  </Button>
+                {isAdmin && (
+                  <>
+                    {isPaidPlan ? (
+                      <Button variant="outline" onClick={handlePortal}>
+                        <ExternalLink className="mr-2 h-4 w-4" />
+                        Manage Billing
+                      </Button>
+                    ) : (
+                      <Button onClick={handleSubscribe}>
+                        <CreditCard className="mr-2 h-4 w-4" />
+                        Upgrade to Firm
+                      </Button>
+                    )}
+                  </>
                 )}
               </div>
             </div>
-            <div className="text-sm text-muted-foreground">
-              Need more processing power? Upgrade to a higher tier for unlimited
-              document processing and priority support.
-            </div>
+            {!isAdmin && (
+              <div className="text-sm text-muted-foreground">
+                Contact your firm administrator to manage billing.
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

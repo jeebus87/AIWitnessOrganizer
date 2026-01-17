@@ -41,7 +41,7 @@ export default function LoginPage() {
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
             <Users className="h-6 w-6 text-primary" />
           </div>
-          <CardTitle className="text-2xl">AI Witness Finder</CardTitle>
+          <CardTitle className="text-2xl">AI Witness Organizer</CardTitle>
           <CardDescription>
             Automated Legal Witness Extraction System
           </CardDescription>
@@ -71,7 +71,7 @@ export default function LoginPage() {
             Sign in with Clio
           </Button>
           <p className="text-center text-xs text-muted-foreground">
-            By signing in, you agree to allow AI Witness Finder to access your
+            By signing in, you agree to allow AI Witness Organizer to access your
             Clio matters and documents for witness extraction.
           </p>
         </CardContent>

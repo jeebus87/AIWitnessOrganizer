@@ -46,10 +46,57 @@ class WitnessRole(str, PyEnum):
 
 
 class ImportanceLevel(str, PyEnum):
-    """Importance classification for witnesses"""
+    """Importance classification for witnesses (legacy - use RelevanceLevel)"""
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+
+
+class RelevanceLevel(str, PyEnum):
+    """Relevance classification for witnesses based on legal claims"""
+    HIGHLY_RELEVANT = "highly_relevant"
+    RELEVANT = "relevant"
+    SOMEWHAT_RELEVANT = "somewhat_relevant"
+    NOT_RELEVANT = "not_relevant"
+
+
+class Organization(Base):
+    """Law firm organization for multi-user billing"""
+    __tablename__ = "organizations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)  # Firm name
+    clio_account_id = Column(String(128), unique=True, nullable=True, index=True)
+
+    # Stripe billing
+    stripe_customer_id = Column(String(255), nullable=True, unique=True)
+    stripe_subscription_id = Column(String(255), nullable=True, unique=True)
+
+    # Subscription status
+    subscription_status = Column(String(50), default="free", nullable=False)  # free, active, past_due, canceled
+    subscription_tier = Column(String(50), default="free", nullable=False)  # free, firm
+    user_count = Column(Integer, default=1, nullable=False)  # Billable users
+    current_period_end = Column(DateTime, nullable=True)
+
+    # Bonus credits from top-ups (shared across org)
+    bonus_credits = Column(Integer, default=0, nullable=False)
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    users = relationship("User", back_populates="organization")
+    job_counter = relationship("OrganizationJobCounter", back_populates="organization", uselist=False)
+
+
+class OrganizationJobCounter(Base):
+    """Atomic job counter per organization for sequential job numbers"""
+    __tablename__ = "organization_job_counters"
+
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True)
+    job_counter = Column(Integer, default=0, nullable=False)
+
+    organization = relationship("Organization", back_populates="job_counter")
 
 
 class User(Base):
@@ -60,6 +107,12 @@ class User(Base):
     clio_user_id = Column(String(128), unique=True, nullable=False, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
     display_name = Column(String(255), nullable=True)
+
+    # Organization (firm) membership
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    is_admin = Column(Boolean, default=False, nullable=False)  # Can make purchases for org
+
+    # Legacy fields (subscription now on Organization)
     subscription_tier = Column(
         Enum(SubscriptionTier),
         default=SubscriptionTier.FREE,
@@ -67,14 +120,17 @@ class User(Base):
     )
     stripe_customer_id = Column(String(255), nullable=True)
     stripe_subscription_id = Column(String(255), nullable=True)
+
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     # Relationships
+    organization = relationship("Organization", back_populates="users")
     clio_integration = relationship("ClioIntegration", back_populates="user", uselist=False)
     matters = relationship("Matter", back_populates="user")
     processing_jobs = relationship("ProcessingJob", back_populates="user")
+    credit_usage = relationship("ReportCreditUsage", back_populates="user")
 
 
 class ClioIntegration(Base):
@@ -173,7 +229,11 @@ class Witness(Base):
     # Core witness info
     full_name = Column(String(255), nullable=False, index=True)
     role = Column(Enum(WitnessRole), nullable=False)
-    importance = Column(Enum(ImportanceLevel), nullable=False)
+    importance = Column(Enum(ImportanceLevel), nullable=False)  # Legacy - use relevance instead
+
+    # New relevance scoring with legal reasoning
+    relevance = Column(Enum(RelevanceLevel), nullable=True, default=RelevanceLevel.RELEVANT)
+    relevance_reason = Column(Text, nullable=True)  # Legal reasoning tied to claims/defenses
 
     # Extracted details
     observation = Column(Text, nullable=True)  # What they saw/testified
@@ -230,3 +290,44 @@ class ProcessingJob(Base):
     # Relationships
     user = relationship("User", back_populates="processing_jobs")
     target_matter = relationship("Matter")
+
+
+class ReportCreditUsage(Base):
+    """Daily report credit usage tracking per user"""
+    __tablename__ = "report_credit_usage"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
+    date = Column(DateTime, nullable=False, index=True)  # Date of usage
+    credits_used = Column(Integer, default=0, nullable=False)
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    # Composite unique constraint: one record per user per day
+    __table_args__ = (
+        Index("ix_credit_usage_user_date", "user_id", "date", unique=True),
+    )
+
+    # Relationships
+    user = relationship("User", back_populates="credit_usage")
+    organization = relationship("Organization")
+
+
+class CreditPurchase(Base):
+    """Record of credit top-up purchases"""
+    __tablename__ = "credit_purchases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    purchased_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    stripe_payment_intent_id = Column(String(255), nullable=True, unique=True)
+    credits_purchased = Column(Integer, nullable=False)
+    amount_cents = Column(Integer, nullable=False)  # Amount paid in cents
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    # Relationships
+    organization = relationship("Organization")
+    purchased_by = relationship("User")

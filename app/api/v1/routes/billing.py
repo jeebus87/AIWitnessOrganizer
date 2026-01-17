@@ -1,76 +1,201 @@
-"""Billing routes for Stripe"""
+"""Billing routes for Stripe subscriptions and credits"""
 import structlog
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from app.core.config import settings
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.db.models import User
-from app.services.stripe_service import (
-    create_stripe_customer,
-    create_checkout_session,
-    create_portal_session
-)
+from app.services.subscription_service import SubscriptionService
+from app.services.credit_service import CreditService
 import stripe
 
 logger = structlog.get_logger()
 router = APIRouter(prefix="/billing", tags=["Billing"])
 
 
-@router.post("/create-checkout-session")
-async def create_checkout_session_endpoint(
-    price_id: str,
+# Request/Response models
+class CheckoutRequest(BaseModel):
+    user_count: int = 1
+
+
+class TopupRequest(BaseModel):
+    package: str  # "small", "medium", "large"
+
+
+class UpdateOrgNameRequest(BaseModel):
+    name: str
+
+
+# ============================================================================
+# Subscription Endpoints
+# ============================================================================
+
+@router.get("/status")
+async def get_subscription_status(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Create a Stripe checkout session for the current user.
+    Get current subscription status for the user's organization.
+    """
+    service = SubscriptionService(db)
+    return await service.get_subscription_status(current_user.id)
+
+
+@router.post("/checkout")
+async def create_checkout_session_endpoint(
+    request: CheckoutRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Create a Stripe checkout session for subscription.
+    Only organization admins can subscribe.
     """
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
 
-    # Ensure user has a Stripe Customer ID
-    if not current_user.stripe_customer_id:
-        customer_id = await create_stripe_customer(
-            email=current_user.email,
-            name=current_user.display_name or current_user.email,
-            metadata={"user_id": str(current_user.id)}
-        )
-        current_user.stripe_customer_id = customer_id
-        await db.commit()
-    
-    customer_id = current_user.stripe_customer_id
-    
-    # Create session
-    checkout_url = await create_checkout_session(
-        customer_id=customer_id,
-        price_id=price_id,
-        success_url=f"{settings.frontend_url}/settings?success=true",
-        cancel_url=f"{settings.frontend_url}/settings?canceled=true",
+    service = SubscriptionService(db)
+    checkout_url = await service.create_checkout_session(
+        user_id=current_user.id,
+        user_count=request.user_count,
+        success_url=f"{settings.frontend_url}/settings?subscription=success",
+        cancel_url=f"{settings.frontend_url}/settings?subscription=canceled"
     )
-    
+
     return {"url": checkout_url}
 
 
 @router.post("/portal")
 async def create_portal_session_endpoint(
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
 ):
     """
-    Create a Stripe customer portal session for the current user.
+    Create a Stripe customer portal session.
+    Only organization admins can access the portal.
     """
-    if not current_user.stripe_customer_id:
-        raise HTTPException(status_code=400, detail="No billing account found")
+    if not settings.stripe_secret_key:
+        raise HTTPException(status_code=500, detail="Stripe not configured")
 
-    portal_url = await create_portal_session(
-        customer_id=current_user.stripe_customer_id,
-        return_url=f"{settings.frontend_url}/settings",
+    service = SubscriptionService(db)
+    portal_url = await service.create_portal_session(
+        user_id=current_user.id,
+        return_url=f"{settings.frontend_url}/settings"
     )
-    
+
     return {"url": portal_url}
 
+
+# ============================================================================
+# Credit Endpoints
+# ============================================================================
+
+@router.get("/credits")
+async def get_credits(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get remaining credits for the current user.
+    """
+    service = CreditService(db)
+    return await service.get_remaining_credits(current_user.id)
+
+
+@router.post("/credits/check")
+async def check_and_consume_credit(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Check if user has credits and consume one.
+    Returns success status and remaining credits.
+    """
+    service = CreditService(db)
+    success, credits_info = await service.check_and_consume_credit(current_user.id)
+
+    return {
+        "success": success,
+        "credits": credits_info
+    }
+
+
+@router.get("/credits/history")
+async def get_credit_history(
+    days: int = 30,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get credit usage history for the past N days.
+    """
+    service = CreditService(db)
+    return await service.get_usage_history(current_user.id, days)
+
+
+@router.post("/credits/topup")
+async def create_topup_checkout(
+    request: TopupRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Create a checkout session for credit top-up purchase.
+    Only organization admins can purchase credits.
+
+    Packages:
+    - small: 10 credits for $4.99
+    - medium: 25 credits for $12.49
+    - large: 50 credits for $24.99
+    """
+    if not settings.stripe_secret_key:
+        raise HTTPException(status_code=500, detail="Stripe not configured")
+
+    service = SubscriptionService(db)
+    checkout_url = await service.create_topup_checkout(
+        user_id=current_user.id,
+        package=request.package,
+        success_url=f"{settings.frontend_url}/settings?topup=success",
+        cancel_url=f"{settings.frontend_url}/settings?topup=canceled"
+    )
+
+    return {"url": checkout_url}
+
+
+# ============================================================================
+# Organization Endpoints
+# ============================================================================
+
+@router.put("/organization/name")
+async def update_organization_name(
+    request: UpdateOrgNameRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Update organization name (admin only).
+    """
+    service = SubscriptionService(db)
+    org = await service.update_organization_name(
+        user_id=current_user.id,
+        new_name=request.name
+    )
+
+    return {
+        "id": org.id,
+        "name": org.name,
+        "updated": True
+    }
+
+
+# ============================================================================
+# Stripe Webhook
+# ============================================================================
 
 @router.post("/webhook")
 async def stripe_webhook(
@@ -79,7 +204,7 @@ async def stripe_webhook(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Stripe webhook handler.
+    Stripe webhook handler for subscription and payment events.
     """
     if not settings.stripe_webhook_secret:
         raise HTTPException(status_code=500, detail="Stripe webhook secret not configured")
@@ -95,51 +220,8 @@ async def stripe_webhook(
     except stripe.error.SignatureVerificationError:
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    # Handle the event
-    if event["type"] == "customer.subscription.updated":
-        await handle_subscription_updated(event["data"]["object"], db)
-    elif event["type"] == "customer.subscription.deleted":
-        await handle_subscription_deleted(event["data"]["object"], db)
+    # Handle the event using SubscriptionService
+    service = SubscriptionService(db)
+    await service.handle_webhook_event(event)
 
     return {"status": "success"}
-
-
-async def handle_subscription_updated(subscription, db: AsyncSession):
-    """
-    Update user subscription status.
-    """
-    customer_id = subscription["customer"]
-    status = subscription["status"]
-    # Logic to map price/product to internal tier
-    # For now, if active, assume professional
-    
-    result = await db.execute(
-        select(User).where(User.stripe_customer_id == customer_id)
-    )
-    user = result.scalar_one_or_none()
-    
-    if user:
-        if status == "active":
-            user.subscription_tier = "professional"  # Simplified
-            user.stripe_subscription_id = subscription["id"]
-        else:
-            user.subscription_tier = "free"
-        
-        await db.commit()
-
-
-async def handle_subscription_deleted(subscription, db: AsyncSession):
-    """
-    Handle subscription cancellation.
-    """
-    customer_id = subscription["customer"]
-    
-    result = await db.execute(
-        select(User).where(User.stripe_customer_id == customer_id)
-    )
-    user = result.scalar_one_or_none()
-    
-    if user:
-        user.subscription_tier = "free"
-        user.stripe_subscription_id = None
-        await db.commit()

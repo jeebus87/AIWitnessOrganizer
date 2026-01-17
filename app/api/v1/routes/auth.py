@@ -14,8 +14,9 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.security import encrypt_token, create_access_token
 from app.db.session import get_db
-from app.db.models import User, ClioIntegration
-from app.services.clio_client import get_clio_authorize_url, exchange_code_for_tokens, get_clio_user_info
+from app.db.models import User, ClioIntegration, Organization
+from app.services.clio_client import get_clio_authorize_url, exchange_code_for_tokens, get_clio_user_info, get_clio_account_info
+from app.services.subscription_service import SubscriptionService
 from app.api.v1.schemas.auth import UserResponse
 from app.api.deps import get_current_user
 
@@ -97,11 +98,16 @@ async def clio_callback(
         refresh_token = token_data["refresh_token"]
         expires_in = token_data.get("expires_in", 86400)  # Default 24 hours
 
-        # Get Clio user info
-        clio_user = await get_clio_user_info(access_token)
+        # Get Clio user info (with account/firm info)
+        clio_user = await get_clio_user_info(access_token, include_firm=True)
         clio_user_id = str(clio_user.get("id"))
         email = clio_user.get("email", "")
         name = clio_user.get("name", email)
+
+        # Get account/firm info
+        clio_account = await get_clio_account_info(access_token)
+        clio_account_id = str(clio_account.get("id", "")) if clio_account else None
+        firm_name = clio_account.get("name", "My Firm") if clio_account else "My Firm"
 
         # Find or create user by Clio user ID
         result = await db.execute(
@@ -124,6 +130,15 @@ async def clio_callback(
             user.email = email
             user.display_name = name
             await db.commit()
+
+        # Create or link organization based on Clio account
+        if clio_account_id:
+            subscription_service = SubscriptionService(db)
+            await subscription_service.get_or_create_organization(
+                clio_account_id=clio_account_id,
+                firm_name=firm_name,
+                user_id=user.id
+            )
 
         # Encrypt tokens before storage
         access_token_encrypted = encrypt_token(access_token)
@@ -234,13 +249,13 @@ async def clio_deauthorize_webhook(
         return {"success": True}
 
 
-@router.get("/me", response_model=UserResponse)
+@router.get("/me")
 async def get_me(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Get current user information.
+    Get current user information including organization and subscription status.
     """
     # Check if Clio is connected
     result = await db.execute(
@@ -251,11 +266,31 @@ async def get_me(
     )
     clio_integration = result.scalar_one_or_none()
 
-    return UserResponse(
-        id=current_user.id,
-        email=current_user.email,
-        display_name=current_user.display_name,
-        subscription_tier=current_user.subscription_tier.value,
-        clio_connected=clio_integration is not None,
-        created_at=current_user.created_at
-    )
+    # Get organization info
+    org_info = None
+    if current_user.organization_id:
+        org_result = await db.execute(
+            select(Organization).where(Organization.id == current_user.organization_id)
+        )
+        org = org_result.scalar_one_or_none()
+        if org:
+            org_info = {
+                "id": org.id,
+                "name": org.name,
+                "subscription_status": org.subscription_status,
+                "subscription_tier": org.subscription_tier,
+                "user_count": org.user_count,
+                "bonus_credits": org.bonus_credits,
+                "current_period_end": org.current_period_end.isoformat() if org.current_period_end else None
+            }
+
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "display_name": current_user.display_name,
+        "subscription_tier": current_user.subscription_tier.value,
+        "is_admin": current_user.is_admin,
+        "clio_connected": clio_integration is not None,
+        "created_at": current_user.created_at.isoformat(),
+        "organization": org_info
+    }

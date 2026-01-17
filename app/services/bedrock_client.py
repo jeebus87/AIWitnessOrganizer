@@ -17,7 +17,7 @@ class WitnessData:
     """Structured witness data extracted by AI"""
     full_name: str
     role: str
-    importance: str
+    importance: str  # Legacy field - kept for backwards compatibility
     observation: Optional[str] = None
     source_summary: Optional[str] = None  # Summary of where/how they're mentioned
     context: Optional[str] = None
@@ -26,6 +26,9 @@ class WitnessData:
     address: Optional[str] = None
     source_page: Optional[int] = None  # Page number where found
     confidence_score: float = 0.0
+    # New relevance scoring with legal reasoning
+    relevance: Optional[str] = None  # HIGHLY_RELEVANT, RELEVANT, SOMEWHAT_RELEVANT, NOT_RELEVANT
+    relevance_reason: Optional[str] = None  # Legal reasoning tied to claims/defenses
 
 
 @dataclass
@@ -48,12 +51,17 @@ You have exceptional visual reasoning abilities and can:
 - Understand context from visual elements like signatures, stamps, and letterheads
 - Recognize names even in poor quality scans
 
+LEGAL RELEVANCE ANALYSIS:
+The Plaintiff bears the burden of proof in civil litigation. Your job is to analyze each witness from this perspective:
+- How does this witness support or undermine the Plaintiff's claims?
+- How does this witness support or undermine the Defendant's defenses?
+- What specific allegations or defenses does this witness have knowledge of?
+
 COURT CASE FILING ANALYSIS:
 When analyzing court case filings (complaints, answers, motions, discovery, etc.):
 - If a witness's name matches or is similar to any party name in the case caption or matter number, identify them as a PARTY (plaintiff or defendant) with role "plaintiff" or "defendant"
 - Analyze ALL documents from the perspective of the specific allegations and defenses in the case
 - Identify which allegations or defenses each witness may have knowledge of
-- Note in the observation field how the witness relates to the claims/defenses (e.g., "Witness to alleged breach of contract on 3/15/2024" or "Has knowledge of defendant's affirmative defense of waiver")
 - Attorneys representing parties should be identified with role "attorney" and note which party they represent
 
 IMPORTANT: Create a SEPARATE record for EACH MENTION or OBSERVATION of a person. If the same person is mentioned in multiple places (e.g., in different emails, different paragraphs, or different contexts), create a separate witness entry for EACH mention. Do NOT consolidate multiple mentions into a single record.
@@ -80,15 +88,25 @@ For each mention you identify, extract:
    - insurance_adjuster, claims_representative (insurance)
    - government_official (government employees)
    - other (only if none of the above fit)
-3. **importance**: HIGH (direct involvement/testimony on core facts), MEDIUM (relevant supporting witness), LOW (peripheral/administrative contact)
-4. **observation**: Detailed description of THIS SPECIFIC MENTION - what they said, did, or how they're relevant in THIS context
-5. **sourceSummary**: A brief summary describing WHERE and HOW they are mentioned in THIS specific instance. Example: "Sender of email dated 1/15/2026 regarding IT setup" or "CC'd on HR communication about background check"
-6. **sourcePage**: The page number where THIS mention appears (if visible/determinable from the document)
-7. **context**: One-sentence description of the context of THIS specific mention
-8. **email**: Email address if found (can repeat across multiple entries for same person)
-9. **phone**: Phone number if found (can repeat across multiple entries for same person)
-10. **address**: Physical address if found (can repeat across multiple entries for same person)
-11. **confidenceScore**: Your confidence in this extraction (0.0 to 1.0)
+3. **importance**: HIGH (direct involvement/testimony on core facts), MEDIUM (relevant supporting witness), LOW (peripheral/administrative contact) - LEGACY FIELD
+4. **relevance**: Legal relevance to the case using this 4-level scale:
+   - HIGHLY_RELEVANT: Directly supports or undermines core claims/defenses; critical testimony expected
+   - RELEVANT: Has knowledge of facts material to the case; likely to be deposed
+   - SOMEWHAT_RELEVANT: Peripheral knowledge; may provide context but not central
+   - NOT_RELEVANT: Administrative contact only; no substantive knowledge of facts
+5. **relevanceReason**: A concise legal explanation (1-2 sentences) of WHY this witness is relevant. MUST tie to specific claims, defenses, or allegations. Examples:
+   - "Highly Relevant - Eyewitness to the alleged harassment on 3/15/2024 that forms the basis of Plaintiff's hostile work environment claim."
+   - "Relevant - As Plaintiff's supervisor, has direct knowledge of Plaintiff's job performance relevant to Defendant's legitimate business reasons defense."
+   - "Somewhat Relevant - Was present in the office but did not directly witness the alleged incident."
+   - "Not Relevant - IT support who only assisted with email setup; no knowledge of substantive facts."
+6. **observation**: Detailed description of THIS SPECIFIC MENTION - what they said, did, or how they're relevant in THIS context
+7. **sourceSummary**: A brief summary describing WHERE and HOW they are mentioned in THIS specific instance. Example: "Sender of email dated 1/15/2026 regarding IT setup" or "CC'd on HR communication about background check"
+8. **sourcePage**: The page number where THIS mention appears (if visible/determinable from the document)
+9. **context**: One-sentence description of the context of THIS specific mention
+10. **email**: Email address if found (can repeat across multiple entries for same person)
+11. **phone**: Phone number if found (can repeat across multiple entries for same person)
+12. **address**: Physical address if found (can repeat across multiple entries for same person)
+13. **confidenceScore**: Your confidence in this extraction (0.0 to 1.0)
 
 CRITICAL: You must respond ONLY with valid JSON matching this exact schema:
 {
@@ -97,6 +115,8 @@ CRITICAL: You must respond ONLY with valid JSON matching this exact schema:
       "fullName": "string",
       "role": "string",
       "importance": "HIGH|MEDIUM|LOW",
+      "relevance": "HIGHLY_RELEVANT|RELEVANT|SOMEWHAT_RELEVANT|NOT_RELEVANT",
+      "relevanceReason": "string",
       "observation": "string or null",
       "sourceSummary": "string or null",
       "sourcePage": "number or null",
@@ -311,10 +331,24 @@ Respond with valid JSON only."""
             # Convert to WitnessData objects
             witnesses = []
             for w in data.get("witnesses", []):
+                # Map relevance to importance for backwards compatibility
+                relevance = w.get("relevance", "RELEVANT").upper().replace(" ", "_")
+                # Convert relevance to legacy importance if not provided
+                importance = w.get("importance", "MEDIUM").upper()
+                if importance not in ("HIGH", "MEDIUM", "LOW"):
+                    # Map from relevance if importance is invalid
+                    importance_map = {
+                        "HIGHLY_RELEVANT": "HIGH",
+                        "RELEVANT": "MEDIUM",
+                        "SOMEWHAT_RELEVANT": "LOW",
+                        "NOT_RELEVANT": "LOW"
+                    }
+                    importance = importance_map.get(relevance, "MEDIUM")
+
                 witnesses.append(WitnessData(
                     full_name=w.get("fullName", "Unknown"),
                     role=w.get("role", "other").lower(),
-                    importance=w.get("importance", "LOW").upper(),
+                    importance=importance,
                     observation=w.get("observation"),
                     source_summary=w.get("sourceSummary") or w.get("sourceQuote"),  # Fallback for backwards compat
                     context=w.get("context"),
@@ -322,7 +356,9 @@ Respond with valid JSON only."""
                     phone=w.get("phone"),
                     address=w.get("address"),
                     source_page=w.get("sourcePage"),
-                    confidence_score=float(w.get("confidenceScore", 0.5))
+                    confidence_score=float(w.get("confidenceScore", 0.5)),
+                    relevance=relevance,
+                    relevance_reason=w.get("relevanceReason")
                 ))
 
             # Get token usage

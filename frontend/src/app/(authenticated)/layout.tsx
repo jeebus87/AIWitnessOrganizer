@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar";
+import { HelpChatbot } from "@/components/help-chatbot";
 import { useAuthStore } from "@/store/auth";
 
 export default function AuthenticatedLayout({
@@ -37,6 +38,7 @@ export default function AuthenticatedLayout({
       <main className="flex-1 overflow-auto bg-muted/30">
         <div className="p-6">{children}</div>
       </main>
+      <HelpChatbot />
     </div>
   );
 }

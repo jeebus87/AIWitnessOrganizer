@@ -9,7 +9,7 @@ export function Footer() {
                 <div className="flex flex-col md:flex-row justify-between items-center gap-6">
                     <div className="flex items-center space-x-2">
                         <span className="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400">
-                            AI Witness Finder
+                            AI Witness Organizer
                         </span>
                     </div>
 
