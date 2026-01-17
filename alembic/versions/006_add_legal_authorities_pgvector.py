@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 # revision identifiers
 revision = '006'
-down_revision = '005'
+down_revision = '005_add_organizations_billing'
 branch_labels = None
 depends_on = None
 
