@@ -190,6 +190,12 @@ async def _process_single_document_async(
             )
             logger.info(f"Verification complete: {len(verified_witnesses)} witnesses")
 
+            # Delete existing witnesses for this document before adding new ones
+            from sqlalchemy import delete
+            delete_stmt = delete(Witness).where(Witness.document_id == document.id)
+            await session.execute(delete_stmt)
+            logger.info(f"Deleted existing witnesses for document {document.id}")
+
             # Save witnesses to database
             witnesses_created = 0
             for w_data in verified_witnesses:
