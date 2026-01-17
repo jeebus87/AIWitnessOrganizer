@@ -423,6 +423,11 @@ class ClioClient:
         fields: Optional[List[str]] = None
     ) -> AsyncIterator[Dict[str, Any]]:
         """Get documents in a specific folder"""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        logger.info(f"[CLIO] get_documents_in_folder: folder_id={folder_id}")
+
         if fields is None:
             fields = self.DEFAULT_DOCUMENT_FIELDS
 
@@ -431,15 +436,20 @@ class ClioClient:
             "fields": ",".join(fields)
         }
 
+        doc_count = 0
         async for doc in self.get_paginated("documents", params):
+            doc_count += 1
             yield doc
+
+        logger.info(f"[CLIO] get_documents_in_folder: folder_id={folder_id} -> {doc_count} documents")
 
     async def get_documents_recursive(
         self,
         matter_id: int,
         folder_id: int,
         exclude_folder_ids: Optional[List[int]] = None,
-        fields: Optional[List[str]] = None
+        fields: Optional[List[str]] = None,
+        _depth: int = 0
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Recursively get all documents in a folder and its subfolders.
@@ -449,7 +459,14 @@ class ClioClient:
             folder_id: The root folder ID to start from
             exclude_folder_ids: List of folder IDs to exclude (e.g., Legal Authority folder)
             fields: Document fields to return
+            _depth: Internal recursion depth tracking
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        indent = "  " * _depth
+        logger.info(f"[CLIO] {indent}get_documents_recursive: folder_id={folder_id}, depth={_depth}, exclude={exclude_folder_ids}")
+
         if exclude_folder_ids is None:
             exclude_folder_ids = []
 
@@ -457,17 +474,29 @@ class ClioClient:
             fields = self.DEFAULT_DOCUMENT_FIELDS
 
         # Get documents in the current folder
+        doc_count = 0
         async for doc in self.get_documents_in_folder(folder_id, fields):
+            doc_count += 1
             yield doc
 
+        logger.info(f"[CLIO] {indent}  -> {doc_count} documents in this folder")
+
         # Get subfolders and recurse
+        subfolder_count = 0
         async for subfolder in self.get_folders(matter_id, parent_id=folder_id):
             subfolder_id = subfolder.get("id")
+            subfolder_name = subfolder.get("name", "unnamed")
             if subfolder_id and subfolder_id not in exclude_folder_ids:
+                subfolder_count += 1
+                logger.info(f"[CLIO] {indent}  -> Entering subfolder: {subfolder_name} (id={subfolder_id})")
                 async for doc in self.get_documents_recursive(
-                    matter_id, subfolder_id, exclude_folder_ids, fields
+                    matter_id, subfolder_id, exclude_folder_ids, fields, _depth + 1
                 ):
                     yield doc
+            elif subfolder_id in exclude_folder_ids:
+                logger.info(f"[CLIO] {indent}  -> SKIPPING excluded folder: {subfolder_name} (id={subfolder_id})")
+
+        logger.info(f"[CLIO] {indent}Finished folder {folder_id}: {subfolder_count} subfolders processed")
 
     async def get_all_matter_documents_via_folders(
         self,
@@ -487,13 +516,24 @@ class ClioClient:
             exclude_folder_ids: List of folder IDs to exclude (not used with direct query)
             fields: Document fields to return
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        logger.info(f"[CLIO] get_all_matter_documents_via_folders: matter_id={matter_id}, exclude={exclude_folder_ids}")
+
         if fields is None:
             fields = self.DEFAULT_DOCUMENT_FIELDS
 
         # With cursor-based pagination, we can fetch all documents directly
         # The get_paginated method now uses order=id(asc) which enables cursor pagination
+        doc_count = 0
         async for doc in self.get_documents(matter_id=matter_id, fields=fields):
+            doc_count += 1
+            if doc_count <= 10 or doc_count % 500 == 0:
+                logger.info(f"[CLIO]   [{doc_count}] {doc.get('name', 'unknown')}")
             yield doc
+
+        logger.info(f"[CLIO] get_all_matter_documents_via_folders: matter_id={matter_id} -> TOTAL {doc_count} documents")
 
     # =========================================================================
     # Contact Operations

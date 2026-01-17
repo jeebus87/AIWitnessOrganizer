@@ -114,6 +114,47 @@ async def _process_single_document_async(
 
                 content = await clio.download_document(int(document.clio_document_id))
 
+            # === DEBUG MODE: Skip Bedrock processing ===
+            DEBUG_MODE = True  # Set to False to enable actual AI processing
+
+            logger.info(f"")
+            logger.info(f"{'='*60}")
+            logger.info(f"=== PROCESSING DOCUMENT - DEBUG MODE ===")
+            logger.info(f"{'='*60}")
+            logger.info(f"  Document ID (db): {document_id}")
+            logger.info(f"  Clio Document ID: {document.clio_document_id}")
+            logger.info(f"  Filename: {document.filename}")
+            logger.info(f"  File type: {document.file_type}")
+            logger.info(f"  File size (from Clio): {document.file_size}")
+            logger.info(f"  Downloaded content size: {len(content)} bytes")
+            logger.info(f"  Matter ID: {document.matter_id}")
+            logger.info(f"  Job ID: {job_id}")
+            logger.info(f"  DEBUG_MODE: {DEBUG_MODE}")
+            logger.info(f"{'='*60}")
+
+            if DEBUG_MODE:
+                logger.info(f"DEBUG: Skipping Bedrock processing - just marking document as processed")
+
+                # Update job progress
+                if job_id:
+                    from sqlalchemy import text
+                    await session.execute(
+                        text("UPDATE processing_jobs SET processed_documents = processed_documents + 1 WHERE id = :job_id"),
+                        {"job_id": job_id}
+                    )
+                    await session.commit()
+                    logger.info(f"DEBUG: Incremented processed_documents for job {job_id}")
+
+                return {
+                    "success": True,
+                    "document_id": document_id,
+                    "witnesses_found": 0,
+                    "tokens_used": 0,
+                    "debug_mode": True
+                }
+
+            # === END DEBUG MODE ===
+
             # Process document
             processor = DocumentProcessor()
             bedrock = BedrockClient()
@@ -366,18 +407,31 @@ async def _process_matter_async(
             access_token = decrypt_token(clio_integration.access_token_encrypted)
             refresh_token = decrypt_token(clio_integration.refresh_token_encrypted)
 
-            logger.info(f"=== PROCESSING MATTER ===")
+            logger.info(f"")
+            logger.info(f"{'='*60}")
+            logger.info(f"=== PROCESSING MATTER - DEBUG MODE ===")
+            logger.info(f"{'='*60}")
             logger.info(f"  Database matter_id: {matter_id}")
             logger.info(f"  Clio matter_id: {matter.clio_matter_id}")
             logger.info(f"  Matter description: {matter.description}")
+            logger.info(f"  Matter display_number: {matter.display_number}")
             logger.info(f"  Job ID: {job_id}")
-            logger.info(f"  scan_folder_id: {scan_folder_id}")
+            logger.info(f"  scan_folder_id: {scan_folder_id} (type: {type(scan_folder_id).__name__})")
             logger.info(f"  legal_authority_folder_id: {legal_authority_folder_id}")
             logger.info(f"  include_subfolders: {include_subfolders}")
+            logger.info(f"{'='*60}")
+
+            # Determine scanning mode
             if scan_folder_id:
-                logger.info(f"Scanning specific folder: {scan_folder_id}, include_subfolders={include_subfolders}")
+                if include_subfolders:
+                    logger.info(f"SCAN MODE: Recursive folder scan (folder {scan_folder_id} + subfolders)")
+                else:
+                    logger.info(f"SCAN MODE: Single folder only (folder {scan_folder_id}, NO subfolders)")
+            else:
+                logger.info(f"SCAN MODE: ALL documents in matter via folder traversal")
+
             if legal_authority_folder_id:
-                logger.info(f"Excluding legal authority folder: {legal_authority_folder_id}")
+                logger.info(f"EXCLUSION: Will exclude folder {legal_authority_folder_id} from scanning")
 
             async with ClioClient(
                 access_token=access_token,
@@ -411,11 +465,23 @@ async def _process_matter_async(
                         exclude_folder_ids=exclude_ids
                     )
 
+                logger.info(f"")
+                logger.info(f"--- Starting document iteration from Clio ---")
+                doc_count = 0
                 async for doc_data in doc_iterator:
+                    doc_count += 1
+                    clio_doc_id = str(doc_data["id"])
+                    doc_name = doc_data.get("name", "unknown")
+                    doc_folder = doc_data.get("parent", {}).get("id") if doc_data.get("parent") else "root"
+
+                    # Log every document found (first 50, then every 100th)
+                    if doc_count <= 50 or doc_count % 100 == 0:
+                        logger.info(f"  [{doc_count}] Found: {doc_name} (clio_id={clio_doc_id}, folder={doc_folder})")
+
                     result = await session.execute(
                         select(Document).where(
                             Document.matter_id == matter.id,
-                            Document.clio_document_id == str(doc_data["id"])
+                            Document.clio_document_id == clio_doc_id
                         )
                     )
                     doc = result.scalar_one_or_none()
@@ -423,8 +489,8 @@ async def _process_matter_async(
                     if not doc:
                         doc = Document(
                             matter_id=matter.id,
-                            clio_document_id=str(doc_data["id"]),
-                            filename=doc_data.get("name", "unknown"),
+                            clio_document_id=clio_doc_id,
+                            filename=doc_name,
                             file_type=doc_data.get("content_type", "").split("/")[-1] if doc_data.get("content_type") else None,
                             file_size=doc_data.get("size"),
                             etag=doc_data.get("etag")
@@ -432,12 +498,26 @@ async def _process_matter_async(
                         session.add(doc)
                         await session.flush()  # Get the doc.id
                         docs_synced += 1
+                        if doc_count <= 50:
+                            logger.info(f"      -> NEW document, assigned db_id={doc.id}")
+                    else:
+                        if doc_count <= 50:
+                            logger.info(f"      -> EXISTS in db, db_id={doc.id}")
 
                     # Track this document ID for processing (whether new or existing)
                     document_ids_to_process.append(doc.id)
 
                 await session.commit()
-                logger.info(f"Synced {docs_synced} new documents, {len(document_ids_to_process)} total to process for matter {matter_id}")
+                logger.info(f"")
+                logger.info(f"--- Document iteration complete ---")
+                logger.info(f"  Total documents from Clio iterator: {doc_count}")
+                logger.info(f"  New documents synced to DB: {docs_synced}")
+                logger.info(f"  Document IDs to process: {len(document_ids_to_process)}")
+                if len(document_ids_to_process) <= 20:
+                    logger.info(f"  Document IDs list: {document_ids_to_process}")
+                else:
+                    logger.info(f"  First 10 IDs: {document_ids_to_process[:10]}")
+                    logger.info(f"  Last 10 IDs: {document_ids_to_process[-10:]}")
 
                 # Process Legal Authority folder if specified
                 legal_context = ""
@@ -493,12 +573,23 @@ async def _process_matter_async(
             else:
                 documents = []
 
-            logger.info(f"=== DOCUMENT COUNT UPDATE ===")
+            logger.info(f"")
+            logger.info(f"{'='*60}")
+            logger.info(f"=== FINAL DOCUMENT COUNT ===")
+            logger.info(f"{'='*60}")
             logger.info(f"  Job ID: {job_id}")
             logger.info(f"  Database matter_id: {matter_id}")
             logger.info(f"  scan_folder_id: {scan_folder_id}")
-            logger.info(f"  Documents to process: {len(documents)} (from {len(document_ids_to_process)} IDs)")
+            logger.info(f"  Documents IDs collected: {len(document_ids_to_process)}")
+            logger.info(f"  Documents retrieved from DB: {len(documents)}")
             logger.info(f"  Setting job.total_documents = {len(documents)}")
+            logger.info(f"")
+            logger.info(f"--- Document Details (first 20) ---")
+            for i, doc in enumerate(documents[:20]):
+                logger.info(f"  [{i+1}] db_id={doc.id}, clio_id={doc.clio_document_id}, name={doc.filename}")
+            if len(documents) > 20:
+                logger.info(f"  ... and {len(documents) - 20} more documents")
+            logger.info(f"{'='*60}")
 
             job.total_documents = len(documents)
             await session.commit()
