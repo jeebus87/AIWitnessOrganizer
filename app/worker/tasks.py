@@ -115,7 +115,7 @@ async def _process_single_document_async(
                 content = await clio.download_document(int(document.clio_document_id))
 
             # === DEBUG MODE: Skip Bedrock processing ===
-            DEBUG_MODE = True  # Set to False to enable actual AI processing
+            DEBUG_MODE = False  # Set to True to skip AI processing for debugging
 
             logger.info(f"")
             logger.info(f"{'='*60}")

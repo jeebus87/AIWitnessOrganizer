@@ -5,7 +5,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.orm import selectinload
 
 from app.db.session import get_db
@@ -154,6 +154,105 @@ async def get_witness(
         matter_name=witness.document.matter.description,
         created_at=witness.created_at
     )
+
+
+@router.delete("/clear")
+async def clear_witnesses(
+    current_user: User = Depends(get_current_user),
+    matter_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Clear all witnesses for a specific matter or all matters.
+    Use this to reset before re-processing with correct folder filtering.
+
+    Args:
+        matter_id: Optional matter ID. If provided, only clears witnesses for that matter.
+                   If not provided, clears ALL witnesses for the user.
+    """
+    if matter_id:
+        # Verify matter belongs to user
+        result = await db.execute(
+            select(Matter).where(
+                Matter.id == matter_id,
+                Matter.user_id == current_user.id
+            )
+        )
+        matter = result.scalar_one_or_none()
+        if not matter:
+            raise HTTPException(status_code=404, detail="Matter not found")
+
+        # Get document IDs for this matter
+        doc_result = await db.execute(
+            select(Document.id).where(Document.matter_id == matter_id)
+        )
+        doc_ids = [row[0] for row in doc_result.fetchall()]
+
+        if doc_ids:
+            # Delete witnesses for these documents
+            await db.execute(
+                delete(Witness).where(Witness.document_id.in_(doc_ids))
+            )
+            await db.commit()
+
+            # Also reset document processing status
+            await db.execute(
+                select(Document).where(Document.id.in_(doc_ids))
+            )
+            from sqlalchemy import update
+            await db.execute(
+                update(Document)
+                .where(Document.id.in_(doc_ids))
+                .values(is_processed=False, processed_at=None, analysis_cache=None)
+            )
+            await db.commit()
+
+        logger.info(f"Cleared witnesses for matter {matter_id} ({len(doc_ids)} documents)")
+        return {
+            "success": True,
+            "matter_id": matter_id,
+            "documents_reset": len(doc_ids),
+            "message": f"Cleared all witnesses for matter and reset {len(doc_ids)} documents"
+        }
+    else:
+        # Clear ALL witnesses for user's matters
+        # Get all matter IDs for user
+        matter_result = await db.execute(
+            select(Matter.id).where(Matter.user_id == current_user.id)
+        )
+        matter_ids = [row[0] for row in matter_result.fetchall()]
+
+        # Get all document IDs for these matters
+        doc_result = await db.execute(
+            select(Document.id).where(Document.matter_id.in_(matter_ids))
+        )
+        doc_ids = [row[0] for row in doc_result.fetchall()]
+
+        if doc_ids:
+            # Delete all witnesses
+            result = await db.execute(
+                delete(Witness).where(Witness.document_id.in_(doc_ids))
+            )
+            deleted_count = result.rowcount
+
+            # Reset document processing status
+            from sqlalchemy import update
+            await db.execute(
+                update(Document)
+                .where(Document.id.in_(doc_ids))
+                .values(is_processed=False, processed_at=None, analysis_cache=None)
+            )
+            await db.commit()
+
+            logger.info(f"Cleared all {deleted_count} witnesses for user {current_user.id}")
+            return {
+                "success": True,
+                "witnesses_deleted": deleted_count,
+                "documents_reset": len(doc_ids),
+                "message": f"Cleared {deleted_count} witnesses and reset {len(doc_ids)} documents"
+            }
+
+        return {"success": True, "witnesses_deleted": 0, "documents_reset": 0, "message": "No witnesses found"}
 
 
 async def _get_firm_name(db: AsyncSession, user: User) -> Optional[str]:
