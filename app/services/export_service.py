@@ -120,10 +120,7 @@ class ExportService:
                 rows.append(row)
             else:
                 # Multiple observations - first row is summary
-                all_observations = [w.get("observation", "") or "" for w in observations]
-                summary_observation = "Multiple observations: " + "; ".join(
-                    [obs[:100] + "..." if len(obs) > 100 else obs for obs in all_observations if obs]
-                )
+                summary_observation = f"Multiple observations ({len(observations)} entries) - see details below"
 
                 summary_row = {
                     "Witness Info": self._format_witness_info(first_obs),
@@ -510,11 +507,8 @@ class ExportService:
                 data.append(row)
             else:
                 # Multiple observations
-                # First row: summary of all observations with "See Below"
-                all_observations = [w.get("observation", "") or "" for w in observations]
-                summary_observation = "Multiple observations: " + "; ".join(
-                    [obs[:100] + "..." if len(obs) > 100 else obs for obs in all_observations if obs]
-                )
+                # First row: just indicate multiple observations, details below
+                summary_observation = f"Multiple observations ({len(observations)} entries) - see details below"
 
                 first_w = observations[0]
                 confidence = f"{first_w.get('confidence_score', 0) * 100:.0f}%"
