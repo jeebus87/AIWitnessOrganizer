@@ -46,12 +46,12 @@
   --radius-4xl: calc(var(--radius) + 16px);
 }
 
-/* AI Witness Organizer Theme - Red, White, Blue (Patriotic) */
+/* AI Witness Organizer Theme - Balanced Red, White & Blue */
 :root {
   --radius: 0.625rem;
 
   /* Clean white background */
-  --background: oklch(0.995 0 0);
+  --background: oklch(0.98 0.005 250);
   --foreground: oklch(0.2 0.03 250);
 
   /* Card - Pure white */
@@ -62,46 +62,46 @@
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.2 0.03 250);
 
-  /* Primary - Deep American Blue */
-  --primary: oklch(0.4 0.18 260);
+  /* Primary - American Red */
+  --primary: oklch(0.5 0.22 25);
   --primary-foreground: oklch(0.99 0 0);
 
-  /* Secondary - Light red tint */
-  --secondary: oklch(0.96 0.03 25);
-  --secondary-foreground: oklch(0.45 0.18 25);
+  /* Secondary - American Blue */
+  --secondary: oklch(0.4 0.18 260);
+  --secondary-foreground: oklch(0.99 0 0);
 
-  /* Muted - Light blue-gray */
-  --muted: oklch(0.95 0.015 250);
-  --muted-foreground: oklch(0.45 0.03 250);
+  /* Muted - Light purple (red+blue blend) */
+  --muted: oklch(0.95 0.02 290);
+  --muted-foreground: oklch(0.4 0.05 280);
 
-  /* Accent - American Red */
-  --accent: oklch(0.55 0.22 25);
+  /* Accent - Deep Blue */
+  --accent: oklch(0.45 0.18 260);
   --accent-foreground: oklch(0.99 0 0);
 
   /* Destructive - Strong Red */
   --destructive: oklch(0.5 0.25 25);
 
-  /* Borders and inputs - subtle blue */
-  --border: oklch(0.88 0.025 250);
-  --input: oklch(0.92 0.02 250);
-  --ring: oklch(0.5 0.2 260);
+  /* Borders - subtle purple (blend) */
+  --border: oklch(0.88 0.03 280);
+  --input: oklch(0.92 0.02 280);
+  --ring: oklch(0.5 0.18 280);
 
-  /* Charts - Patriotic palette */
-  --chart-1: oklch(0.4 0.18 260);
-  --chart-2: oklch(0.55 0.22 25);
-  --chart-3: oklch(0.55 0.15 260);
-  --chart-4: oklch(0.65 0.18 25);
-  --chart-5: oklch(0.7 0.1 250);
+  /* Charts - Alternating Red/Blue */
+  --chart-1: oklch(0.5 0.22 25);
+  --chart-2: oklch(0.45 0.18 260);
+  --chart-3: oklch(0.6 0.18 25);
+  --chart-4: oklch(0.55 0.15 260);
+  --chart-5: oklch(0.5 0.12 290);
 
-  /* Sidebar - Navy blue with white text */
-  --sidebar: oklch(0.25 0.08 255);
+  /* Sidebar - Gradient-ready deep colors */
+  --sidebar: oklch(0.22 0.08 260);
   --sidebar-foreground: oklch(0.95 0.01 250);
   --sidebar-primary: oklch(0.55 0.22 25);
   --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: oklch(0.35 0.06 255);
+  --sidebar-accent: oklch(0.3 0.1 25);
   --sidebar-accent-foreground: oklch(0.95 0.01 250);
-  --sidebar-border: oklch(0.3 0.06 255);
-  --sidebar-ring: oklch(0.55 0.22 25);
+  --sidebar-border: oklch(0.28 0.06 280);
+  --sidebar-ring: oklch(0.55 0.2 280);
 }
 
 .dark {
@@ -168,21 +168,42 @@
   }
 }
 
-/* Custom gradient backgrounds */
+/* Custom gradient backgrounds - Red to Blue */
 .gradient-primary {
-  background: linear-gradient(135deg, oklch(0.45 0.2 255) 0%, oklch(0.55 0.18 260) 100%);
+  background: linear-gradient(135deg, oklch(0.5 0.22 25) 0%, oklch(0.45 0.18 260) 100%);
 }
 
 .gradient-accent {
-  background: linear-gradient(135deg, oklch(0.55 0.22 25) 0%, oklch(0.5 0.2 30) 100%);
+  background: linear-gradient(135deg, oklch(0.45 0.18 260) 0%, oklch(0.5 0.22 25) 100%);
 }
 
 .gradient-hero {
-  background: linear-gradient(180deg, oklch(0.98 0.01 250) 0%, oklch(0.95 0.02 255) 50%, oklch(0.98 0.01 20) 100%);
+  background: linear-gradient(180deg, oklch(0.97 0.02 25) 0%, oklch(0.98 0 0) 50%, oklch(0.97 0.02 260) 100%);
 }
 
 .dark .gradient-hero {
-  background: linear-gradient(180deg, oklch(0.15 0.03 250) 0%, oklch(0.18 0.04 255) 50%, oklch(0.15 0.03 20) 100%);
+  background: linear-gradient(180deg, oklch(0.18 0.06 25) 0%, oklch(0.15 0.03 280) 50%, oklch(0.18 0.06 260) 100%);
+}
+
+/* Red-Blue gradient sidebar */
+.gradient-sidebar {
+  background: linear-gradient(180deg, oklch(0.25 0.1 260) 0%, oklch(0.22 0.08 280) 50%, oklch(0.25 0.1 25) 100%);
+}
+
+/* Button variants */
+.btn-red {
+  background: oklch(0.5 0.22 25);
+  color: white;
+}
+
+.btn-blue {
+  background: oklch(0.45 0.18 260);
+  color: white;
+}
+
+.btn-gradient {
+  background: linear-gradient(90deg, oklch(0.5 0.22 25) 0%, oklch(0.45 0.18 260) 100%);
+  color: white;
 }
 
 /* Animated ellipsis for sync overlay */

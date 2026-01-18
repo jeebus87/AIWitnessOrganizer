@@ -60,19 +60,21 @@ export function AppSidebar() {
   const isAdmin = userProfile?.is_admin || false;
 
   return (
-    <div className="flex h-full w-64 flex-col border-r bg-background">
+    <div className="flex h-full w-64 flex-col border-r gradient-sidebar text-white">
       {/* App Logo/Name */}
-      <div className="flex h-16 items-center border-b px-4">
-        <Link href="/matters" className="flex items-center gap-2 font-semibold">
-          <Users className="h-6 w-6 text-primary" />
+      <div className="flex h-16 items-center border-b border-white/20 px-4">
+        <Link href="/matters" className="flex items-center gap-2 font-semibold text-white">
+          <Users className="h-6 w-6 text-red-400" />
           <span>AI Witness Organizer</span>
         </Link>
       </div>
 
       {/* Navigation */}
       <nav className="flex-1 space-y-1 p-4">
-        {navigation.map((item) => {
+        {navigation.map((item, index) => {
           const isActive = pathname.startsWith(item.href);
+          // Alternate between red and blue highlights
+          const activeColor = index % 2 === 0 ? "bg-red-500/90 text-white" : "bg-blue-500/90 text-white";
           return (
             <Link
               key={item.name}
@@ -80,8 +82,8 @@ export function AppSidebar() {
               className={cn(
                 "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                 isActive
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  ? activeColor
+                  : "text-white/80 hover:bg-white/10 hover:text-white"
               )}
             >
               <item.icon className="h-5 w-5" />
@@ -92,12 +94,12 @@ export function AppSidebar() {
       </nav>
 
       {/* User/Firm Section */}
-      <div className="border-t p-4">
+      <div className="border-t border-white/20 p-4">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="w-full justify-start gap-2 h-auto py-2">
+            <Button variant="ghost" className="w-full justify-start gap-2 h-auto py-2 text-white hover:bg-white/10 hover:text-white">
               <Avatar className="h-8 w-8">
-                <AvatarFallback className="bg-primary/10 text-primary">
+                <AvatarFallback className="bg-white/20 text-white">
                   {isLoading ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
@@ -106,18 +108,18 @@ export function AppSidebar() {
                 </AvatarFallback>
               </Avatar>
               <div className="flex flex-col items-start text-sm overflow-hidden">
-                <span className="font-medium truncate max-w-[140px]">
+                <span className="font-medium truncate max-w-[140px] text-white">
                   {firmName}
                 </span>
                 <div className="flex items-center gap-1">
                   <Badge
-                    variant={getTierColor(subscriptionTier) as "default" | "secondary"}
-                    className="text-[10px] px-1.5 py-0"
+                    variant="secondary"
+                    className="text-[10px] px-1.5 py-0 bg-white/20 text-white border-0"
                   >
                     {formatTier(subscriptionTier)}
                   </Badge>
                   {isAdmin && (
-                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-white/40 text-white">
                       Admin
                     </Badge>
                   )}

@@ -264,6 +264,7 @@ export default function MattersPage() {
                           size="sm"
                           onClick={() => handleProcessClick(matter)}
                           disabled={processingMatterId === matter.id}
+                          className="btn-gradient hover:opacity-90"
                         >
                           {processingMatterId === matter.id ? (
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
