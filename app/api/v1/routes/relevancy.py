@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.db.models import User, Matter, CaseClaim, ClaimType
-from app.api.v1.deps import get_current_user
+from app.api.deps import get_current_user
 from app.services.claims_service import ClaimsService, ExtractedClaim, WitnessClaimLinkData
 
 router = APIRouter(prefix="/relevancy", tags=["relevancy"])
