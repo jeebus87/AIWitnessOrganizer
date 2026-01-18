@@ -184,3 +184,31 @@
 .dark .gradient-hero {
   background: linear-gradient(180deg, oklch(0.15 0.03 250) 0%, oklch(0.18 0.04 255) 50%, oklch(0.15 0.03 20) 100%);
 }
+
+/* Animated ellipsis for sync overlay */
+@keyframes ellipsis-1 {
+  0%, 20% { opacity: 0; }
+  25%, 100% { opacity: 1; }
+}
+
+@keyframes ellipsis-2 {
+  0%, 40% { opacity: 0; }
+  45%, 100% { opacity: 1; }
+}
+
+@keyframes ellipsis-3 {
+  0%, 60% { opacity: 0; }
+  65%, 100% { opacity: 1; }
+}
+
+.animate-ellipsis-1 {
+  animation: ellipsis-1 1.5s infinite;
+}
+
+.animate-ellipsis-2 {
+  animation: ellipsis-2 1.5s infinite;
+}
+
+.animate-ellipsis-3 {
+  animation: ellipsis-3 1.5s infinite;
+}

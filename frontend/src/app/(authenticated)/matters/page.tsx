@@ -39,6 +39,7 @@ import { Pagination } from "@/components/ui/pagination";
 import { FilterBar } from "@/components/matters/filter-bar";
 import { FolderSelectionDialog } from "@/components/matters/folder-selection-dialog";
 import { useAuthStore } from "@/store/auth";
+import { useSyncStore } from "@/store/sync";
 import { api, MatterListResponse, MatterFilters, Matter } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -47,6 +48,7 @@ type SortOrder = "asc" | "desc";
 
 export default function MattersPage() {
   const { token } = useAuthStore();
+  const { startSync, endSync } = useSyncStore();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -132,6 +134,7 @@ export default function MattersPage() {
   const handleSync = async () => {
     if (!token) return;
     setSyncing(true);
+    startSync("Syncing matters from Clio");
     try {
       const result = await api.syncMatters(token);
       toast.success(`Synced ${result.matters_synced} matters from Clio`);
@@ -143,6 +146,7 @@ export default function MattersPage() {
       toast.error(`Sync failed: ${errorMessage}`);
     } finally {
       setSyncing(false);
+      endSync();
     }
   };
 

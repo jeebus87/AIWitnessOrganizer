@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar";
 import { HelpChatbot } from "@/components/help-chatbot";
+import { SyncOverlay } from "@/components/sync-overlay";
 import { useAuthStore } from "@/store/auth";
 
 export default function AuthenticatedLayout({
@@ -33,12 +34,15 @@ export default function AuthenticatedLayout({
   }
 
   return (
-    <div className="flex h-screen">
-      <AppSidebar />
-      <main className="flex-1 overflow-auto bg-muted/30">
-        <div className="p-6">{children}</div>
-      </main>
-      <HelpChatbot />
-    </div>
+    <>
+      <SyncOverlay />
+      <div className="flex h-screen">
+        <AppSidebar />
+        <main className="flex-1 overflow-auto bg-muted/30">
+          <div className="p-6">{children}</div>
+        </main>
+        <HelpChatbot />
+      </div>
+    </>
   );
 }
