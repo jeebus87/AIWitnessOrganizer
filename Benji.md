@@ -57,8 +57,14 @@ python-Levenshtein>=0.25.0
 | Task | Status | Priority |
 |------|--------|----------|
 | DOCX Export | ✅ IMPLEMENTED | LOW |
-| Frontend Relevancy UI | ⏳ PENDING | MEDIUM |
+| Frontend Relevancy UI | ✅ IMPLEMENTED | MEDIUM |
 | End-to-end testing | ⏳ PENDING | HIGH |
+
+### Frontend Relevancy UI Details:
+- Route: `/matters/[id]/relevancy`
+- Components: Claims tables, witness summary, unlinked witnesses
+- Features: Add/delete claims, view witness-claim links
+- API integration via `api.ts` with full TypeScript types
 
 ### DOCX Export Details:
 - `generate_docx()` method in export_service.py

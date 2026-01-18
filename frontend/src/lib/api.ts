@@ -232,6 +232,46 @@ class ApiClient {
       body: { name },
     });
   }
+
+  // Relevancy
+  async getRelevancy(matterId: number, token: string) {
+    return this.request<RelevancyAnalysis>(`/api/v1/relevancy/${matterId}`, { token });
+  }
+
+  async getClaims(matterId: number, token: string) {
+    return this.request<CaseClaim[]>(`/api/v1/relevancy/${matterId}/claims`, { token });
+  }
+
+  async addClaim(matterId: number, token: string, claim: CreateClaimRequest) {
+    return this.request<CaseClaim>(`/api/v1/relevancy/${matterId}/claims`, {
+      method: "POST",
+      token,
+      body: claim,
+    });
+  }
+
+  async updateClaim(matterId: number, claimId: number, token: string, updates: UpdateClaimRequest) {
+    return this.request<CaseClaim>(`/api/v1/relevancy/${matterId}/claims/${claimId}`, {
+      method: "PUT",
+      token,
+      body: updates,
+    });
+  }
+
+  async deleteClaim(matterId: number, claimId: number, token: string) {
+    return this.request<{ success: boolean }>(`/api/v1/relevancy/${matterId}/claims/${claimId}`, {
+      method: "DELETE",
+      token,
+    });
+  }
+
+  async linkWitnessToClaim(matterId: number, token: string, link: CreateWitnessLinkRequest) {
+    return this.request<WitnessClaimLink>(`/api/v1/relevancy/${matterId}/witness-links`, {
+      method: "POST",
+      token,
+      body: link,
+    });
+  }
 }
 
 // Types
@@ -420,6 +460,90 @@ export interface ProcessMatterOptions {
   scan_folder_id?: number | null;
   legal_authority_folder_id?: number | null;
   include_subfolders?: boolean;
+}
+
+// Relevancy types
+export type ClaimType = "allegation" | "defense";
+
+export interface CaseClaim {
+  id: number;
+  matter_id: number;
+  claim_type: ClaimType;
+  claim_number: number;
+  claim_text: string;
+  source_document_id: number | null;
+  source_page: number | null;
+  extraction_method: string;
+  confidence_score: number | null;
+  is_verified: boolean;
+  created_at: string;
+  updated_at: string;
+  linked_witnesses?: WitnessClaimLink[];
+}
+
+export interface WitnessClaimLink {
+  id: number;
+  witness_id: number;
+  case_claim_id: number;
+  witness_name?: string;
+  relevance_explanation: string | null;
+  supports_or_undermines: "supports" | "undermines" | "neutral";
+  created_at: string;
+}
+
+export interface RelevancyAnalysis {
+  matter_id: number;
+  allegations: CaseClaimWithWitnesses[];
+  defenses: CaseClaimWithWitnesses[];
+  witness_summary: WitnessSummary[];
+  unlinked_witnesses: UnlinkedWitness[];
+}
+
+export interface CaseClaimWithWitnesses extends CaseClaim {
+  linked_witnesses: {
+    witness_id: number;
+    witness_name: string;
+    relationship: "supports" | "undermines" | "neutral";
+    explanation: string | null;
+  }[];
+}
+
+export interface WitnessSummary {
+  witness_id: number;
+  name: string;
+  claim_links: {
+    claim_id: number;
+    claim_type: ClaimType;
+    claim_number: number;
+    relationship: "supports" | "undermines" | "neutral";
+    explanation: string | null;
+  }[];
+}
+
+export interface UnlinkedWitness {
+  id: number;
+  full_name: string;
+  role: WitnessRole;
+}
+
+export interface CreateClaimRequest {
+  claim_type: ClaimType;
+  claim_text: string;
+  source_document_id?: number | null;
+  source_page?: number | null;
+  extraction_method?: string;
+}
+
+export interface UpdateClaimRequest {
+  claim_text?: string;
+  is_verified?: boolean;
+}
+
+export interface CreateWitnessLinkRequest {
+  witness_id: number;
+  case_claim_id: number;
+  relevance_explanation?: string;
+  supports_or_undermines?: "supports" | "undermines" | "neutral";
 }
 
 export const api = new ApiClient(API_BASE_URL);
