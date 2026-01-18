@@ -435,8 +435,8 @@ async def process_matter(
 
                 if existing_doc:
                     # Update existing document
-                    existing_doc.name = clio_doc.get("name", existing_doc.name)
-                    existing_doc.content_type = clio_doc.get("content_type")
+                    existing_doc.filename = clio_doc.get("name", existing_doc.filename)
+                    existing_doc.file_type = clio_doc.get("content_type")
                     existing_doc.clio_folder_id = str(clio_doc.get("parent", {}).get("id")) if clio_doc.get("parent") else None
                     existing_doc.is_soft_deleted = False  # Un-delete if it was soft-deleted
                 else:
@@ -444,8 +444,8 @@ async def process_matter(
                     new_doc = Document(
                         matter_id=matter_id,
                         clio_document_id=str(clio_doc["id"]),
-                        name=clio_doc.get("name", "Untitled"),
-                        content_type=clio_doc.get("content_type"),
+                        filename=clio_doc.get("name", "Untitled"),
+                        file_type=clio_doc.get("content_type"),
                         clio_folder_id=str(clio_doc.get("parent", {}).get("id")) if clio_doc.get("parent") else None,
                         is_soft_deleted=False
                     )
