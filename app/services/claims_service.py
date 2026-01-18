@@ -390,3 +390,55 @@ class ClaimsService:
         claim.extraction_method = "manual"  # Mark as manually edited
         await db.commit()
         return claim
+
+    async def compute_witness_relevance(
+        self,
+        db: AsyncSession,
+        witness_id: int
+    ) -> tuple[str, str]:
+        """
+        Compute aggregate relevance for a witness from their claim links.
+
+        Args:
+            db: Database session
+            witness_id: ID of the witness
+
+        Returns:
+            Tuple of (relevance_level, relevance_reason)
+            - relevance_level: HIGHLY_RELEVANT, RELEVANT, SOMEWHAT_RELEVANT, NOT_RELEVANT, or UNKNOWN
+            - relevance_reason: Concatenated reasons from claim links
+        """
+        result = await db.execute(
+            select(WitnessClaimLink)
+            .where(WitnessClaimLink.witness_id == witness_id)
+            .options(selectinload(WitnessClaimLink.case_claim))
+        )
+        links = result.scalars().all()
+
+        if not links:
+            return ("UNKNOWN", "No claim links found")
+
+        # Score: each link adds points, "supports" weighted higher than others
+        score = sum(2 if l.supports_or_undermines == "supports" else 1 for l in links)
+        claim_count = len(links)
+
+        # Determine relevance level based on score and claim count
+        if score >= 4 or claim_count >= 3:
+            level = "HIGHLY_RELEVANT"
+        elif score >= 2:
+            level = "RELEVANT"
+        elif score >= 1:
+            level = "SOMEWHAT_RELEVANT"
+        else:
+            level = "NOT_RELEVANT"
+
+        # Build relevance reason from top 3 claim links
+        reasons = []
+        for link in links[:3]:
+            if link.case_claim:
+                claim_ref = f"{link.case_claim.claim_type.value[0].upper()}{link.case_claim.claim_number}"
+                reasons.append(f"{claim_ref}: {link.relevance_explanation}")
+
+        reason = "; ".join(reasons) if reasons else "Linked to case claims"
+
+        return (level, reason)

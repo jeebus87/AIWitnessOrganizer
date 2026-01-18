@@ -187,6 +187,7 @@ class Matter(Base):
     )
 
     last_synced_at = Column(DateTime, nullable=True)
+    sync_started_at = Column(DateTime, nullable=True)  # When current sync began (for stale detection)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 

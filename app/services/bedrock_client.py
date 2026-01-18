@@ -4,7 +4,7 @@ import base64
 import time
 import threading
 from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import boto3
 from botocore.config import Config
@@ -86,6 +86,14 @@ _bedrock_rate_limiter = TokenBucketRateLimiter(rate=5.0, capacity=10.0)
 
 
 @dataclass
+class ClaimLinkData:
+    """Link between a witness observation and a specific case claim"""
+    claim_ref: str  # "A1" for Allegation #1, "D2" for Defense #2, etc.
+    relationship: str  # "supports", "undermines", "neutral"
+    explanation: str  # Why this observation relates to this claim
+
+
+@dataclass
 class WitnessData:
     """Structured witness data extracted by AI"""
     full_name: str
@@ -102,6 +110,8 @@ class WitnessData:
     # New relevance scoring with legal reasoning
     relevance: Optional[str] = None  # HIGHLY_RELEVANT, RELEVANT, SOMEWHAT_RELEVANT, NOT_RELEVANT
     relevance_reason: Optional[str] = None  # Legal reasoning tied to claims/defenses
+    # Per-observation claim links (for granular relevance tracking)
+    claim_links: List['ClaimLinkData'] = field(default_factory=list)
 
 
 @dataclass
@@ -161,6 +171,18 @@ For each mention you identify, extract:
    - insurance_adjuster, claims_representative (insurance)
    - government_official (government employees)
    - other (only if none of the above fit)
+
+EXCLUSION RULES - DO NOT EXTRACT:
+- Attorneys who are counsel of record for any party in THIS case (they are advocates, not fact witnesses)
+- Declarants signing attorney declarations summarizing what others told them (the people they cite ARE the witnesses)
+- EXCEPTION: Extract attorneys ONLY if they personally witnessed events unrelated to legal representation (e.g., witnessed a contract signing, was present at an accident scene)
+
+ATTORNEY WORK PRODUCT - If the document appears to be internal attorney work product, legal memo, or privileged communication:
+- Contains "ATTORNEY WORK PRODUCT", "ATTORNEY-CLIENT PRIVILEGED", or "PREPARED IN ANTICIPATION OF LITIGATION"
+- Is a firm memo (TO/FROM headers between attorneys at same firm)
+- Contains phrases like "our legal theory", "litigation strategy", "privileged communication"
+Then return {"witnesses": []} - do not extract witnesses from privileged materials.
+
 3. **importance**: HIGH (direct involvement/testimony on core facts), MEDIUM (relevant supporting witness), LOW (peripheral/administrative contact) - LEGACY FIELD
 4. **relevance**: Legal relevance to the case using this 4-level scale:
    - HIGHLY_RELEVANT: Directly supports or undermines core claims/defenses; critical testimony expected
@@ -622,6 +644,15 @@ Respond with valid JSON only."""
                     }
                     importance = importance_map.get(relevance, "MEDIUM")
 
+                # Parse claim links if present
+                claim_links = []
+                for link in w.get("claimLinks", []):
+                    claim_links.append(ClaimLinkData(
+                        claim_ref=link.get("claimRef", ""),
+                        relationship=link.get("relationship", "neutral"),
+                        explanation=link.get("explanation", "")
+                    ))
+
                 witnesses.append(WitnessData(
                     full_name=w.get("fullName", "Unknown"),
                     role=w.get("role", "other").lower(),
@@ -635,7 +666,8 @@ Respond with valid JSON only."""
                     source_page=w.get("sourcePage"),
                     confidence_score=float(w.get("confidenceScore", 0.5)),
                     relevance=relevance,
-                    relevance_reason=w.get("relevanceReason")
+                    relevance_reason=w.get("relevanceReason"),
+                    claim_links=claim_links
                 ))
 
             # Get token usage

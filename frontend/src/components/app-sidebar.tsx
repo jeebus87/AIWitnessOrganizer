@@ -29,7 +29,7 @@ const navigation = [
   { name: "Matters", href: "/matters", icon: Briefcase },
   { name: "Witnesses", href: "/witnesses", icon: Users },
   { name: "Jobs", href: "/jobs", icon: FileText },
-  { name: "Settings", href: "/settings", icon: Settings },
+  // Settings removed from sidebar - accessible via firm name dropdown
 ];
 
 // Format subscription tier for display

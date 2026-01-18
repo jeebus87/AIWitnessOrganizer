@@ -55,8 +55,9 @@ class DocumentProcessor:
     """
 
     # Image constraints for AWS Bedrock
+    # Multi-image requests (30 pages per chunk) have a 2000px limit per image
     MAX_IMAGE_SIZE_MB = 3.75
-    MAX_IMAGE_DIMENSION = 8000
+    MAX_IMAGE_DIMENSION = 1920  # Under 2000px limit for multi-image requests
     SUPPORTED_IMAGE_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
     SUPPORTED_DOC_FORMATS = {".pdf", ".msg", ".eml", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".rtf", ".txt", ".html", ".htm", ".csv"}
 

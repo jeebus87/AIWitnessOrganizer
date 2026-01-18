@@ -36,6 +36,56 @@ def run_async(coro):
         loop.close()
 
 
+# === WORK PRODUCT & ATTORNEY EXCLUSION FILTERS ===
+
+STRONG_FILENAME_PATTERNS = [
+    "confidential notes", "work product", "attorney notes",
+    "privileged", "internal memo", "legal memo", "draft motion",
+    "strategy", "research memo"
+]
+
+STRONG_HEADER_PATTERNS = [
+    "ATTORNEY WORK PRODUCT",
+    "PREPARED IN ANTICIPATION OF LITIGATION",
+    "ATTORNEY-CLIENT PRIVILEGED",
+    "CONFIDENTIAL LEGAL MEMORANDUM"
+]
+
+CASE_ATTORNEY_EXCLUSION_PHRASES = [
+    "counsel for", "attorney for", "represents",
+    "on behalf of", "representing", "legal counsel"
+]
+
+
+def _is_work_product(filename: str, content_preview: str) -> bool:
+    """
+    Return True if document should be skipped as attorney work product.
+
+    Args:
+        filename: Document filename
+        content_preview: First ~2KB of document content
+    """
+    filename_lower = filename.lower()
+    if any(p in filename_lower for p in STRONG_FILENAME_PATTERNS):
+        return True
+
+    content_upper = content_preview[:2048].upper() if content_preview else ""
+    return any(p in content_upper for p in STRONG_HEADER_PATTERNS)
+
+
+def _is_case_attorney(witness_role: str, observation: str) -> bool:
+    """
+    Return True if witness should be excluded as case attorney of record.
+
+    Args:
+        witness_role: The extracted role (e.g., "attorney")
+        observation: The observation text about the witness
+    """
+    if witness_role != "attorney":
+        return False
+
+    observation_lower = (observation or "").lower()
+    return any(phrase in observation_lower for phrase in CASE_ATTORNEY_EXCLUSION_PHRASES)
 
 
 @celery_app.task(bind=True)
@@ -74,6 +124,7 @@ async def _sync_matter_documents_async(matter_id: int, user_id: int, force: bool
 
         # Acquire lock
         matter.sync_status = SyncStatus.SYNCING
+        matter.sync_started_at = datetime.utcnow()
         await session.commit()
 
         try:
@@ -86,6 +137,7 @@ async def _sync_matter_documents_async(matter_id: int, user_id: int, force: bool
             if not clio_integration:
                 logger.error(f"No Clio integration for user {user_id}")
                 matter.sync_status = SyncStatus.FAILED
+                matter.sync_started_at = None  # Clear stale detection timestamp
                 await session.commit()
                 return {"success": False, "error": "Clio integration not found"}
 
@@ -185,6 +237,7 @@ async def _sync_matter_documents_async(matter_id: int, user_id: int, force: bool
                 # Update matter's last sync time and release lock
                 matter.last_synced_at = datetime.utcnow()
                 matter.sync_status = SyncStatus.IDLE
+                matter.sync_started_at = None  # Clear stale detection timestamp
                 await session.commit()
 
                 logger.info(f"Sync complete for matter {matter_id}: {docs_synced} new, {docs_updated} updated, {docs_soft_deleted} deleted")
@@ -202,6 +255,7 @@ async def _sync_matter_documents_async(matter_id: int, user_id: int, force: bool
             # Release lock on error
             logger.error(f"Sync failed for matter {matter_id}: {e}")
             matter.sync_status = SyncStatus.FAILED
+            matter.sync_started_at = None  # Clear stale detection timestamp
             await session.commit()
             raise
 
@@ -317,6 +371,33 @@ async def _process_single_document_async(
                         logger.info(f"Updated document filename to: {document.filename}")
 
                 content = await clio.download_document(int(document.clio_document_id))
+
+            # === WORK PRODUCT FILTER ===
+            # Check if document is attorney work product before processing
+            content_preview = content[:2048].decode('utf-8', errors='ignore') if content else ""
+            if _is_work_product(document.filename or "", content_preview):
+                logger.info(f"Document {document_id} is attorney work product, skipping witness extraction")
+                document.is_processed = True
+                document.processing_error = "Skipped: Attorney work product"
+                await session.commit()
+
+                # Update job progress
+                if job_id:
+                    from sqlalchemy import text
+                    await session.execute(
+                        text("UPDATE processing_jobs SET processed_documents = processed_documents + 1, last_activity_at = NOW() WHERE id = :job_id"),
+                        {"job_id": job_id}
+                    )
+                    await session.commit()
+
+                return {
+                    "success": True,
+                    "document_id": document_id,
+                    "witnesses_found": 0,
+                    "tokens_used": 0,
+                    "skipped": True,
+                    "reason": "Attorney work product"
+                }
 
             # === CONTENT HASH CACHING ===
             # Calculate file hash upfront for caching
@@ -477,7 +558,14 @@ async def _process_single_document_async(
 
             # Save witnesses to database
             witnesses_created = 0
+            witnesses_excluded = 0
             for w_data in verified_witnesses:
+                # Filter out case attorneys (counsel of record)
+                if _is_case_attorney(w_data.role, w_data.observation):
+                    logger.info(f"Excluding case attorney: {w_data.full_name} (observation: '{w_data.observation[:50]}...')")
+                    witnesses_excluded += 1
+                    continue
+
                 witness = Witness(
                     document_id=document.id,
                     job_id=job_id,  # Track which job created this witness
@@ -495,6 +583,9 @@ async def _process_single_document_async(
                 )
                 session.add(witness)
                 witnesses_created += 1
+
+            if witnesses_excluded > 0:
+                logger.info(f"Excluded {witnesses_excluded} case attorneys from document {document_id}")
 
             # Update document status and save content hash for caching
             document.is_processed = True

@@ -1,7 +1,7 @@
 """Matter routes for syncing and browsing Clio matters"""
 import logging
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -349,12 +349,21 @@ async def process_matter(
     if not matter:
         raise HTTPException(status_code=404, detail="Matter not found")
 
-    # Check if sync is in progress
+    # Check if sync is in progress (with stale sync detection)
+    SYNC_STALE_TIMEOUT = timedelta(minutes=30)
     if matter.sync_status == SyncStatus.SYNCING:
-        raise HTTPException(
-            status_code=409,
-            detail="Matter is currently syncing. Please wait for sync to complete."
-        )
+        # Check if sync started more than 30 minutes ago (likely crashed worker)
+        if matter.sync_started_at and (datetime.utcnow() - matter.sync_started_at) > SYNC_STALE_TIMEOUT:
+            # Auto-recover from stale sync
+            matter.sync_status = SyncStatus.FAILED
+            matter.sync_started_at = None
+            await db.commit()
+            logger.warning(f"Auto-recovered stale sync for matter {matter_id} (started {matter.sync_started_at})")
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail="Matter is currently syncing. Please wait for sync to complete."
+            )
 
     # Parse request options
     scan_folder_id = None
@@ -368,12 +377,12 @@ async def process_matter(
 
     # Check if matter needs sync (never synced before)
     if matter.last_synced_at is None:
-        # Queue sync and return - frontend should poll for sync completion
-        from app.worker.tasks import sync_matter_documents
-        sync_matter_documents.delay(matter.id, current_user.id)
+        # AUTO-SYNC DISABLED: User must manually sync from Settings
+        # from app.worker.tasks import sync_matter_documents
+        # sync_matter_documents.delay(matter.id, current_user.id)
         raise HTTPException(
-            status_code=202,
-            detail="Matter has never been synced. Sync started - please try again in a moment."
+            status_code=400,
+            detail="Matter has never been synced. Please go to Settings → Clio Integration and click 'Sync with Clio' first."
         )
 
     # Build document snapshot from local database
@@ -394,16 +403,20 @@ async def process_matter(
     document_ids = [row[0] for row in result.all()]
 
     if not document_ids:
-        # Auto-trigger document sync and return response indicating sync started
-        from app.worker.tasks import sync_matter_documents
-        task = sync_matter_documents.delay(matter.id, current_user.id)
-        return JSONResponse(
-            status_code=202,
-            content={
-                "status": "syncing",
-                "message": "No documents found locally. Document sync started - please try again in a moment.",
-                "task_id": task.id
-            }
+        # AUTO-SYNC DISABLED: User must manually sync from Settings
+        # from app.worker.tasks import sync_matter_documents
+        # task = sync_matter_documents.delay(matter.id, current_user.id)
+        # return JSONResponse(
+        #     status_code=202,
+        #     content={
+        #         "status": "syncing",
+        #         "message": "No documents found locally. Document sync started - please try again in a moment.",
+        #         "task_id": task.id
+        #     }
+        # )
+        raise HTTPException(
+            status_code=400,
+            detail="No documents found for this matter. Please go to Settings → Clio Integration and click 'Sync with Clio' first."
         )
 
     # Create job record with document snapshot
