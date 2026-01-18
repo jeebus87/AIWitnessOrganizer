@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { MessageCircleQuestion, X, Send, Loader2, Bot, User } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuthStore } from "@/store/auth";
@@ -207,13 +208,31 @@ export function HelpChatbot() {
                   </div>
                 )}
                 <div
-                  className={`max-w-[80%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
+                  className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${
                     message.role === "user"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted"
+                      ? "bg-primary text-primary-foreground whitespace-pre-wrap"
+                      : "bg-muted prose prose-sm prose-slate dark:prose-invert max-w-none"
                   }`}
                 >
-                  {message.content}
+                  {message.role === "assistant" ? (
+                    <ReactMarkdown
+                      components={{
+                        // Style markdown elements for chat
+                        p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                        ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
+                        ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
+                        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+                        strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+                        h2: ({ children }) => <h2 className="font-semibold text-base mb-2 mt-3 first:mt-0">{children}</h2>,
+                        h3: ({ children }) => <h3 className="font-semibold text-sm mb-1 mt-2">{children}</h3>,
+                        code: ({ children }) => <code className="bg-muted-foreground/20 px-1 rounded text-xs">{children}</code>,
+                      }}
+                    >
+                      {message.content}
+                    </ReactMarkdown>
+                  ) : (
+                    message.content
+                  )}
                 </div>
                 {message.role === "user" && (
                   <div className="flex-shrink-0 h-8 w-8 rounded-full bg-primary flex items-center justify-center">
