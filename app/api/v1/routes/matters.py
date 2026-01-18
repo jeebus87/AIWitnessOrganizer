@@ -593,14 +593,15 @@ async def sync_matters_from_clio(
     """
     print(f"SYNC v2: Starting sync, clear_existing={clear_existing}, include_archived={include_archived}")
 
-    # Always clear existing matters to ensure clean sync (removes matters without clients from previous syncs)
-    if True:  # Always clear
+    # Only clear existing matters if explicitly requested (preserves documents!)
+    # NOTE: Deleting matters CASCADE DELETES all documents - avoid unless necessary
+    if clear_existing:
         print(f"SYNC: Clearing existing matters for user {current_user.id}")
         # First delete processing jobs that reference these matters (foreign key constraint)
         await db.execute(
             delete(ProcessingJob).where(ProcessingJob.user_id == current_user.id)
         )
-        # Then delete the matters
+        # Then delete the matters (CASCADE deletes documents!)
         await db.execute(
             delete(Matter).where(Matter.user_id == current_user.id)
         )
@@ -708,9 +709,15 @@ async def sync_matters_from_clio(
             await db.commit()
             print(f"SYNC: Complete - {synced_count} matters synced")
 
+        # Trigger document sync for all matters in background
+        # This ensures documents are synced after matters are created/updated
+        sync_all_user_matters.delay(current_user.id)
+        print(f"SYNC: Queued document sync for all matters")
+
         return {
             "success": True,
-            "matters_synced": synced_count
+            "matters_synced": synced_count,
+            "document_sync_queued": True
         }
 
     except Exception as e:
