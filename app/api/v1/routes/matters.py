@@ -393,9 +393,12 @@ async def process_matter(
     document_ids = [row[0] for row in result.all()]
 
     if not document_ids:
+        # Auto-trigger document sync and return 202 so frontend can retry
+        from app.worker.tasks import sync_matter_documents
+        sync_matter_documents.delay(matter.id, current_user.id)
         raise HTTPException(
-            status_code=400,
-            detail="No documents found to process. Try syncing first or selecting a different folder."
+            status_code=202,
+            detail="No documents found locally. Document sync started - please try again in a moment."
         )
 
     # Create job record with document snapshot
