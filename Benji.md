@@ -56,9 +56,15 @@ python-Levenshtein>=0.25.0
 ### Remaining Tasks:
 | Task | Status | Priority |
 |------|--------|----------|
-| DOCX Export | ⏳ PENDING | LOW |
+| DOCX Export | ✅ IMPLEMENTED | LOW |
 | Frontend Relevancy UI | ⏳ PENDING | MEDIUM |
 | End-to-end testing | ⏳ PENDING | HIGH |
+
+### DOCX Export Details:
+- `generate_docx()` method in export_service.py
+- `generate_docx_with_relevancy()` method for full reports
+- Same content structure as PDF export
+- Editable Word format preferred by lawyers
 
 ---
 
