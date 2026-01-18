@@ -1,15 +1,15 @@
 """Add somewhat_relevant to relevancelevel enum
 
-Revision ID: 020
-Revises: 019
+Revision ID: 021
+Revises: 020
 Create Date: 2026-01-18
 """
 from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision = '020'
-down_revision = '019'
+revision = '021'
+down_revision = '020'
 branch_labels = None
 depends_on = None
 
