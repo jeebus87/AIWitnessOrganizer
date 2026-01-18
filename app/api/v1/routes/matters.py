@@ -375,17 +375,96 @@ async def process_matter(
         legal_authority_folder_id = request.legal_authority_folder_id
         include_subfolders = request.include_subfolders
 
-    # Check if matter needs sync (never synced before)
-    if matter.last_synced_at is None:
-        # AUTO-SYNC DISABLED: User must manually sync from Settings
-        # from app.worker.tasks import sync_matter_documents
-        # sync_matter_documents.delay(matter.id, current_user.id)
-        raise HTTPException(
-            status_code=400,
-            detail="Matter has never been synced. Please go to Settings → Clio Integration and click 'Sync with Clio' first."
+    # Get Clio integration for syncing documents
+    integration_result = await db.execute(
+        select(ClioIntegration).where(
+            ClioIntegration.user_id == current_user.id,
+            ClioIntegration.is_active == True
         )
+    )
+    integration = integration_result.scalar_one_or_none()
 
-    # Build document snapshot from local database
+    if not integration:
+        raise HTTPException(status_code=400, detail="Clio integration not connected")
+
+    # AUTO-SYNC: Sync documents from Clio if needed (foolproof user experience)
+    # This ensures users never see "No documents found" when Clio has documents
+    access_token = decrypt_token(integration.access_token_encrypted)
+    refresh_token = decrypt_token(integration.refresh_token_encrypted)
+
+    async with ClioClient(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_expires_at=integration.token_expires_at,
+        region=integration.clio_region
+    ) as clio:
+        # Fetch documents from Clio and sync to local database
+        logger.info(f"Auto-syncing documents for matter {matter_id} from Clio")
+        synced_count = 0
+
+        try:
+            if scan_folder_id:
+                # Sync documents from specific folder
+                if include_subfolders:
+                    doc_iterator = clio.get_documents_recursive(
+                        matter_id=int(matter.clio_matter_id),
+                        folder_id=scan_folder_id,
+                        exclude_folder_ids=[legal_authority_folder_id] if legal_authority_folder_id else None
+                    )
+                else:
+                    doc_iterator = clio.get_documents_in_folder(scan_folder_id)
+            else:
+                # Sync all documents for matter
+                doc_iterator = clio.get_documents(matter_id=int(matter.clio_matter_id))
+
+            async for clio_doc in doc_iterator:
+                # Skip if in legal authority folder
+                if legal_authority_folder_id:
+                    doc_folder = clio_doc.get("parent", {})
+                    if doc_folder and doc_folder.get("id") == legal_authority_folder_id:
+                        continue
+
+                # Check if document already exists locally
+                existing = await db.execute(
+                    select(Document).where(
+                        Document.clio_document_id == str(clio_doc["id"]),
+                        Document.matter_id == matter_id
+                    )
+                )
+                existing_doc = existing.scalar_one_or_none()
+
+                if existing_doc:
+                    # Update existing document
+                    existing_doc.name = clio_doc.get("name", existing_doc.name)
+                    existing_doc.content_type = clio_doc.get("content_type")
+                    existing_doc.clio_folder_id = str(clio_doc.get("parent", {}).get("id")) if clio_doc.get("parent") else None
+                    existing_doc.is_soft_deleted = False  # Un-delete if it was soft-deleted
+                else:
+                    # Create new document record
+                    new_doc = Document(
+                        matter_id=matter_id,
+                        clio_document_id=str(clio_doc["id"]),
+                        name=clio_doc.get("name", "Untitled"),
+                        content_type=clio_doc.get("content_type"),
+                        clio_folder_id=str(clio_doc.get("parent", {}).get("id")) if clio_doc.get("parent") else None,
+                        is_soft_deleted=False
+                    )
+                    db.add(new_doc)
+
+                synced_count += 1
+
+            await db.commit()
+            logger.info(f"Auto-synced {synced_count} documents for matter {matter_id}")
+
+            # Update matter sync timestamp
+            matter.last_synced_at = datetime.utcnow()
+            await db.commit()
+
+        except Exception as e:
+            logger.error(f"Error syncing documents from Clio: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to sync documents from Clio: {str(e)}")
+
+    # Build document snapshot from local database (now populated)
     doc_query = select(Document.id).where(
         Document.matter_id == matter_id,
         Document.is_soft_deleted == False
@@ -403,20 +482,9 @@ async def process_matter(
     document_ids = [row[0] for row in result.all()]
 
     if not document_ids:
-        # AUTO-SYNC DISABLED: User must manually sync from Settings
-        # from app.worker.tasks import sync_matter_documents
-        # task = sync_matter_documents.delay(matter.id, current_user.id)
-        # return JSONResponse(
-        #     status_code=202,
-        #     content={
-        #         "status": "syncing",
-        #         "message": "No documents found locally. Document sync started - please try again in a moment.",
-        #         "task_id": task.id
-        #     }
-        # )
         raise HTTPException(
             status_code=400,
-            detail="No documents found for this matter. Please go to Settings → Clio Integration and click 'Sync with Clio' first."
+            detail="No documents found in the selected folder. Please select a different folder or check that documents exist in Clio."
         )
 
     # Create job record with document snapshot
