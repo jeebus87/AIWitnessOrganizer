@@ -4,6 +4,7 @@ from typing import Optional
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -393,12 +394,16 @@ async def process_matter(
     document_ids = [row[0] for row in result.all()]
 
     if not document_ids:
-        # Auto-trigger document sync and return 202 so frontend can retry
+        # Auto-trigger document sync and return response indicating sync started
         from app.worker.tasks import sync_matter_documents
-        sync_matter_documents.delay(matter.id, current_user.id)
-        raise HTTPException(
+        task = sync_matter_documents.delay(matter.id, current_user.id)
+        return JSONResponse(
             status_code=202,
-            detail="No documents found locally. Document sync started - please try again in a moment."
+            content={
+                "status": "syncing",
+                "message": "No documents found locally. Document sync started - please try again in a moment.",
+                "task_id": task.id
+            }
         )
 
     # Create job record with document snapshot

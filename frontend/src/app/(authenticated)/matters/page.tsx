@@ -159,13 +159,20 @@ export default function MattersPage() {
     if (!token || !selectedMatter) return;
     setProcessingMatterId(selectedMatter.id);
     try {
-      const job = await api.processMatter(selectedMatter.id, token, {
+      const result = await api.processMatter(selectedMatter.id, token, {
         scan_folder_id: options.scanFolderId,
         legal_authority_folder_id: options.legalAuthorityFolderId,
         include_subfolders: options.includeSubfolders,
       });
-      toast.success(`Processing started - Job #${job.job_number}`);
-      router.push("/jobs");
+
+      if (result.status === "syncing") {
+        // Documents need to sync first
+        toast.info("Syncing documents from Clio... Please try again in a moment.");
+      } else {
+        // Processing started
+        toast.success(`Processing started - Job #${result.job.job_number}`);
+        router.push("/jobs");
+      }
     } catch (error) {
       toast.error("Failed to start processing");
       console.error(error);

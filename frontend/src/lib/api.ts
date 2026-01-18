@@ -97,12 +97,28 @@ class ApiClient {
     });
   }
 
-  async processMatter(id: number, token: string, options?: ProcessMatterOptions) {
-    return this.request<ProcessingJob>(`/api/v1/matters/${id}/process`, {
+  async processMatter(id: number, token: string, options?: ProcessMatterOptions): Promise<ProcessMatterResponse> {
+    const response = await fetch(`${this.baseUrl}/api/v1/matters/${id}/process`, {
       method: "POST",
-      token,
-      body: options || {},
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+      },
+      body: JSON.stringify(options || {}),
     });
+
+    const data = await response.json();
+
+    if (!response.ok && response.status !== 202) {
+      throw new Error(data.detail || `API error: ${response.status}`);
+    }
+
+    // Check if this is a syncing response (202) or a job response (200)
+    if (response.status === 202 || data.status === "syncing") {
+      return { status: "syncing", message: data.message, task_id: data.task_id };
+    }
+
+    return { status: "processing", job: data as ProcessingJob };
   }
 
   async getMatterFolders(matterId: number, token: string) {
@@ -461,6 +477,11 @@ export interface ProcessMatterOptions {
   legal_authority_folder_id?: number | null;
   include_subfolders?: boolean;
 }
+
+// Process matter response - can be syncing or processing
+export type ProcessMatterResponse =
+  | { status: "syncing"; message: string; task_id: string }
+  | { status: "processing"; job: ProcessingJob };
 
 // Relevancy types
 export type ClaimType = "allegation" | "defense";
