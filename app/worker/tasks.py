@@ -182,19 +182,27 @@ async def _sync_matter_documents_async(matter_id: int, user_id: int, force: bool
                 )
                 local_docs = result.all()
 
-                docs_to_delete_ids = []
-                for doc_id, clio_doc_id in local_docs:
-                    if clio_doc_id not in clio_doc_ids:
-                        docs_to_delete_ids.append(doc_id)
-
-                if docs_to_delete_ids:
-                    await session.execute(
-                        update(Document)
-                        .where(Document.id.in_(docs_to_delete_ids))
-                        .values(is_soft_deleted=True)
+                # SAFETY CHECK: If Clio returned 0 documents but we have local docs,
+                # this is likely an API issue (rate limit, timeout) - skip soft-delete
+                if len(all_clio_docs) == 0 and len(local_docs) > 0:
+                    logger.warning(
+                        f"Clio returned 0 documents for matter {matter_id} but we have "
+                        f"{len(local_docs)} local documents - skipping soft-delete (possible API issue)"
                     )
-                    docs_soft_deleted = len(docs_to_delete_ids)
-                    logger.info(f"Soft-deleted {docs_soft_deleted} documents no longer in Clio")
+                else:
+                    docs_to_delete_ids = []
+                    for doc_id, clio_doc_id in local_docs:
+                        if clio_doc_id not in clio_doc_ids:
+                            docs_to_delete_ids.append(doc_id)
+
+                    if docs_to_delete_ids:
+                        await session.execute(
+                            update(Document)
+                            .where(Document.id.in_(docs_to_delete_ids))
+                            .values(is_soft_deleted=True)
+                        )
+                        docs_soft_deleted = len(docs_to_delete_ids)
+                        logger.info(f"Soft-deleted {docs_soft_deleted} documents no longer in Clio")
 
                 # STEP 3: Upsert documents from Clio
                 for doc_data in all_clio_docs:
