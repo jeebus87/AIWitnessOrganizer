@@ -520,7 +520,7 @@ export interface RelevancyAnalysis {
   unlinked_witnesses: UnlinkedWitness[];
 }
 
-export interface CaseClaimWithWitnesses extends CaseClaim {
+export interface CaseClaimWithWitnesses extends Omit<CaseClaim, 'linked_witnesses'> {
   linked_witnesses: {
     witness_id: number;
     witness_name: string;

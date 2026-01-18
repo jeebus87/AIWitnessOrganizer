@@ -29,7 +29,10 @@ export default function AuthCallbackPage() {
       // Fetch user profile then trigger full sync
       fetchUserProfile()
         .then(async () => {
-          // Start syncing BEFORE navigating so overlay state is set
+          // Clear loading state FIRST so layout renders normally
+          setLoading(false);
+
+          // Start sync overlay
           startSync("Syncing matters from Clio");
 
           // Navigate to matters page where overlay will show
@@ -41,7 +44,6 @@ export default function AuthCallbackPage() {
             console.error("Sync error:", syncError);
           } finally {
             endSync();
-            setLoading(false);
           }
         })
         .catch(() => {
