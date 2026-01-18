@@ -137,6 +137,19 @@ class ApiClient {
     return this.request<WitnessListResponse>(`/api/v1/witnesses${query}`, { token });
   }
 
+  // Canonical (deduplicated) witnesses
+  async getCanonicalWitnesses(token: string, params?: CanonicalWitnessFilters) {
+    const searchParams = new URLSearchParams();
+    if (params?.page) searchParams.set('page', params.page.toString());
+    if (params?.page_size) searchParams.set('page_size', params.page_size.toString());
+    if (params?.matter_id) searchParams.set('matter_id', params.matter_id.toString());
+    if (params?.relevance) searchParams.set('relevance', params.relevance);
+    if (params?.role) searchParams.set('role', params.role);
+    if (params?.search) searchParams.set('search', params.search);
+    const query = searchParams.toString();
+    return this.request<CanonicalWitnessListResponse>(`/api/v1/witnesses/canonical${query ? '?' + query : ''}`, { token });
+  }
+
   // Jobs
   async getJobs(token: string, archived: boolean = false) {
     const params = new URLSearchParams();
@@ -446,6 +459,48 @@ export interface WitnessListResponse {
   page: number;
   page_size: number;
   total_pages: number;
+}
+
+// Canonical (deduplicated) witness types
+export interface CanonicalObservation {
+  document_id: number;
+  document_filename: string;
+  page: number | null;
+  text: string;
+}
+
+export interface CanonicalWitness {
+  id: number;
+  matter_id: number;
+  full_name: string;
+  role: WitnessRole;
+  relevance: string | null;
+  relevance_reason: string | null;
+  observations: CanonicalObservation[];
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  source_document_count: number;
+  max_confidence_score: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CanonicalWitnessListResponse {
+  witnesses: CanonicalWitness[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface CanonicalWitnessFilters {
+  page?: number;
+  page_size?: number;
+  matter_id?: number;
+  relevance?: string;
+  role?: string;
+  search?: string;
 }
 
 export interface JobListResponse {

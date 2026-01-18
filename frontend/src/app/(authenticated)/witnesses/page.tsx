@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import useSWR from "swr";
-import { Search, Download, FileSpreadsheet, FileText, Filter } from "lucide-react";
+import { Search, Download, FileSpreadsheet, FileText, Filter, Users, Layers, FileStack } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -30,8 +30,15 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useAuthStore } from "@/store/auth";
-import { api, WitnessFilters, WitnessRole, ImportanceLevel, WitnessListResponse } from "@/lib/api";
+import { api, WitnessFilters, WitnessRole, ImportanceLevel, WitnessListResponse, CanonicalWitnessListResponse, CanonicalWitness } from "@/lib/api";
 
 const roleColors: Record<WitnessRole, string> = {
   plaintiff: "bg-blue-500",
@@ -54,22 +61,51 @@ const importanceColors: Record<ImportanceLevel, string> = {
   low: "text-green-500 border-green-500",
 };
 
+const relevanceColors: Record<string, string> = {
+  HIGHLY_RELEVANT: "text-red-500 border-red-500",
+  RELEVANT: "text-yellow-500 border-yellow-500",
+  SOMEWHAT_RELEVANT: "text-blue-500 border-blue-500",
+  NOT_RELEVANT: "text-gray-500 border-gray-500",
+};
+
+type ViewMode = "canonical" | "raw";
+
 export default function WitnessesPage() {
   const { token } = useAuthStore();
   const [searchQuery, setSearchQuery] = useState("");
   const [filters, setFilters] = useState<WitnessFilters>({});
+  const [viewMode, setViewMode] = useState<ViewMode>("canonical");
 
-  const { data: witnessesResponse, isLoading } = useSWR<WitnessListResponse>(
-    token ? ["witnesses", token, filters] : null,
+  // Fetch raw witnesses
+  const { data: witnessesResponse, isLoading: isLoadingRaw } = useSWR<WitnessListResponse>(
+    token && viewMode === "raw" ? ["witnesses", token, filters] : null,
     () => api.getWitnesses(token!, filters)
   );
 
+  // Fetch canonical witnesses
+  const { data: canonicalResponse, isLoading: isLoadingCanonical } = useSWR<CanonicalWitnessListResponse>(
+    token && viewMode === "canonical" ? ["canonical-witnesses", token, filters] : null,
+    () => api.getCanonicalWitnesses(token!, {
+      search: filters.search,
+      role: filters.role,
+    })
+  );
+
   const witnesses = witnessesResponse?.witnesses;
+  const canonicalWitnesses = canonicalResponse?.witnesses;
+  const isLoading = viewMode === "canonical" ? isLoadingCanonical : isLoadingRaw;
 
   const filteredWitnesses = witnesses?.filter(
     (witness) =>
       witness.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       witness.observation?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      witness.email?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const filteredCanonical = canonicalWitnesses?.filter(
+    (witness) =>
+      witness.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      witness.observations?.some(obs => obs.text?.toLowerCase().includes(searchQuery.toLowerCase())) ||
       witness.email?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -86,13 +122,19 @@ export default function WitnessesPage() {
     setSearchQuery("");
   };
 
+  const totalCount = viewMode === "canonical"
+    ? canonicalResponse?.total || 0
+    : witnessesResponse?.total || 0;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Witnesses</h1>
           <p className="text-muted-foreground">
-            All extracted witnesses from processed documents
+            {viewMode === "canonical"
+              ? "Deduplicated witness view (same person across documents merged)"
+              : "All extracted witnesses from processed documents"}
           </p>
         </div>
         <div className="flex gap-2">
@@ -125,10 +167,40 @@ export default function WitnessesPage() {
             <div>
               <CardTitle>Witness Directory</CardTitle>
               <CardDescription>
-                {witnesses?.length || 0} witnesses found across all processed documents
+                {totalCount} {viewMode === "canonical" ? "unique witnesses" : "witness records"} found
               </CardDescription>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center">
+              {/* View mode toggle */}
+              <TooltipProvider>
+                <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as ViewMode)}>
+                  <TabsList>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <TabsTrigger value="canonical" className="gap-1">
+                          <Users className="h-4 w-4" />
+                          Canonical
+                        </TabsTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Deduplicated view - same person merged across documents</p>
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <TabsTrigger value="raw" className="gap-1">
+                          <Layers className="h-4 w-4" />
+                          Raw
+                        </TabsTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>All individual extractions (may have duplicates)</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TabsList>
+                </Tabs>
+              </TooltipProvider>
+
               <div className="relative w-64">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -161,21 +233,25 @@ export default function WitnessesPage() {
                       {role.replace("_", " ")}
                     </DropdownMenuItem>
                   ))}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuLabel>Filter by Importance</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => handleImportanceFilter(undefined)}>
-                    All Levels
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleImportanceFilter("high")}>
-                    High Importance
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleImportanceFilter("medium")}>
-                    Medium Importance
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleImportanceFilter("low")}>
-                    Low Importance
-                  </DropdownMenuItem>
+                  {viewMode === "raw" && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel>Filter by Importance</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => handleImportanceFilter(undefined)}>
+                        All Levels
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => handleImportanceFilter("high")}>
+                        High Importance
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => handleImportanceFilter("medium")}>
+                        Medium Importance
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => handleImportanceFilter("low")}>
+                        Low Importance
+                      </DropdownMenuItem>
+                    </>
+                  )}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={clearFilters}>
                     Clear All Filters
@@ -192,78 +268,220 @@ export default function WitnessesPage() {
                 <Skeleton key={i} className="h-16 w-full" />
               ))}
             </div>
-          ) : filteredWitnesses?.length === 0 ? (
-            <div className="py-12 text-center text-muted-foreground">
-              {searchQuery || Object.keys(filters).length > 0
-                ? "No witnesses match your filters"
-                : "No witnesses extracted yet. Process some matters to get started."}
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Importance</TableHead>
-                  <TableHead>Observation</TableHead>
-                  <TableHead>Contact</TableHead>
-                  <TableHead>Confidence</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredWitnesses?.map((witness) => (
-                  <TableRow key={witness.id}>
-                    <TableCell className="font-medium">{witness.full_name}</TableCell>
-                    <TableCell>
-                      <Badge variant="secondary" className="capitalize">
-                        <div
-                          className={`mr-1 h-2 w-2 rounded-full ${roleColors[witness.role]}`}
-                        />
-                        {witness.role.replace("_", " ")}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant="outline"
-                        className={`capitalize ${importanceColors[witness.importance]}`}
-                      >
-                        {witness.importance}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="max-w-xs truncate">
-                      {witness.observation || "—"}
-                    </TableCell>
-                    <TableCell>
-                      <div className="text-sm">
-                        {witness.email && (
-                          <a href={`mailto:${witness.email}`} className="text-primary hover:underline">
-                            {witness.email}
-                          </a>
-                        )}
-                        {witness.phone && <div className="text-muted-foreground">{witness.phone}</div>}
-                        {!witness.email && !witness.phone && "—"}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <div className="h-2 w-16 rounded-full bg-muted overflow-hidden">
-                          <div
-                            className="h-full bg-primary"
-                            style={{ width: `${(witness.confidence_score || 0) * 100}%` }}
-                          />
-                        </div>
-                        <span className="text-sm text-muted-foreground">
-                          {Math.round((witness.confidence_score || 0) * 100)}%
-                        </span>
-                      </div>
-                    </TableCell>
+          ) : viewMode === "canonical" ? (
+            // Canonical (deduplicated) view
+            !filteredCanonical?.length ? (
+              <div className="py-12 text-center text-muted-foreground">
+                {searchQuery || Object.keys(filters).length > 0
+                  ? "No witnesses match your filters"
+                  : "No witnesses extracted yet. Process some matters to get started."}
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Relevance</TableHead>
+                    <TableHead>Observations</TableHead>
+                    <TableHead>Contact</TableHead>
+                    <TableHead>Sources</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {filteredCanonical?.map((witness) => (
+                    <CanonicalWitnessRow key={witness.id} witness={witness} />
+                  ))}
+                </TableBody>
+              </Table>
+            )
+          ) : (
+            // Raw (individual records) view
+            !filteredWitnesses?.length ? (
+              <div className="py-12 text-center text-muted-foreground">
+                {searchQuery || Object.keys(filters).length > 0
+                  ? "No witnesses match your filters"
+                  : "No witnesses extracted yet. Process some matters to get started."}
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Importance</TableHead>
+                    <TableHead>Observation</TableHead>
+                    <TableHead>Contact</TableHead>
+                    <TableHead>Confidence</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredWitnesses?.map((witness) => (
+                    <TableRow key={witness.id}>
+                      <TableCell className="font-medium">{witness.full_name}</TableCell>
+                      <TableCell>
+                        <Badge variant="secondary" className="capitalize">
+                          <div
+                            className={`mr-1 h-2 w-2 rounded-full ${roleColors[witness.role]}`}
+                          />
+                          {witness.role.replace("_", " ")}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={`capitalize ${importanceColors[witness.importance]}`}
+                        >
+                          {witness.importance}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="max-w-xs truncate">
+                        {witness.observation || "—"}
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm">
+                          {witness.email && (
+                            <a href={`mailto:${witness.email}`} className="text-primary hover:underline">
+                              {witness.email}
+                            </a>
+                          )}
+                          {witness.phone && <div className="text-muted-foreground">{witness.phone}</div>}
+                          {!witness.email && !witness.phone && "—"}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <div className="h-2 w-16 rounded-full bg-muted overflow-hidden">
+                            <div
+                              className="h-full bg-primary"
+                              style={{ width: `${(witness.confidence_score || 0) * 100}%` }}
+                            />
+                          </div>
+                          <span className="text-sm text-muted-foreground">
+                            {Math.round((witness.confidence_score || 0) * 100)}%
+                          </span>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )
           )}
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// Component for canonical witness row with expandable observations
+function CanonicalWitnessRow({ witness }: { witness: CanonicalWitness }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <>
+      <TableRow
+        className="cursor-pointer hover:bg-muted/50"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <TableCell className="font-medium">{witness.full_name}</TableCell>
+        <TableCell>
+          <Badge variant="secondary" className="capitalize">
+            <div
+              className={`mr-1 h-2 w-2 rounded-full ${roleColors[witness.role]}`}
+            />
+            {witness.role.replace("_", " ")}
+          </Badge>
+        </TableCell>
+        <TableCell>
+          {witness.relevance ? (
+            <Badge
+              variant="outline"
+              className={`capitalize ${relevanceColors[witness.relevance] || ""}`}
+            >
+              {witness.relevance.replace("_", " ").toLowerCase()}
+            </Badge>
+          ) : (
+            "—"
+          )}
+        </TableCell>
+        <TableCell className="max-w-xs">
+          <div className="flex items-center gap-2">
+            <span className="truncate">
+              {witness.observations?.[0]?.text || "—"}
+            </span>
+            {witness.observations?.length > 1 && (
+              <Badge variant="outline" className="shrink-0">
+                +{witness.observations.length - 1} more
+              </Badge>
+            )}
+          </div>
+        </TableCell>
+        <TableCell>
+          <div className="text-sm">
+            {witness.email && (
+              <a
+                href={`mailto:${witness.email}`}
+                className="text-primary hover:underline"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {witness.email}
+              </a>
+            )}
+            {witness.phone && <div className="text-muted-foreground">{witness.phone}</div>}
+            {!witness.email && !witness.phone && "—"}
+          </div>
+        </TableCell>
+        <TableCell>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger>
+                <Badge variant="secondary" className="gap-1">
+                  <FileStack className="h-3 w-3" />
+                  {witness.source_document_count}
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Found in {witness.source_document_count} document(s)</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </TableCell>
+      </TableRow>
+      {expanded && witness.observations?.length > 0 && (
+        <TableRow className="bg-muted/30">
+          <TableCell colSpan={6} className="p-0">
+            <div className="px-6 py-4 space-y-3">
+              <div className="text-sm font-medium text-muted-foreground">
+                All observations ({witness.observations.length}):
+              </div>
+              {witness.observations.map((obs, idx) => (
+                <div
+                  key={idx}
+                  className="rounded-md border bg-background p-3 text-sm"
+                >
+                  <div className="flex items-center gap-2 text-muted-foreground mb-1">
+                    <FileText className="h-3 w-3" />
+                    <span>{obs.document_filename}</span>
+                    {obs.page && (
+                      <span className="text-xs">
+                        (Page {obs.page})
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-foreground">{obs.text}</p>
+                </div>
+              ))}
+              {witness.relevance_reason && (
+                <div className="text-sm">
+                  <span className="font-medium">Relevance: </span>
+                  <span className="text-muted-foreground">{witness.relevance_reason}</span>
+                </div>
+              )}
+            </div>
+          </TableCell>
+        </TableRow>
+      )}
+    </>
   );
 }

@@ -94,3 +94,42 @@ class DocumentResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# Canonical Witness schemas for deduplicated view
+class CanonicalObservation(BaseModel):
+    """Single observation from a document"""
+    document_id: int
+    document_filename: str
+    page: Optional[int] = None
+    text: str
+
+
+class CanonicalWitnessResponse(BaseModel):
+    """Canonical (deduplicated) witness with merged observations"""
+    id: int
+    matter_id: int
+    full_name: str
+    role: str
+    relevance: Optional[str] = None
+    relevance_reason: Optional[str] = None
+    observations: List[CanonicalObservation] = []
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    source_document_count: int = 1
+    max_confidence_score: Optional[float] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CanonicalWitnessListResponse(BaseModel):
+    """Paginated canonical witness list response"""
+    witnesses: List[CanonicalWitnessResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int

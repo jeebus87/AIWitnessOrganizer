@@ -22,6 +22,7 @@ from app.services.clio_client import ClioClient
 from app.services.document_processor import DocumentProcessor
 from app.services.bedrock_client import BedrockClient
 from app.services.legal_authority_service import LegalAuthorityService
+from app.services.canonicalization_service import CanonicalizationService, WitnessInput
 
 logger = get_task_logger(__name__)
 
@@ -564,36 +565,61 @@ async def _process_single_document_async(
             await session.execute(delete_stmt)
             logger.info(f"Deleted existing witnesses for document {document.id}")
 
-            # Save witnesses to database
+            # Initialize canonicalization service for deduplication + case attorney filtering
+            canon_service = CanonicalizationService()
+
+            # Save witnesses to database with canonicalization
             witnesses_created = 0
             witnesses_excluded = 0
-            for w_data in verified_witnesses:
-                # Filter out case attorneys (counsel of record)
-                if _is_case_attorney(w_data.role, w_data.observation):
-                    logger.info(f"Excluding case attorney: {w_data.full_name} (observation: '{w_data.observation[:50]}...')")
-                    witnesses_excluded += 1
-                    continue
+            canonical_new = 0
+            canonical_merged = 0
 
-                witness = Witness(
-                    document_id=document.id,
-                    job_id=job_id,  # Track which job created this witness
+            for w_data in verified_witnesses:
+                # Create witness input for canonicalization service
+                witness_input = WitnessInput(
                     full_name=w_data.full_name,
-                    role=_map_role(w_data.role),
-                    importance=_map_importance(w_data.importance),
+                    role=w_data.role,
+                    importance=w_data.importance,
                     observation=w_data.observation,
-                    source_quote=w_data.source_summary,  # source_summary stored in source_quote column
                     source_page=w_data.source_page,
-                    context=w_data.context,
                     email=w_data.email,
                     phone=w_data.phone,
                     address=w_data.address,
-                    confidence_score=w_data.confidence_score
+                    confidence_score=w_data.confidence_score,
+                    relevance=getattr(w_data, 'relevance', None),
+                    relevance_reason=getattr(w_data, 'relevance_reason', None)
                 )
-                session.add(witness)
-                witnesses_created += 1
+
+                # Canonicalize: deduplicate + filter case attorneys
+                result = await canon_service.create_or_update_canonical(
+                    db=session,
+                    matter_id=document.matter_id,
+                    witness_input=witness_input,
+                    document_id=document.id,
+                    filename=document.filename,
+                    exclude_case_attorneys=True
+                )
+
+                if result.is_excluded:
+                    logger.info(
+                        f"Excluding: {w_data.full_name} - {result.exclusion_reason}"
+                    )
+                    witnesses_excluded += 1
+                else:
+                    # Update witness with job_id
+                    if result.witness_record:
+                        result.witness_record.job_id = job_id
+
+                    witnesses_created += 1
+                    if result.is_new_canonical:
+                        canonical_new += 1
+                    else:
+                        canonical_merged += 1
 
             if witnesses_excluded > 0:
                 logger.info(f"Excluded {witnesses_excluded} case attorneys from document {document_id}")
+            if canonical_merged > 0:
+                logger.info(f"Merged {canonical_merged} witnesses into existing canonical records")
 
             # Update document status and save content hash for caching
             document.is_processed = True

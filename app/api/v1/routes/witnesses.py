@@ -9,10 +9,11 @@ from sqlalchemy import select, func, delete
 from sqlalchemy.orm import selectinload
 
 from app.db.session import get_db
-from app.db.models import Witness, Document, Matter, ImportanceLevel, WitnessRole, User, ClioIntegration
+from app.db.models import Witness, Document, Matter, ImportanceLevel, WitnessRole, User, ClioIntegration, CanonicalWitness, RelevanceLevel
 from app.api.v1.schemas.witnesses import (
     WitnessResponse, WitnessListResponse, MatterResponse,
-    MatterListResponse, DocumentResponse
+    MatterListResponse, DocumentResponse,
+    CanonicalWitnessResponse, CanonicalWitnessListResponse, CanonicalObservation
 )
 from app.services.export_service import ExportService
 from app.services.clio_client import get_clio_account_info
@@ -101,6 +102,98 @@ async def list_witnesses(
         ))
 
     return WitnessListResponse(
+        witnesses=witness_responses,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=(total + page_size - 1) // page_size
+    )
+
+
+@router.get("/canonical", response_model=CanonicalWitnessListResponse)
+async def list_canonical_witnesses(
+    current_user: User = Depends(get_current_user),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    matter_id: Optional[int] = None,
+    relevance: Optional[List[str]] = Query(None),
+    role: Optional[List[str]] = Query(None),
+    search: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    List canonical (deduplicated) witnesses with filtering and pagination.
+    Returns consolidated witness records with merged observations from all documents.
+    """
+    # Base query
+    query = (
+        select(CanonicalWitness)
+        .join(Matter)
+        .where(Matter.user_id == current_user.id)
+    )
+
+    # Apply filters
+    if matter_id:
+        query = query.where(CanonicalWitness.matter_id == matter_id)
+
+    if relevance:
+        relevance_enums = [RelevanceLevel(r.lower()) for r in relevance]
+        query = query.where(CanonicalWitness.relevance.in_(relevance_enums))
+
+    if role:
+        role_enums = [WitnessRole(r.lower()) for r in role]
+        query = query.where(CanonicalWitness.role.in_(role_enums))
+
+    if search:
+        query = query.where(CanonicalWitness.full_name.ilike(f"%{search}%"))
+
+    # Count total
+    count_query = select(func.count()).select_from(query.subquery())
+    total = await db.scalar(count_query)
+
+    # Apply pagination and ordering
+    offset = (page - 1) * page_size
+    query = query.offset(offset).limit(page_size)
+    query = query.order_by(
+        CanonicalWitness.source_document_count.desc(),  # Most referenced first
+        CanonicalWitness.full_name
+    )
+
+    result = await db.execute(query)
+    canonical_witnesses = result.scalars().all()
+
+    # Build response
+    witness_responses = []
+    for cw in canonical_witnesses:
+        # Parse merged_observations JSON into CanonicalObservation objects
+        observations = []
+        if cw.merged_observations:
+            for obs in cw.merged_observations:
+                observations.append(CanonicalObservation(
+                    document_id=obs.get("doc_id", 0),
+                    document_filename=obs.get("filename", "Unknown"),
+                    page=obs.get("page"),
+                    text=obs.get("text", "")
+                ))
+
+        witness_responses.append(CanonicalWitnessResponse(
+            id=cw.id,
+            matter_id=cw.matter_id,
+            full_name=cw.full_name,
+            role=cw.role.value,
+            relevance=cw.relevance.value.upper() if cw.relevance else None,
+            relevance_reason=cw.relevance_reason,
+            observations=observations,
+            email=cw.email,
+            phone=cw.phone,
+            address=cw.address,
+            source_document_count=cw.source_document_count,
+            max_confidence_score=cw.max_confidence_score,
+            created_at=cw.created_at,
+            updated_at=cw.updated_at
+        ))
+
+    return CanonicalWitnessListResponse(
         witnesses=witness_responses,
         total=total,
         page=page,
