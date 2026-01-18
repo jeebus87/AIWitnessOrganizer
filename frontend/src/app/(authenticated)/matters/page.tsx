@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import useSWR from "swr";
 import {
-  RefreshCw,
   Play,
   Loader2,
   ArrowUpDown,
@@ -39,7 +38,6 @@ import { Pagination } from "@/components/ui/pagination";
 import { FilterBar } from "@/components/matters/filter-bar";
 import { FolderSelectionDialog } from "@/components/matters/folder-selection-dialog";
 import { useAuthStore } from "@/store/auth";
-import { useSyncStore } from "@/store/sync";
 import { api, MatterListResponse, MatterFilters, Matter } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -48,7 +46,6 @@ type SortOrder = "asc" | "desc";
 
 export default function MattersPage() {
   const { token } = useAuthStore();
-  const { startSync, endSync } = useSyncStore();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -64,7 +61,6 @@ export default function MattersPage() {
   const clientName = searchParams.get("clientName") || "";
 
   const [processingMatterId, setProcessingMatterId] = useState<number | null>(null);
-  const [syncing, setSyncing] = useState(false);
   const [searchInput, setSearchInput] = useState(search);
   const [folderDialogOpen, setFolderDialogOpen] = useState(false);
   const [selectedMatter, setSelectedMatter] = useState<Matter | null>(null);
@@ -123,34 +119,8 @@ export default function MattersPage() {
     () => api.getMatterFilters(token!)
   );
 
-  // Auto-sync removed - sync only happens on:
-  // 1. First login
-  // 2. Manual "Sync with Clio" button
-  // 3. Before processing if matter was never synced
-
   const matters = mattersResponse?.matters;
   const totalPages = mattersResponse?.total_pages || 0;
-
-  const handleSync = async () => {
-    if (!token) return;
-    console.log("[MattersPage] handleSync called, calling startSync...");
-    setSyncing(true);
-    startSync("Syncing matters from Clio");
-    console.log("[MattersPage] startSync called, isSyncing should be true now");
-    try {
-      const result = await api.syncMatters(token);
-      toast.success(`Synced ${result.matters_synced} matters from Clio`);
-      mutate();
-    } catch (error: any) {
-      console.error("Sync error:", error);
-      const errorMessage =
-        error.response?.data?.detail || error.message || "Unknown error";
-      toast.error(`Sync failed: ${errorMessage}`);
-    } finally {
-      setSyncing(false);
-      endSync();
-    }
-  };
 
   const handleProcessClick = (matter: Matter) => {
     setSelectedMatter(matter);
@@ -229,21 +199,11 @@ export default function MattersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Matters</h1>
-          <p className="text-muted-foreground">
-            Manage your legal matters synced from Clio
-          </p>
-        </div>
-        <Button onClick={handleSync} disabled={syncing}>
-          {syncing ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="mr-2 h-4 w-4" />
-          )}
-          Sync with Clio
-        </Button>
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Matters</h1>
+        <p className="text-muted-foreground">
+          Manage your legal matters synced from Clio
+        </p>
       </div>
 
       <Card>
@@ -282,7 +242,7 @@ export default function MattersPage() {
             <div className="py-8 text-center text-muted-foreground">
               {search || status || practiceArea || clientName
                 ? "No matters match your filters"
-                : "No matters synced yet. Click 'Sync with Clio' to get started."}
+                : "No matters synced yet. Go to Settings → Clio Integration to sync."}
             </div>
           ) : (
             <>

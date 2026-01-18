@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ExternalLink, CheckCircle, Edit2, Save, X, CreditCard, Loader2 } from "lucide-react";
+import { ExternalLink, CheckCircle, Edit2, Save, X, CreditCard, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -14,6 +14,8 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
 import { useAuthStore } from "@/store/auth";
+import { useSyncStore } from "@/store/sync";
+import { api } from "@/lib/api";
 import { toast } from "sonner";
 
 // Top-up packages
@@ -25,9 +27,11 @@ const TOPUP_PACKAGES = [
 
 export default function SettingsPage() {
   const { userProfile, token, fetchUserProfile } = useAuthStore();
+  const { startSync, endSync } = useSyncStore();
   const [isEditingFirmName, setIsEditingFirmName] = useState(false);
   const [firmName, setFirmName] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [credits, setCredits] = useState<{
     daily_remaining: number;
     bonus_remaining: number;
@@ -111,6 +115,23 @@ export default function SettingsPage() {
     } catch (e) {
       console.error(e);
       toast.error("Failed to start checkout");
+    }
+  };
+
+  const handleSync = async () => {
+    if (!token) return;
+    setSyncing(true);
+    startSync("Syncing matters from Clio");
+    try {
+      const result = await api.syncMatters(token);
+      toast.success(`Synced ${result.matters_synced} matters from Clio`);
+    } catch (error: unknown) {
+      console.error("Sync error:", error);
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      toast.error(`Sync failed: ${errorMessage}`);
+    } finally {
+      setSyncing(false);
+      endSync();
     }
   };
 
@@ -239,6 +260,23 @@ export default function SettingsPage() {
                 <CheckCircle className="mr-1 h-3 w-3" />
                 Connected
               </Badge>
+            </div>
+            <Separator />
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-medium">Sync Data</div>
+                <div className="text-sm text-muted-foreground">
+                  Pull latest matters and documents from Clio
+                </div>
+              </div>
+              <Button onClick={handleSync} disabled={syncing}>
+                {syncing ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                Sync with Clio
+              </Button>
             </div>
           </CardContent>
         </Card>
