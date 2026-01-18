@@ -180,13 +180,13 @@ class CanonicalizationService:
         self._init_bedrock()
 
     def _init_bedrock(self):
-        """Initialize Bedrock client for embeddings"""
+        """Initialize Bedrock client for embeddings and AI verification"""
         try:
             self.bedrock_client = boto3.client(
                 "bedrock-runtime",
-                region_name=settings.AWS_REGION,
-                aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-                aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+                region_name=settings.aws_region,
+                aws_access_key_id=settings.aws_access_key_id,
+                aws_secret_access_key=settings.aws_secret_access_key,
             )
         except Exception as e:
             logger.error(f"Failed to initialize Bedrock client: {e}")
