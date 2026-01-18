@@ -35,8 +35,12 @@ export default function AuthenticatedLayout({
 
   return (
     <>
+      {/* DEBUG: This should always show if layout renders */}
+      <div className="fixed top-0 left-0 right-0 bg-red-500 text-white text-center py-2 z-[9999]">
+        DEBUG: Layout is rendering - SyncOverlay should work
+      </div>
       <SyncOverlay />
-      <div className="flex h-screen">
+      <div className="flex h-screen pt-10">
         <AppSidebar />
         <main className="flex-1 overflow-auto bg-muted/30">
           <div className="p-6">{children}</div>
