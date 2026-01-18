@@ -3,6 +3,10 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/providers";
 
+// Force all pages to be dynamically rendered - no edge caching
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 const inter = Inter({
   subsets: ["latin"],
 });
