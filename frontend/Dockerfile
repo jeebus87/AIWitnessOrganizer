@@ -14,8 +14,10 @@ FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 
-# Cache bust - change this value to force rebuild
-ARG CACHEBUST=1
+# Cache bust - this value is updated to force rebuild
+ARG CACHEBUST=20260118_0240
+# Invalidate cache by echoing the cachebust value
+RUN echo "Cache bust: $CACHEBUST"
 COPY . .
 
 # Build arguments for Next.js public env vars
