@@ -2,8 +2,7 @@ FROM node:22-alpine AS base
 
 # Install dependencies only when needed
 FROM base AS deps
-# FORCE REBUILD 20260118_0245 - change this to force fresh build
-RUN echo "Build timestamp: 20260118_0245" && apk add --no-cache libc6-compat
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 # Install dependencies
@@ -14,11 +13,6 @@ RUN npm ci
 FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-
-# Cache bust - this value is updated to force rebuild
-ARG CACHEBUST=20260118_0240
-# Invalidate cache by echoing the cachebust value
-RUN echo "Cache bust: $CACHEBUST"
 COPY . .
 
 # Build arguments for Next.js public env vars

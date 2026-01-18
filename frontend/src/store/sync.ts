@@ -23,21 +23,17 @@ export const useSyncStore = create<SyncState>()((set) => ({
 
   setSyncProgress: (progress) => set({ syncProgress: progress }),
 
-  startSync: (message = "Syncing with Clio") => {
-    console.log("[SyncStore] startSync called with message:", message);
+  startSync: (message = "Syncing with Clio") =>
     set({
       isSyncing: true,
       syncMessage: message,
       syncProgress: null,
-    });
-  },
+    }),
 
-  endSync: () => {
-    console.log("[SyncStore] endSync called");
+  endSync: () =>
     set({
       isSyncing: false,
       syncMessage: "",
       syncProgress: null,
-    });
-  },
+    }),
 }));

@@ -1,22 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { useSyncStore } from "@/store/sync";
 
 export function SyncOverlay() {
   const { isSyncing, syncMessage } = useSyncStore();
-  const [debugVisible, setDebugVisible] = useState(true);
 
-  // Debug: always show for 5 seconds on mount to prove component renders
-  useEffect(() => {
-    const timer = setTimeout(() => setDebugVisible(false), 5000);
-    return () => clearTimeout(timer);
-  }, []);
-
-  // Show if syncing OR during debug period
-  if (!isSyncing && !debugVisible) return null;
-
-  const displayMessage = isSyncing ? syncMessage : "DEBUG: Overlay renders correctly!";
+  if (!isSyncing) return null;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70">
@@ -30,9 +19,9 @@ export function SyncOverlay() {
         {/* Gradient text message with animated ellipsis */}
         <div className="flex items-baseline gap-0">
           <span className="text-2xl font-semibold bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600 bg-clip-text text-transparent">
-            {displayMessage}
+            {syncMessage}
           </span>
-          {isSyncing && <AnimatedEllipsis />}
+          <AnimatedEllipsis />
         </div>
 
         {/* Subtext */}
