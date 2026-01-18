@@ -651,22 +651,21 @@ async def _process_matter_async(
             # Check if job has a document snapshot (preferred - created at job creation time)
             if job.document_ids_snapshot:
                 logger.info(f"Using document snapshot from job creation ({len(job.document_ids_snapshot)} documents)")
-                document_ids_to_process = job.document_ids_snapshot
+                snapshot_ids = job.document_ids_snapshot
 
-                # Filter out already processed documents (for job resume)
+                # Query actual Document objects that are unprocessed
                 result = await session.execute(
-                    select(Document.id).where(
-                        Document.id.in_(document_ids_to_process),
+                    select(Document).where(
+                        Document.id.in_(snapshot_ids),
                         Document.is_processed == False,
                         Document.is_soft_deleted == False
                     )
                 )
-                unprocessed_ids = [row[0] for row in result.all()]
+                unprocessed_docs = list(result.scalars().all())
+                document_ids_to_process = [d.id for d in unprocessed_docs]
 
-                if len(document_ids_to_process) > len(unprocessed_ids):
-                    logger.info(f"RESUME MODE: Skipping {len(document_ids_to_process) - len(unprocessed_ids)} already-processed documents")
-
-                document_ids_to_process = unprocessed_ids
+                if len(snapshot_ids) > len(unprocessed_docs):
+                    logger.info(f"RESUME MODE: Skipping {len(snapshot_ids) - len(unprocessed_docs)} already-processed documents")
             else:
                 # Fallback: Query documents from database (for backwards compatibility)
                 logger.info(f"No snapshot - querying documents from database")
