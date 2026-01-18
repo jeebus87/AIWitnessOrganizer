@@ -179,7 +179,12 @@ class Matter(Base):
     client_name = Column(String(255), nullable=True)
 
     # Sync status for concurrency control
-    sync_status = Column(Enum(SyncStatus), default=SyncStatus.IDLE, nullable=False)
+    # Use values_callable to ensure lowercase values ('idle', 'syncing', 'failed') match the PostgreSQL enum
+    sync_status = Column(
+        Enum(SyncStatus, values_callable=lambda obj: [e.value for e in obj]),
+        default=SyncStatus.IDLE,
+        nullable=False
+    )
 
     last_synced_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
@@ -241,8 +246,9 @@ class CanonicalWitness(Base):
 
     # Core witness info (best values from all matching witnesses)
     full_name = Column(String(255), nullable=False, index=True)
-    role = Column(Enum(WitnessRole), nullable=False)
-    relevance = Column(Enum(RelevanceLevel), nullable=True, default=RelevanceLevel.RELEVANT)
+    # Use values_callable to ensure lowercase values match the PostgreSQL enum
+    role = Column(Enum(WitnessRole, values_callable=lambda obj: [e.value for e in obj]), nullable=False)
+    relevance = Column(Enum(RelevanceLevel, values_callable=lambda obj: [e.value for e in obj]), nullable=True, default=RelevanceLevel.RELEVANT)
     relevance_reason = Column(Text, nullable=True)
 
     # Merged observations from all documents: [{doc_id, page, text, filename}, ...]
@@ -276,11 +282,12 @@ class Witness(Base):
 
     # Core witness info
     full_name = Column(String(255), nullable=False, index=True)
-    role = Column(Enum(WitnessRole), nullable=False)
-    importance = Column(Enum(ImportanceLevel), nullable=False)  # Legacy - use relevance instead
+    # Use values_callable to ensure lowercase values match the PostgreSQL enum
+    role = Column(Enum(WitnessRole, values_callable=lambda obj: [e.value for e in obj]), nullable=False)
+    importance = Column(Enum(ImportanceLevel, values_callable=lambda obj: [e.value for e in obj]), nullable=False)  # Legacy - use relevance instead
 
     # New relevance scoring with legal reasoning
-    relevance = Column(Enum(RelevanceLevel), nullable=True, default=RelevanceLevel.RELEVANT)
+    relevance = Column(Enum(RelevanceLevel, values_callable=lambda obj: [e.value for e in obj]), nullable=True, default=RelevanceLevel.RELEVANT)
     relevance_reason = Column(Text, nullable=True)  # Legal reasoning tied to claims/defenses
 
     # Extracted details
@@ -327,7 +334,12 @@ class ProcessingJob(Base):
     document_ids_snapshot = Column(JSON, nullable=True)
 
     # Progress tracking
-    status = Column(Enum(JobStatus), default=JobStatus.PENDING, nullable=False)
+    # Use values_callable to ensure lowercase values match the PostgreSQL enum
+    status = Column(
+        Enum(JobStatus, values_callable=lambda obj: [e.value for e in obj]),
+        default=JobStatus.PENDING,
+        nullable=False
+    )
     total_documents = Column(Integer, default=0, nullable=False)
     processed_documents = Column(Integer, default=0, nullable=False)
     failed_documents = Column(Integer, default=0, nullable=False)
@@ -480,7 +492,11 @@ class CaseClaim(Base):
     id = Column(Integer, primary_key=True, index=True)
     matter_id = Column(Integer, ForeignKey("matters.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    claim_type = Column(Enum(ClaimType), nullable=False)  # allegation or defense
+    # Use values_callable to ensure lowercase values match the PostgreSQL enum
+    claim_type = Column(
+        Enum(ClaimType, values_callable=lambda obj: [e.value for e in obj]),
+        nullable=False
+    )  # allegation or defense
     claim_number = Column(Integer, nullable=False)  # Sequential: Allegation #1, #2, etc.
     claim_text = Column(Text, nullable=False)  # The actual allegation/defense text
 
