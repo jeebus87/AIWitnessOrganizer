@@ -447,6 +447,29 @@ class ClaimType(str, PyEnum):
     DEFENSE = "defense"        # Defense from defendant
 
 
+class ClioWebhookSubscription(Base):
+    """Track Clio webhook subscriptions (expire after 31 days)"""
+    __tablename__ = "clio_webhook_subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    clio_subscription_id = Column(String(128), unique=True, nullable=False)  # Clio's webhook ID
+    event_type = Column(String(50), nullable=False)  # document.create, document.update, document.delete
+    webhook_url = Column(String(512), nullable=False)  # Our callback URL
+    secret = Column(String(255), nullable=True)  # HMAC secret for verification
+
+    is_active = Column(Boolean, default=True, nullable=False)
+    expires_at = Column(DateTime, nullable=False)  # Clio webhooks expire after 31 days
+    last_triggered_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    user = relationship("User")
+
+
 class CaseClaim(Base):
     """
     Central repository for allegations and defenses extracted from case documents.

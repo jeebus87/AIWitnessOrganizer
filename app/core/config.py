@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     clio_api_version: str = "v4"
     clio_rate_limit: int = 50  # requests per minute
 
+    # Clio Webhooks
+    clio_webhook_secret: Optional[str] = None  # HMAC signing secret for webhook verification
+    clio_webhook_base_url: Optional[str] = None  # Base URL for webhook callbacks (e.g., https://api.yourdomain.com)
+
     # AWS Bedrock
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None

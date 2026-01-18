@@ -553,6 +553,111 @@ class ClioClient:
         async for contact in self.get_paginated("contacts", params):
             yield contact
 
+    # =========================================================================
+    # Webhook Operations
+    # =========================================================================
+
+    async def get_webhooks(self) -> List[Dict[str, Any]]:
+        """Get all registered webhooks for this user"""
+        response = await self.get("webhooks")
+        return response.get("data", [])
+
+    async def subscribe_to_webhook(
+        self,
+        callback_url: str,
+        events: List[str],
+        secret: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Subscribe to Clio webhooks for document events.
+
+        Args:
+            callback_url: URL to receive webhook callbacks
+            events: List of events to subscribe to (document.create, document.update, document.delete)
+            secret: Optional HMAC secret for signature verification
+
+        Returns:
+            List of created webhook subscription objects
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        created_webhooks = []
+
+        for event in events:
+            payload = {
+                "data": {
+                    "url": callback_url,
+                    "events": [event],
+                }
+            }
+            if secret:
+                payload["data"]["shared_secret"] = secret
+
+            try:
+                response = await self._request("POST", "webhooks", json=payload)
+                webhook_data = response.json().get("data", {})
+                created_webhooks.append(webhook_data)
+                logger.info(f"Created Clio webhook for {event}: {webhook_data.get('id')}")
+            except Exception as e:
+                logger.error(f"Failed to create Clio webhook for {event}: {e}")
+                raise
+
+        return created_webhooks
+
+    async def delete_webhook(self, webhook_id: str) -> bool:
+        """
+        Delete a webhook subscription.
+
+        Args:
+            webhook_id: The Clio webhook ID to delete
+
+        Returns:
+            True if deleted successfully
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            await self._request("DELETE", f"webhooks/{webhook_id}")
+            logger.info(f"Deleted Clio webhook: {webhook_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete Clio webhook {webhook_id}: {e}")
+            return False
+
+    async def renew_webhook(self, webhook_id: str) -> Dict[str, Any]:
+        """
+        Renew a webhook subscription before its 31-day expiration.
+
+        Clio webhooks expire after 31 days. This method updates the webhook
+        to extend its expiration.
+
+        Args:
+            webhook_id: The Clio webhook ID to renew
+
+        Returns:
+            Updated webhook object with new expiration
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Clio webhooks are renewed by updating them (any update extends expiration)
+        payload = {
+            "data": {
+                "id": webhook_id,
+            }
+        }
+
+        try:
+            response = await self._request("PATCH", f"webhooks/{webhook_id}", json=payload)
+            webhook_data = response.json().get("data", {})
+            logger.info(f"Renewed Clio webhook {webhook_id}, new expiration: {webhook_data.get('expires_at')}")
+            return webhook_data
+        except Exception as e:
+            logger.error(f"Failed to renew Clio webhook {webhook_id}: {e}")
+            raise
+
 
 def get_clio_authorize_url(state: str, redirect_uri: Optional[str] = None) -> str:
     """Generate the Clio OAuth authorization URL"""
