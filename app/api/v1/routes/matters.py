@@ -535,14 +535,14 @@ async def get_document_count(
 ):
     """
     Get the count of documents for a matter, optionally filtered by folder.
-    Only counts non-soft-deleted documents.
+    Fetches count directly from Clio API for accuracy (not local DB).
 
     Args:
         matter_id: The matter ID
         folder_id: Optional Clio folder ID to filter by
 
     Returns:
-        {count: int, folder_id: str|null, matter_id: int}
+        {count: int, folder_id: str|null, matter_id: int, source: "clio"}
     """
     # Verify matter belongs to user
     result = await db.execute(
@@ -556,25 +556,53 @@ async def get_document_count(
     if not matter:
         raise HTTPException(status_code=404, detail="Matter not found")
 
-    # Build count query - only count non-soft-deleted documents
-    count_query = select(func.count()).select_from(Document).where(
-        Document.matter_id == matter_id,
-        Document.is_soft_deleted == False
+    # Get Clio integration for live document count
+    integration_result = await db.execute(
+        select(ClioIntegration).where(
+            ClioIntegration.user_id == current_user.id,
+            ClioIntegration.is_active == True
+        )
     )
+    integration = integration_result.scalar_one_or_none()
 
-    # Filter by folder if specified
-    if folder_id:
-        count_query = count_query.where(Document.clio_folder_id == folder_id)
+    if not integration:
+        raise HTTPException(status_code=400, detail="Clio integration not connected")
 
-    count = await db.scalar(count_query)
+    try:
+        access_token = decrypt_token(integration.access_token_encrypted)
+        refresh_token = decrypt_token(integration.refresh_token_encrypted)
 
-    return {
-        "count": count or 0,
-        "folder_id": folder_id,
-        "matter_id": matter_id,
-        "sync_status": matter.sync_status.value if matter.sync_status else "idle",
-        "last_synced_at": matter.last_synced_at.isoformat() if matter.last_synced_at else None
-    }
+        async with ClioClient(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_expires_at=integration.token_expires_at,
+            region=integration.clio_region
+        ) as clio:
+            count = 0
+            # Use minimal fields for speed - just need to count
+            fields = ["id"]
+
+            if folder_id:
+                # Count documents in specific folder
+                async for _ in clio.get_documents_in_folder(int(folder_id), fields=fields):
+                    count += 1
+            else:
+                # Count all documents for the matter
+                async for _ in clio.get_documents(matter_id=int(matter.clio_matter_id), fields=fields):
+                    count += 1
+
+            return {
+                "count": count,
+                "folder_id": folder_id,
+                "matter_id": matter_id,
+                "sync_status": matter.sync_status.value if matter.sync_status else "idle",
+                "last_synced_at": matter.last_synced_at.isoformat() if matter.last_synced_at else None,
+                "source": "clio"  # Indicates data is fresh from Clio
+            }
+
+    except Exception as e:
+        logger.error(f"Failed to get document count from Clio: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get document count: {str(e)}")
 
 
 @router.post("/sync")
