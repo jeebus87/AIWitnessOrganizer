@@ -11,9 +11,9 @@ const inter = Inter({
   subsets: ["latin"],
 });
 
-// DEBUG: Change title to verify deployment - BUILD 001
+// DEBUG: Change title to verify deployment - BUILD 003
 export const metadata: Metadata = {
-  title: "AI Witness Organizer - BUILD 001",
+  title: "AI Witness Organizer - BUILD 003 - 20260118_0245",
   description: "Automated Legal Witness Extraction System",
 };
 
@@ -42,7 +42,7 @@ export default function RootLayout({
           fontSize: '18px',
           fontWeight: 'bold'
         }}>
-          DEBUG BUILD 001 - If you see this, deployment works!
+          DEBUG BUILD 003 - 20260118_0245 - If you see this, deployment works!
         </div>
         <div style={{ paddingTop: '50px' }}>
           <Providers>{children}</Providers>
