@@ -1,9 +1,15 @@
 "use client";
 
+import { useEffect } from "react";
 import { useSyncStore } from "@/store/sync";
 
 export function SyncOverlay() {
   const { isSyncing, syncMessage } = useSyncStore();
+
+  // Debug logging
+  useEffect(() => {
+    console.log("[SyncOverlay] isSyncing:", isSyncing, "message:", syncMessage);
+  }, [isSyncing, syncMessage]);
 
   if (!isSyncing) return null;
 

@@ -133,8 +133,10 @@ export default function MattersPage() {
 
   const handleSync = async () => {
     if (!token) return;
+    console.log("[MattersPage] handleSync called, calling startSync...");
     setSyncing(true);
     startSync("Syncing matters from Clio");
+    console.log("[MattersPage] startSync called, isSyncing should be true now");
     try {
       const result = await api.syncMatters(token);
       toast.success(`Synced ${result.matters_synced} matters from Clio`);
