@@ -7,20 +7,23 @@
 |------|--------|-------|
 | Hybrid PDF Processing (PyMuPDF) | ✅ IMPLEMENTED | `_process_pdf_hybrid()` in document_processor.py |
 | Content Hash Caching | ✅ IMPLEMENTED | `content_hash` column + check in tasks.py |
-| Migration 015 (content_hash) | ✅ CREATED | Needs to be run on Railway DB |
+| Migration 015 (content_hash) | ✅ RAN ON RAILWAY | Database updated |
 
-### Phase 2: Clio Webhooks - NOT IMPLEMENTED
+### Phase 2: Clio Webhooks - IMPLEMENTED (needs testing)
 | Task | Status | Notes |
 |------|--------|-------|
-| Webhook Endpoints | ⏳ PENDING | Future phase |
-| Webhook Subscriptions | ⏳ PENDING | Future phase |
+| Webhook Endpoints | ✅ IMPLEMENTED | `app/api/v1/routes/webhooks.py` |
+| ClioWebhookSubscription Model | ✅ IMPLEMENTED | Added to models.py |
+| Clio Client webhook methods | ✅ IMPLEMENTED | subscribe_to_webhook, renew_webhook, delete_webhook |
+| Webhook config settings | ✅ IMPLEMENTED | CLIO_WEBHOOK_SECRET, CLIO_WEBHOOK_BASE_URL |
+| Migration 018 (webhook_subscriptions) | ✅ RAN ON RAILWAY | Database updated |
 
 ### Phase 3: Witness Deduplication - IMPLEMENTED (needs testing)
 | Task | Status | Notes |
 |------|--------|-------|
 | CanonicalWitness Model | ✅ IMPLEMENTED | Added to models.py |
 | DeduplicationService | ✅ IMPLEMENTED | app/services/deduplication_service.py |
-| Migration 016 (canonical_witnesses) | ✅ CREATED | Needs to be run on Railway DB |
+| Migration 016 (canonical_witnesses) | ✅ RAN ON RAILWAY | Database updated |
 | thefuzz dependency | ✅ ADDED | requirements.txt |
 
 ### Phase 4: Relevancy System - IMPLEMENTED (needs testing)
@@ -32,12 +35,15 @@
 | Bedrock claims extraction | ✅ IMPLEMENTED | extract_claims() in bedrock_client.py |
 | Relevancy API endpoints | ✅ IMPLEMENTED | app/api/v1/routes/relevancy.py |
 | Export with relevancy section | ✅ IMPLEMENTED | generate_pdf_with_relevancy() |
-| Migration 017 (case_claims + links) | ✅ CREATED | Needs to be run on Railway DB |
+| Migration 017 (case_claims + links) | ✅ RAN ON RAILWAY | Database updated |
 
-### Pending Migrations to Run:
+### All Migrations Completed:
 ```bash
-# Run these on Railway database:
-alembic upgrade head  # Runs 015, 016, 017
+# All migrations have been run on Railway database:
+# 015 - content_hash column ✅
+# 016 - canonical_witnesses table ✅
+# 017 - case_claims + witness_claim_links tables ✅
+# 018 - clio_webhook_subscriptions table ✅
 ```
 
 ### New Dependencies Added:
@@ -46,6 +52,13 @@ PyMuPDF>=1.24.0
 thefuzz>=0.22.1
 python-Levenshtein>=0.25.0
 ```
+
+### Remaining Tasks:
+| Task | Status | Priority |
+|------|--------|----------|
+| DOCX Export | ⏳ PENDING | LOW |
+| Frontend Relevancy UI | ⏳ PENDING | MEDIUM |
+| End-to-end testing | ⏳ PENDING | HIGH |
 
 ---
 
