@@ -26,10 +26,12 @@ def upgrade() -> None:
         -- Create new enum with lowercase values
         CREATE TYPE jobstatus_new AS ENUM ('pending', 'processing', 'completed', 'failed', 'cancelled');
 
-        -- Update column to use new enum (cast handles value conversion)
+        -- Drop default, alter type, restore default
+        ALTER TABLE processing_jobs ALTER COLUMN status DROP DEFAULT;
         ALTER TABLE processing_jobs
         ALTER COLUMN status TYPE jobstatus_new
         USING (LOWER(status::text)::jobstatus_new);
+        ALTER TABLE processing_jobs ALTER COLUMN status SET DEFAULT 'pending'::jobstatus_new;
 
         -- Drop old enum and rename new one
         DROP TYPE jobstatus;
@@ -41,10 +43,12 @@ def upgrade() -> None:
         -- Create new enum with lowercase values
         CREATE TYPE syncstatus_new AS ENUM ('idle', 'syncing', 'failed');
 
-        -- Update column to use new enum
+        -- Drop default, alter type, restore default
+        ALTER TABLE matters ALTER COLUMN sync_status DROP DEFAULT;
         ALTER TABLE matters
         ALTER COLUMN sync_status TYPE syncstatus_new
         USING (LOWER(sync_status::text)::syncstatus_new);
+        ALTER TABLE matters ALTER COLUMN sync_status SET DEFAULT 'idle'::syncstatus_new;
 
         -- Drop old enum and rename new one
         DROP TYPE syncstatus;
@@ -83,9 +87,13 @@ def upgrade() -> None:
         ALTER TYPE importancelevel_new RENAME TO importancelevel;
     """)
 
-    # Fix relevancelevel enum
+    # Fix relevancelevel enum (these columns have defaults)
     op.execute("""
         CREATE TYPE relevancelevel_new AS ENUM ('highly_relevant', 'relevant', 'maybe_relevant', 'not_relevant');
+
+        -- Drop defaults first
+        ALTER TABLE witnesses ALTER COLUMN relevance DROP DEFAULT;
+        ALTER TABLE canonical_witnesses ALTER COLUMN relevance DROP DEFAULT;
 
         ALTER TABLE witnesses
         ALTER COLUMN relevance TYPE relevancelevel_new
@@ -94,6 +102,10 @@ def upgrade() -> None:
         ALTER TABLE canonical_witnesses
         ALTER COLUMN relevance TYPE relevancelevel_new
         USING (LOWER(relevance::text)::relevancelevel_new);
+
+        -- Restore defaults
+        ALTER TABLE witnesses ALTER COLUMN relevance SET DEFAULT 'relevant'::relevancelevel_new;
+        ALTER TABLE canonical_witnesses ALTER COLUMN relevance SET DEFAULT 'relevant'::relevancelevel_new;
 
         DROP TYPE relevancelevel;
         ALTER TYPE relevancelevel_new RENAME TO relevancelevel;
