@@ -29,11 +29,11 @@ export default function AuthCallbackPage() {
       // Fetch user profile then trigger full sync
       fetchUserProfile()
         .then(async () => {
-          // Navigate to matters page first so overlay shows there
-          router.push("/matters");
-
-          // Start syncing matters from Clio
+          // Start syncing BEFORE navigating so overlay state is set
           startSync("Syncing matters from Clio");
+
+          // Navigate to matters page where overlay will show
+          router.push("/matters");
 
           try {
             await api.syncMatters(token);

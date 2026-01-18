@@ -1,7 +1,6 @@
 "use client";
 
 import { useSyncStore } from "@/store/sync";
-import { cn } from "@/lib/utils";
 
 export function SyncOverlay() {
   const { isSyncing, syncMessage } = useSyncStore();
