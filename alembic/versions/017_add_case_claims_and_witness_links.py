@@ -16,28 +16,33 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Create claim_type enum
-    op.execute("CREATE TYPE claimtype AS ENUM ('allegation', 'defense')")
+    # Create claim_type enum if it doesn't exist
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE claimtype AS ENUM ('allegation', 'defense');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
 
     # Create case_claims table
-    op.create_table(
-        'case_claims',
-        sa.Column('id', sa.Integer(), nullable=False),
-        sa.Column('matter_id', sa.Integer(), nullable=False),
-        sa.Column('claim_type', sa.Enum('allegation', 'defense', name='claimtype'), nullable=False),
-        sa.Column('claim_number', sa.Integer(), nullable=False),
-        sa.Column('claim_text', sa.Text(), nullable=False),
-        sa.Column('source_document_id', sa.Integer(), nullable=True),
-        sa.Column('source_page', sa.Integer(), nullable=True),
-        sa.Column('extraction_method', sa.String(20), nullable=False, server_default='discovery'),
-        sa.Column('confidence_score', sa.Float(), nullable=True),
-        sa.Column('is_verified', sa.Boolean(), nullable=False, server_default='false'),
-        sa.Column('created_at', sa.DateTime(), server_default=sa.func.now(), nullable=False),
-        sa.Column('updated_at', sa.DateTime(), server_default=sa.func.now(), nullable=False),
-        sa.ForeignKeyConstraint(['matter_id'], ['matters.id'], ondelete='CASCADE'),
-        sa.ForeignKeyConstraint(['source_document_id'], ['documents.id'], ondelete='SET NULL'),
-        sa.PrimaryKeyConstraint('id')
-    )
+    op.execute("""
+        CREATE TABLE case_claims (
+            id SERIAL PRIMARY KEY,
+            matter_id INTEGER NOT NULL REFERENCES matters(id) ON DELETE CASCADE,
+            claim_type claimtype NOT NULL,
+            claim_number INTEGER NOT NULL,
+            claim_text TEXT NOT NULL,
+            source_document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+            source_page INTEGER,
+            extraction_method VARCHAR(20) NOT NULL DEFAULT 'discovery',
+            confidence_score FLOAT,
+            is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+            updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+        )
+    """)
+
     op.create_index('ix_case_claims_id', 'case_claims', ['id'])
     op.create_index('ix_case_claims_matter_id', 'case_claims', ['matter_id'])
     # Unique constraint: one claim number per type per matter
@@ -49,18 +54,17 @@ def upgrade() -> None:
     )
 
     # Create witness_claim_links table
-    op.create_table(
-        'witness_claim_links',
-        sa.Column('id', sa.Integer(), nullable=False),
-        sa.Column('witness_id', sa.Integer(), nullable=False),
-        sa.Column('case_claim_id', sa.Integer(), nullable=False),
-        sa.Column('relevance_explanation', sa.Text(), nullable=True),
-        sa.Column('supports_or_undermines', sa.String(20), nullable=False, server_default='neutral'),
-        sa.Column('created_at', sa.DateTime(), server_default=sa.func.now(), nullable=False),
-        sa.ForeignKeyConstraint(['witness_id'], ['witnesses.id'], ondelete='CASCADE'),
-        sa.ForeignKeyConstraint(['case_claim_id'], ['case_claims.id'], ondelete='CASCADE'),
-        sa.PrimaryKeyConstraint('id')
-    )
+    op.execute("""
+        CREATE TABLE witness_claim_links (
+            id SERIAL PRIMARY KEY,
+            witness_id INTEGER NOT NULL REFERENCES witnesses(id) ON DELETE CASCADE,
+            case_claim_id INTEGER NOT NULL REFERENCES case_claims(id) ON DELETE CASCADE,
+            relevance_explanation TEXT,
+            supports_or_undermines VARCHAR(20) NOT NULL DEFAULT 'neutral',
+            created_at TIMESTAMP DEFAULT NOW() NOT NULL
+        )
+    """)
+
     op.create_index('ix_witness_claim_links_id', 'witness_claim_links', ['id'])
     op.create_index('ix_witness_claim_links_witness_id', 'witness_claim_links', ['witness_id'])
     op.create_index('ix_witness_claim_links_case_claim_id', 'witness_claim_links', ['case_claim_id'])
@@ -85,4 +89,4 @@ def downgrade() -> None:
     op.drop_index('ix_case_claims_id', table_name='case_claims')
     op.drop_table('case_claims')
 
-    op.execute("DROP TYPE claimtype")
+    op.execute("DROP TYPE IF EXISTS claimtype")

@@ -6,6 +6,7 @@ Create Date: 2026-01-17
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
@@ -16,29 +17,27 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Create canonical_witnesses table
-    op.create_table(
-        'canonical_witnesses',
-        sa.Column('id', sa.Integer(), nullable=False),
-        sa.Column('matter_id', sa.Integer(), nullable=False),
-        sa.Column('full_name', sa.String(255), nullable=False),
-        sa.Column('role', sa.Enum('plaintiff', 'defendant', 'eyewitness', 'expert', 'attorney',
-                                   'physician', 'police_officer', 'family_member', 'colleague',
-                                   'bystander', 'mentioned', 'other', name='witnessrole'), nullable=False),
-        sa.Column('relevance', sa.Enum('highly_relevant', 'relevant', 'somewhat_relevant', 'not_relevant',
-                                        name='relevancelevel'), nullable=True),
-        sa.Column('relevance_reason', sa.Text(), nullable=True),
-        sa.Column('merged_observations', sa.JSON(), nullable=True),
-        sa.Column('email', sa.String(255), nullable=True),
-        sa.Column('phone', sa.String(100), nullable=True),
-        sa.Column('address', sa.Text(), nullable=True),
-        sa.Column('source_document_count', sa.Integer(), nullable=False, server_default='1'),
-        sa.Column('max_confidence_score', sa.Float(), nullable=True),
-        sa.Column('created_at', sa.DateTime(), server_default=sa.func.now(), nullable=False),
-        sa.Column('updated_at', sa.DateTime(), server_default=sa.func.now(), nullable=False),
-        sa.ForeignKeyConstraint(['matter_id'], ['matters.id'], ondelete='CASCADE'),
-        sa.PrimaryKeyConstraint('id')
-    )
+    # Create canonical_witnesses table using existing enum types
+    # witnessrole and relevancelevel already exist from initial schema
+    op.execute("""
+        CREATE TABLE canonical_witnesses (
+            id SERIAL PRIMARY KEY,
+            matter_id INTEGER NOT NULL REFERENCES matters(id) ON DELETE CASCADE,
+            full_name VARCHAR(255) NOT NULL,
+            role witnessrole NOT NULL,
+            relevance relevancelevel,
+            relevance_reason TEXT,
+            merged_observations JSONB,
+            email VARCHAR(255),
+            phone VARCHAR(100),
+            address TEXT,
+            source_document_count INTEGER NOT NULL DEFAULT 1,
+            max_confidence_score FLOAT,
+            created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+            updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+        )
+    """)
+
     op.create_index('ix_canonical_witnesses_id', 'canonical_witnesses', ['id'])
     op.create_index('ix_canonical_witnesses_matter_id', 'canonical_witnesses', ['matter_id'])
     op.create_index('ix_canonical_witnesses_full_name', 'canonical_witnesses', ['full_name'])
