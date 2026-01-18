@@ -1,10 +1,16 @@
 """
 Canonicalization Service for Witness Deduplication
 
-Implements a hybrid approach:
+Implements a 4-tier hybrid approach:
 1. Deterministic matching (normalized names)
 2. Fuzzy string matching (Levenshtein/Jaro-Winkler)
 3. ML embedding-based semantic matching (Amazon Titan)
+4. AI verification (Claude via Bedrock) for uncertain cases
+
+The AI verification step is triggered when fuzzy/embedding scores fall in the
+"uncertain" range (e.g., 70-85% for fuzzy, 85-92% for embeddings). Claude
+analyzes the context to determine if witnesses like "J. Smith" and "John Smith"
+are the same person.
 
 This service consolidates duplicate witness extractions into canonical records.
 """
@@ -29,7 +35,67 @@ logger = logging.getLogger(__name__)
 
 # Matching thresholds
 FUZZY_MATCH_THRESHOLD = 0.85  # 85% similarity for fuzzy matching
+FUZZY_UNCERTAIN_THRESHOLD = 0.70  # Below 85% but above 70% = use AI to verify
 EMBEDDING_MATCH_THRESHOLD = 0.92  # 92% cosine similarity for embedding matching
+EMBEDDING_UNCERTAIN_THRESHOLD = 0.85  # Below 92% but above 85% = use AI to verify
+
+# AI verification prompt for ambiguous matches
+AI_VERIFICATION_PROMPT = """You are a legal document analyst helping to deduplicate witness lists.
+
+Determine if these two witness references likely refer to the SAME PERSON:
+
+WITNESS A:
+- Name: {name_a}
+- Role: {role_a}
+- Observation: {observation_a}
+
+WITNESS B (from existing records):
+- Name: {name_b}
+- Role: {role_b}
+- Observations: {observations_b}
+
+Consider:
+1. Name variations (nicknames, initials, titles like Dr./Mr./Esq.)
+2. Role consistency (same role suggests same person)
+3. Context clues in observations
+4. Common name variations (e.g., "Robert" = "Bob", "William" = "Bill")
+
+Respond with ONLY a JSON object:
+{{"same_person": true/false, "confidence": 0.0-1.0, "reasoning": "brief explanation"}}
+"""
+
+# AI verification prompt for case attorney exclusion
+ATTORNEY_EXCLUSION_PROMPT = """You are a legal document analyst determining if an attorney should be included as a FACT WITNESS or excluded as COUNSEL OF RECORD.
+
+CONTEXT:
+An attorney CAN be a fact witness if they personally witnessed events (e.g., attended a meeting, saw an accident, witnessed a contract signing). However, attorneys who are COUNSEL OF RECORD (representing a party in this lawsuit) should NOT be included as witnesses because their observations come from their role as advocate, not as a fact witness.
+
+ATTORNEY INFORMATION:
+- Name: {name}
+- Role extracted: {role}
+- Observation/Context: {observation}
+- Document filename: {filename}
+
+DETERMINE:
+1. Is this attorney likely COUNSEL OF RECORD for a party in this case? (representing plaintiff, defendant, or a party)
+2. Or are they a FACT WITNESS who happens to be an attorney? (personally witnessed relevant events)
+
+INDICATORS OF COUNSEL OF RECORD (EXCLUDE):
+- "Counsel for [party]", "Attorney for [party]", "Representing [party]"
+- Filing motions, pleadings, or legal documents on behalf of a party
+- Seeking pro hac vice admission
+- Corresponding as legal representative
+- Signing declarations summarizing what others told them
+
+INDICATORS OF FACT WITNESS (INCLUDE):
+- Personally witnessed events (accident, signing, meeting)
+- Testifying about what they saw/heard firsthand
+- Acting as a witness to a transaction (not legal representation)
+- General counsel involved in business decisions being litigated
+
+Respond with ONLY a JSON object:
+{{"exclude": true/false, "is_fact_witness": true/false, "confidence": 0.0-1.0, "reasoning": "brief explanation"}}
+"""
 
 # Case attorney exclusion patterns
 # These witnesses are attorneys OF RECORD for the case, not fact witnesses
@@ -130,13 +196,24 @@ class CanonicalizationService:
     # Case Attorney Detection
     # =========================================================================
 
-    def is_case_attorney(self, role: str, observation: str) -> Tuple[bool, str]:
+    async def is_case_attorney(
+        self,
+        name: str,
+        role: str,
+        observation: str,
+        filename: str = "",
+        use_ai_verification: bool = True
+    ) -> Tuple[bool, str]:
         """
         Determine if a witness should be excluded as a case attorney of record.
 
         Case attorneys are lawyers representing parties in THIS case - they are
         advocates, not fact witnesses. However, attorneys CAN be fact witnesses
         if they personally witnessed events.
+
+        Uses a 2-tier approach:
+        1. Pattern matching for clear cases
+        2. AI verification for ambiguous cases
 
         Returns:
             Tuple of (should_exclude: bool, reason: str)
@@ -165,9 +242,92 @@ class CanonicalizationService:
             if re.search(pattern, observation_lower, re.IGNORECASE):
                 return True, f"Case attorney of record (matched pattern: {pattern})"
 
-        # If attorney role but no clear indicator either way, don't exclude
-        # (conservative approach - let user decide)
+        # If attorney role but no clear indicator either way, use AI verification
+        if use_ai_verification and self.bedrock_client:
+            should_exclude, reason = await self._verify_attorney_exclusion_with_ai(
+                name=name,
+                role=role,
+                observation=observation,
+                filename=filename
+            )
+            return should_exclude, reason
+
+        # Fallback: don't exclude (conservative approach)
         return False, "Attorney role but no clear representation indicator"
+
+    async def _verify_attorney_exclusion_with_ai(
+        self,
+        name: str,
+        role: str,
+        observation: str,
+        filename: str
+    ) -> Tuple[bool, str]:
+        """
+        Use Claude to determine if an attorney should be excluded as counsel of record
+        or included as a fact witness.
+
+        Returns:
+            Tuple of (should_exclude: bool, reason: str)
+        """
+        try:
+            prompt = ATTORNEY_EXCLUSION_PROMPT.format(
+                name=name,
+                role=role or "attorney",
+                observation=(observation or "No observation provided")[:500],
+                filename=filename or "Unknown document"
+            )
+
+            response = self.bedrock_client.invoke_model(
+                modelId=settings.bedrock_model_id,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 256,
+                    "temperature": 0.1,
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ]
+                })
+            )
+
+            result = json.loads(response["body"].read())
+            response_text = result.get("content", [{}])[0].get("text", "{}")
+
+            # Parse JSON response
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0]
+            elif "```" in response_text:
+                response_text = response_text.split("```")[1].split("```")[0]
+
+            ai_result = json.loads(response_text.strip())
+
+            should_exclude = ai_result.get("exclude", False)
+            is_fact_witness = ai_result.get("is_fact_witness", False)
+            confidence = float(ai_result.get("confidence", 0.5))
+            reasoning = ai_result.get("reasoning", "No reasoning provided")
+
+            logger.info(
+                f"AI attorney exclusion check for '{name}': "
+                f"exclude={should_exclude}, fact_witness={is_fact_witness}, "
+                f"confidence={confidence:.2f}, reason={reasoning[:100]}"
+            )
+
+            # Only exclude if AI is confident (>= 0.7)
+            if should_exclude and confidence >= 0.7:
+                return True, f"AI: {reasoning}"
+            elif is_fact_witness and confidence >= 0.7:
+                return False, f"AI: Fact witness - {reasoning}"
+            else:
+                # Uncertain - don't exclude (conservative)
+                return False, f"AI uncertain (confidence={confidence:.2f}): {reasoning}"
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse AI attorney exclusion response: {e}")
+            return False, f"AI parse error, defaulting to include"
+        except Exception as e:
+            logger.error(f"AI attorney exclusion check failed: {e}")
+            return False, f"AI error, defaulting to include"
 
     # =========================================================================
     # Name Normalization
@@ -394,6 +554,92 @@ class CanonicalizationService:
         return dot_product / (norm_a * norm_b)
 
     # =========================================================================
+    # AI Verification for Ambiguous Matches
+    # =========================================================================
+
+    async def verify_match_with_ai(
+        self,
+        new_name: str,
+        new_role: str,
+        new_observation: Optional[str],
+        canonical: 'CanonicalWitness'
+    ) -> Tuple[bool, float, str]:
+        """
+        Use Claude to verify if two witnesses are the same person.
+        Called for ambiguous cases where fuzzy/embedding scores are borderline.
+
+        Returns:
+            Tuple of (is_same_person: bool, confidence: float, reasoning: str)
+        """
+        if not self.bedrock_client:
+            logger.warning("Bedrock client not available for AI verification")
+            return False, 0.0, "AI verification unavailable"
+
+        try:
+            # Build observations summary from canonical
+            observations_summary = ""
+            if canonical.merged_observations:
+                obs_texts = [
+                    o.get("text", "")[:200] for o in canonical.merged_observations
+                    if isinstance(o, dict)
+                ][:3]  # Limit to first 3
+                observations_summary = " | ".join(obs_texts)
+
+            prompt = AI_VERIFICATION_PROMPT.format(
+                name_a=new_name,
+                role_a=new_role or "unknown",
+                observation_a=(new_observation or "No observation")[:300],
+                name_b=canonical.full_name,
+                role_b=canonical.role.value if canonical.role else "unknown",
+                observations_b=observations_summary or "No observations recorded"
+            )
+
+            # Call Claude via Bedrock
+            response = self.bedrock_client.invoke_model(
+                modelId=settings.bedrock_model_id,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 256,
+                    "temperature": 0.1,
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ]
+                })
+            )
+
+            result = json.loads(response["body"].read())
+            response_text = result.get("content", [{}])[0].get("text", "{}")
+
+            # Parse JSON response
+            # Handle potential markdown code blocks
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0]
+            elif "```" in response_text:
+                response_text = response_text.split("```")[1].split("```")[0]
+
+            ai_result = json.loads(response_text.strip())
+
+            is_same = ai_result.get("same_person", False)
+            confidence = float(ai_result.get("confidence", 0.5))
+            reasoning = ai_result.get("reasoning", "No reasoning provided")
+
+            logger.info(
+                f"AI verification for '{new_name}' vs '{canonical.full_name}': "
+                f"same={is_same}, confidence={confidence:.2f}, reason={reasoning[:100]}"
+            )
+
+            return is_same, confidence, reasoning
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse AI verification response: {e}")
+            return False, 0.0, f"Parse error: {e}"
+        except Exception as e:
+            logger.error(f"AI verification failed: {e}")
+            return False, 0.0, f"Error: {e}"
+
+    # =========================================================================
     # Main Canonicalization Logic
     # =========================================================================
 
@@ -402,15 +648,23 @@ class CanonicalizationService:
         db: AsyncSession,
         matter_id: int,
         name: str,
+        role: Optional[str] = None,
         observation: Optional[str] = None,
-        use_embeddings: bool = True
+        use_embeddings: bool = True,
+        use_ai_verification: bool = True
     ) -> Tuple[Optional[CanonicalWitness], str, float]:
         """
         Find a matching canonical witness for the given name.
 
+        Uses a 4-tier matching approach:
+        1. Exact match (normalized names)
+        2. Fuzzy match (Jaro-Winkler + Levenshtein)
+        3. Embedding match (semantic similarity)
+        4. AI verification (for uncertain cases)
+
         Returns:
             Tuple of (canonical_witness or None, match_type, confidence)
-            match_type: "exact", "fuzzy", "embedding", or "none"
+            match_type: "exact", "fuzzy", "embedding", "ai_verified", or "none"
         """
         normalized_name = self.normalize_name(name)
 
@@ -429,6 +683,9 @@ class CanonicalizationService:
         best_score = 0.0
         best_type = "none"
 
+        # Track uncertain matches for potential AI verification
+        uncertain_matches: List[Tuple[CanonicalWitness, float, str]] = []
+
         for canonical in existing_witnesses:
             canonical_normalized = self.normalize_name(canonical.full_name)
 
@@ -442,17 +699,21 @@ class CanonicalizationService:
                 best_match = canonical
                 best_score = fuzzy_score
                 best_type = "fuzzy"
+            elif fuzzy_score >= FUZZY_UNCERTAIN_THRESHOLD:
+                # Track for potential AI verification
+                uncertain_matches.append((canonical, fuzzy_score, "fuzzy"))
 
-        # 3. Embedding matching (if fuzzy didn't find a good match and embeddings enabled)
+        # 3. Embedding matching (if fuzzy didn't find a confident match)
         if use_embeddings and (best_match is None or best_score < EMBEDDING_MATCH_THRESHOLD):
             name_embedding = await self.get_name_embedding(name, observation or "")
 
             if name_embedding:
                 for canonical in existing_witnesses:
-                    # Get or compute canonical embedding
-                    canonical_embedding = None
+                    # Skip if already a confident match
+                    if canonical == best_match and best_score >= FUZZY_MATCH_THRESHOLD:
+                        continue
 
-                    # Try to get stored embedding
+                    # Get or compute canonical embedding
                     if canonical.merged_observations:
                         obs_text = " ".join([
                             o.get("text", "") for o in canonical.merged_observations
@@ -472,6 +733,31 @@ class CanonicalizationService:
                             best_match = canonical
                             best_score = similarity
                             best_type = "embedding"
+                        elif similarity >= EMBEDDING_UNCERTAIN_THRESHOLD:
+                            # Add to uncertain matches for AI verification
+                            uncertain_matches.append((canonical, similarity, "embedding"))
+
+        # 4. AI Verification for uncertain matches (when no confident match found)
+        if use_ai_verification and best_match is None and uncertain_matches:
+            # Sort by score descending, take top candidates
+            uncertain_matches.sort(key=lambda x: x[1], reverse=True)
+
+            for candidate, score, match_source in uncertain_matches[:3]:  # Check top 3
+                is_same, ai_confidence, reasoning = await self.verify_match_with_ai(
+                    new_name=name,
+                    new_role=role,
+                    new_observation=observation,
+                    canonical=candidate
+                )
+
+                if is_same and ai_confidence >= 0.7:
+                    # AI confirmed match
+                    combined_confidence = (score + ai_confidence) / 2
+                    logger.info(
+                        f"AI verified match: '{name}' -> '{candidate.full_name}' "
+                        f"(fuzzy/embed: {score:.2f}, AI: {ai_confidence:.2f}, reason: {reasoning[:50]})"
+                    )
+                    return candidate, "ai_verified", combined_confidence
 
         if best_match and best_score >= FUZZY_MATCH_THRESHOLD:
             return best_match, best_type, best_score
@@ -503,9 +789,12 @@ class CanonicalizationService:
         """
         # Check if this is a case attorney that should be excluded
         if exclude_case_attorneys:
-            is_excluded, exclusion_reason = self.is_case_attorney(
+            is_excluded, exclusion_reason = await self.is_case_attorney(
+                name=witness_input.full_name,
                 role=witness_input.role,
-                observation=witness_input.observation
+                observation=witness_input.observation,
+                filename=filename,
+                use_ai_verification=True
             )
 
             if is_excluded:
@@ -527,8 +816,10 @@ class CanonicalizationService:
             db=db,
             matter_id=matter_id,
             name=witness_input.full_name,
+            role=witness_input.role,
             observation=witness_input.observation,
-            use_embeddings=True
+            use_embeddings=True,
+            use_ai_verification=True
         )
 
         is_new_canonical = False
