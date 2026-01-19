@@ -16,6 +16,7 @@ from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
+from sqlalchemy.orm import selectinload
 
 from app.db.session import get_db
 from app.db.models import Matter, Document, ClioIntegration, ProcessingJob, Witness, JobStatus
