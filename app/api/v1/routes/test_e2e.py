@@ -1382,10 +1382,16 @@ async def test_clio_upload(
                 }
 
             except Exception as e:
-                # Folder creation may fail with 403 - that's expected if OAuth doesn't have folder permissions
+                # Folder creation may fail - capture detailed error
+                error_detail = str(e)
+                if hasattr(e, 'response') and e.response is not None:
+                    try:
+                        error_detail = f"{str(e)} | Response: {e.response.text}"
+                    except Exception:
+                        pass
                 results["folder_creation"] = {
                     "passed": False,
-                    "error": str(e),
+                    "error": error_detail,
                     "note": "Folder creation may require additional OAuth scopes. Document upload will be tested without folder."
                 }
 
@@ -1409,9 +1415,16 @@ async def test_clio_upload(
                 }
 
             except Exception as e:
+                # Capture detailed error with response body
+                error_detail = str(e)
+                if hasattr(e, 'response') and e.response is not None:
+                    try:
+                        error_detail = f"{str(e)} | Response: {e.response.text}"
+                    except Exception:
+                        pass
                 results["document_upload"] = {
                     "passed": False,
-                    "error": str(e)
+                    "error": error_detail
                 }
 
             # Cleanup note
