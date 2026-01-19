@@ -588,6 +588,16 @@ async def _process_single_document_async(
             await session.execute(delete_stmt)
             logger.info(f"Deleted existing witnesses for document {document.id}")
 
+            # Get user's firm email domain for excluding own firm staff
+            user_result = await session.execute(
+                select(User).where(User.id == matter.user_id)
+            )
+            user = user_result.scalar_one_or_none()
+            firm_email_domain = None
+            if user and user.email and "@" in user.email:
+                firm_email_domain = user.email.split("@")[-1]
+                logger.info(f"Firm email domain for exclusion: {firm_email_domain}")
+
             # Initialize canonicalization service for deduplication + case attorney filtering
             canon_service = CanonicalizationService()
 
@@ -613,14 +623,15 @@ async def _process_single_document_async(
                     relevance_reason=getattr(w_data, 'relevance_reason', None)
                 )
 
-                # Canonicalize: deduplicate + filter case attorneys
+                # Canonicalize: deduplicate + filter case attorneys + exclude firm staff
                 result = await canon_service.create_or_update_canonical(
                     db=session,
                     matter_id=document.matter_id,
                     witness_input=witness_input,
                     document_id=document.id,
                     filename=document.filename,
-                    exclude_case_attorneys=True
+                    exclude_case_attorneys=True,
+                    firm_email_domain=firm_email_domain
                 )
 
                 if result.is_excluded:
@@ -874,9 +885,14 @@ async def _process_matter_async(
                 # Filter out already processed documents (for job resume)
                 unprocessed_docs = [d for d in docs_in_scope if not d.is_processed]
                 document_ids_to_process = [d.id for d in unprocessed_docs]
+                already_processed_count = len(docs_in_scope) - len(unprocessed_docs)
 
-                if len(docs_in_scope) > len(unprocessed_docs):
-                    logger.info(f"RESUME MODE: Skipping {len(docs_in_scope) - len(unprocessed_docs)} already-processed documents")
+                if already_processed_count > 0:
+                    logger.info(f"RESUME MODE: Skipping {already_processed_count} already-processed documents")
+                    # Initialize processed_documents counter to reflect already-done work
+                    job.processed_documents = already_processed_count
+                    await session.commit()
+                    logger.info(f"RESUME MODE: Initialized processed_documents to {already_processed_count}")
 
             logger.info(f"Found {len(document_ids_to_process)} unprocessed documents for processing")
 
@@ -1249,16 +1265,20 @@ async def _finalize_job_async(
 
         # Queue legal research if witnesses were found
         # This searches CourtListener for relevant case law based on extracted content
+        logger.info(f"[LEGAL RESEARCH DEBUG] Job {job_id}: total_witnesses={total_witnesses}, target_matter_id={job.target_matter_id}, user_id={job.user_id}")
         if total_witnesses > 0 and job.target_matter_id and job.user_id:
             try:
+                logger.info(f"[LEGAL RESEARCH DEBUG] Queueing search_legal_authorities for job {job_id}")
                 search_legal_authorities.delay(
                     job_id=job_id,
                     matter_id=job.target_matter_id,
                     user_id=job.user_id
                 )
-                logger.info(f"Queued legal research for job {job_id}")
+                logger.info(f"[LEGAL RESEARCH DEBUG] Successfully queued legal research for job {job_id}")
             except Exception as e:
-                logger.warning(f"Failed to queue legal research for job {job_id}: {e}")
+                logger.exception(f"[LEGAL RESEARCH DEBUG] Failed to queue legal research for job {job_id}: {e}")
+        else:
+            logger.info(f"[LEGAL RESEARCH DEBUG] Skipping legal research - conditions not met: witnesses={total_witnesses}, matter_id={job.target_matter_id}, user_id={job.user_id}")
 
         return {
             "success": True,
@@ -1398,17 +1418,21 @@ def search_legal_authorities(self, job_id: int, matter_id: int, user_id: int):
 
 async def _search_legal_authorities_async(job_id: int, matter_id: int, user_id: int):
     """Async implementation of legal authority search."""
+    logger.info(f"[LEGAL RESEARCH DEBUG] Starting search_legal_authorities_async for job={job_id}, matter={matter_id}, user={user_id}")
     async with get_worker_session() as session:
         try:
             # Get matter details for jurisdiction detection
+            logger.info(f"[LEGAL RESEARCH DEBUG] Querying matter {matter_id}")
             result = await session.execute(
                 select(Matter).where(Matter.id == matter_id)
             )
             matter = result.scalar_one_or_none()
 
             if not matter:
-                logger.error(f"Legal research: Matter {matter_id} not found")
+                logger.error(f"[LEGAL RESEARCH DEBUG] Matter {matter_id} not found")
                 return {"success": False, "error": "Matter not found"}
+
+            logger.info(f"[LEGAL RESEARCH DEBUG] Found matter: {matter.display_number}")
 
             # Detect jurisdiction from case number
             legal_research_service = get_legal_research_service()

@@ -764,6 +764,36 @@ class CanonicalizationService:
 
         return None, "none", 0.0
 
+    def is_own_firm_staff(
+        self,
+        witness_email: Optional[str],
+        firm_email_domain: Optional[str]
+    ) -> Tuple[bool, str]:
+        """
+        Check if witness is from the user's own law firm based on email domain.
+
+        Args:
+            witness_email: Witness email address
+            firm_email_domain: User's firm email domain (e.g., "shanleyapc.com")
+
+        Returns:
+            Tuple of (should_exclude: bool, reason: str)
+        """
+        if not witness_email or not firm_email_domain:
+            return False, ""
+
+        # Extract domain from witness email
+        if "@" not in witness_email:
+            return False, ""
+
+        witness_domain = witness_email.lower().split("@")[-1].strip()
+        firm_domain = firm_email_domain.lower().strip()
+
+        if witness_domain == firm_domain:
+            return True, f"Own firm staff (email domain: {witness_domain})"
+
+        return False, ""
+
     async def create_or_update_canonical(
         self,
         db: AsyncSession,
@@ -771,7 +801,8 @@ class CanonicalizationService:
         witness_input: WitnessInput,
         document_id: int,
         filename: str,
-        exclude_case_attorneys: bool = True
+        exclude_case_attorneys: bool = True,
+        firm_email_domain: Optional[str] = None
     ) -> CanonicalizationResult:
         """
         Create or update a canonical witness and link a new witness record.
@@ -783,10 +814,32 @@ class CanonicalizationService:
             document_id: Source document ID
             filename: Source document filename
             exclude_case_attorneys: If True, filter out attorneys of record
+            firm_email_domain: User's firm email domain to exclude own firm staff
 
         Returns:
             CanonicalizationResult with canonical witness, witness record, and metadata
         """
+        # Check if this is own firm staff that should be excluded
+        if firm_email_domain:
+            is_firm_staff, exclusion_reason = self.is_own_firm_staff(
+                witness_email=witness_input.email,
+                firm_email_domain=firm_email_domain
+            )
+
+            if is_firm_staff:
+                logger.info(
+                    f"Excluding own firm staff '{witness_input.full_name}': {exclusion_reason}"
+                )
+                return CanonicalizationResult(
+                    canonical_witness=None,
+                    witness_record=None,
+                    is_new_canonical=False,
+                    is_excluded=True,
+                    exclusion_reason=exclusion_reason,
+                    match_type=None,
+                    match_confidence=0.0
+                )
+
         # Check if this is a case attorney that should be excluded
         if exclude_case_attorneys:
             is_excluded, exclusion_reason = await self.is_case_attorney(
