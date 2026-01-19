@@ -423,6 +423,9 @@ async def process_matter(
         legal_authority_folder_id = request.legal_authority_folder_id
         include_subfolders = request.include_subfolders
 
+    # Debug logging
+    logger.info(f"[PROCESS] matter_id={matter_id}, scan_folder_id={scan_folder_id}, legal_authority_folder_id={legal_authority_folder_id}, include_subfolders={include_subfolders}")
+
     # Get Clio integration for syncing documents
     integration_result = await db.execute(
         select(ClioIntegration).where(
@@ -455,18 +458,21 @@ async def process_matter(
             if scan_folder_id:
                 # Sync documents from specific folder
                 if include_subfolders:
+                    logger.info(f"[PROCESS] Using get_documents_recursive for folder {scan_folder_id}")
                     doc_iterator = clio.get_documents_recursive(
                         matter_id=int(matter.clio_matter_id),
                         folder_id=scan_folder_id,
                         exclude_folder_ids=[legal_authority_folder_id] if legal_authority_folder_id else None
                     )
                 else:
+                    logger.info(f"[PROCESS] Using get_documents_in_folder for folder {scan_folder_id} (NO subfolders)")
                     doc_iterator = clio.get_documents_in_folder(
                         scan_folder_id,
                         matter_id=int(matter.clio_matter_id)
                     )
             else:
                 # Sync all documents for matter
+                logger.info(f"[PROCESS] Using get_documents for all matter documents")
                 doc_iterator = clio.get_documents(matter_id=int(matter.clio_matter_id))
 
             async for clio_doc in doc_iterator:
