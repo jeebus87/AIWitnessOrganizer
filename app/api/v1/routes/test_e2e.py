@@ -1448,3 +1448,117 @@ async def test_clio_upload(
         results["error"] = str(e)
         results["traceback"] = traceback.format_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/test-document-count")
+async def test_document_count(
+    secret: str = Query(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Test document counting with different folder options.
+    Tests the include_subfolders logic.
+    """
+    if secret != E2E_TEST_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid secret")
+
+    results = {
+        "test": "document_count_with_subfolders",
+        "tests": []
+    }
+
+    try:
+        # Get first active integration
+        integration_result = await db.execute(
+            select(ClioIntegration).where(ClioIntegration.is_active == True)
+        )
+        integration = integration_result.scalar_one_or_none()
+
+        if not integration:
+            results["error"] = "No active Clio integration found"
+            return results
+
+        # Get a matter with documents
+        matter_result = await db.execute(
+            select(Matter).where(
+                Matter.user_id == integration.user_id,
+                Matter.display_number.like("%Ponce%")
+            )
+        )
+        matter = matter_result.scalar_one_or_none()
+
+        if not matter:
+            results["error"] = "No Ponce matter found"
+            return results
+
+        results["matter"] = {
+            "id": matter.id,
+            "clio_matter_id": matter.clio_matter_id,
+            "name": matter.display_number
+        }
+
+        async with ClioClient(
+            access_token=decrypt_token(integration.access_token_encrypted),
+            refresh_token=decrypt_token(integration.refresh_token_encrypted),
+            token_expires_at=integration.token_expires_at,
+            region=integration.clio_region
+        ) as clio:
+            # Test 1: Count all documents in matter (no folder filter)
+            all_docs_count = 0
+            async for _ in clio.get_documents(matter_id=int(matter.clio_matter_id), fields=["id"]):
+                all_docs_count += 1
+            results["tests"].append({
+                "name": "all_documents_in_matter",
+                "count": all_docs_count
+            })
+
+            # Test 2: Get folder structure
+            folders = []
+            async for folder in clio.get_folders(int(matter.clio_matter_id)):
+                folders.append({
+                    "id": folder.get("id"),
+                    "name": folder.get("name"),
+                    "parent_id": folder.get("parent", {}).get("id") if folder.get("parent") else None
+                })
+            results["folders"] = folders
+
+            # Test 3: For each root folder, count with and without subfolders
+            root_folders = [f for f in folders if f["parent_id"] is None]
+            for rf in root_folders[:3]:  # Test first 3 root folders
+                folder_id = rf["id"]
+                folder_name = rf["name"]
+
+                # Count without subfolders
+                count_direct = 0
+                async for _ in clio.get_documents_in_folder(
+                    folder_id,
+                    matter_id=int(matter.clio_matter_id),
+                    fields=["id"]
+                ):
+                    count_direct += 1
+
+                # Count with subfolders
+                count_recursive = 0
+                async for _ in clio.get_documents_recursive(
+                    matter_id=int(matter.clio_matter_id),
+                    folder_id=folder_id,
+                    fields=["id"]
+                ):
+                    count_recursive += 1
+
+                results["tests"].append({
+                    "name": f"folder_{folder_name}",
+                    "folder_id": folder_id,
+                    "count_direct": count_direct,
+                    "count_with_subfolders": count_recursive
+                })
+
+        results["passed"] = True
+        return results
+
+    except Exception as e:
+        logger.error(f"Document count test failed: {e}")
+        import traceback
+        results["error"] = str(e)
+        results["traceback"] = traceback.format_exc()
+        return results
