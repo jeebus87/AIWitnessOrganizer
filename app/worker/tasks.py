@@ -950,8 +950,8 @@ async def _process_matter_async(
             logger.info(f"  Database matter_id: {matter_id}")
             logger.info(f"  scan_folder_id: {scan_folder_id}")
             logger.info(f"  Documents IDs collected: {len(document_ids_to_process)}")
-            logger.info(f"  Documents retrieved from DB: {len(documents)}")
-            logger.info(f"  Setting job.total_documents = {len(documents)}")
+            logger.info(f"  Documents retrieved from DB (unprocessed): {len(documents)}")
+            logger.info(f"  Job snapshot total: {job.total_documents}")
             logger.info(f"")
             logger.info(f"--- Document Details (first 20) ---")
             for i, doc in enumerate(documents[:20]):
@@ -960,9 +960,15 @@ async def _process_matter_async(
                 logger.info(f"  ... and {len(documents) - 20} more documents")
             logger.info(f"{'='*60}")
 
-            job.total_documents = len(documents)
-            await session.commit()
-            logger.info(f"  Committed total_documents update to database")
+            # Don't overwrite total_documents if job was created with a snapshot
+            # The snapshot count is the true total; we only process unprocessed docs
+            # but display progress as X/total where total is from snapshot
+            if not job.document_ids_snapshot:
+                job.total_documents = len(documents)
+                await session.commit()
+                logger.info(f"  Updated total_documents to {len(documents)} (no snapshot)")
+            else:
+                logger.info(f"  Keeping original total_documents={job.total_documents} from snapshot")
 
             if not documents:
                 job.status = JobStatus.COMPLETED
