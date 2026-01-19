@@ -401,6 +401,7 @@ async def process_matter(
         # Fetch documents from Clio and sync to local database
         logger.info(f"Auto-syncing documents for matter {matter_id} from Clio")
         synced_count = 0
+        synced_clio_doc_ids = []  # Track Clio document IDs for snapshot
 
         try:
             if scan_folder_id:
@@ -426,6 +427,9 @@ async def process_matter(
                     doc_folder = clio_doc.get("parent", {})
                     if doc_folder and doc_folder.get("id") == legal_authority_folder_id:
                         continue
+
+                # Track this document for the snapshot
+                synced_clio_doc_ids.append(str(clio_doc["id"]))
 
                 # Check if document already exists locally
                 existing = await db.execute(
@@ -467,22 +471,30 @@ async def process_matter(
             logger.error(f"Error syncing documents from Clio: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to sync documents from Clio: {str(e)}")
 
-    # Build document snapshot from local database (now populated)
-    doc_query = select(Document.id).where(
-        Document.matter_id == matter_id,
-        Document.is_soft_deleted == False
-    )
-
-    # Filter by folder if specified
-    if scan_folder_id:
-        doc_query = doc_query.where(Document.clio_folder_id == str(scan_folder_id))
-
-    # Exclude legal authority folder if specified
-    if legal_authority_folder_id:
-        doc_query = doc_query.where(Document.clio_folder_id != str(legal_authority_folder_id))
-
-    result = await db.execute(doc_query)
-    document_ids = [row[0] for row in result.all()]
+    # Build document snapshot from the exact documents that were synced
+    # This ensures subfolder documents are included when include_subfolders=True
+    if synced_clio_doc_ids:
+        # Use the exact documents that were synced (respects include_subfolders setting)
+        result = await db.execute(
+            select(Document.id).where(
+                Document.matter_id == matter_id,
+                Document.clio_document_id.in_(synced_clio_doc_ids),
+                Document.is_soft_deleted == False
+            )
+        )
+        document_ids = [row[0] for row in result.all()]
+        logger.info(f"Document snapshot: {len(document_ids)} documents from sync (include_subfolders={include_subfolders})")
+    else:
+        # Fallback: No documents synced, query from database
+        doc_query = select(Document.id).where(
+            Document.matter_id == matter_id,
+            Document.is_soft_deleted == False
+        )
+        if legal_authority_folder_id:
+            doc_query = doc_query.where(Document.clio_folder_id != str(legal_authority_folder_id))
+        result = await db.execute(doc_query)
+        document_ids = [row[0] for row in result.all()]
+        logger.info(f"Document snapshot: {len(document_ids)} documents from database fallback")
 
     if not document_ids:
         raise HTTPException(

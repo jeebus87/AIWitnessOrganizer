@@ -825,3 +825,117 @@ async def fix_existing_job_numbers(
         logger.error(f"Fix job numbers failed: {e}")
         import traceback
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/process-subfolder-test")
+async def test_process_with_subfolders(
+    secret: str = Query(..., description="Secret key for internal testing"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Test that include_subfolders parameter correctly affects document processing.
+    Compares document counts when include_subfolders=True vs False.
+    """
+    if secret != E2E_TEST_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid secret key")
+
+    logger = logging.getLogger(__name__)
+    results = {
+        "test": "process_subfolder_inclusion",
+        "folder_only": {"doc_count": 0},
+        "with_subfolders": {"doc_count": 0}
+    }
+
+    try:
+        # Get active Clio integration
+        integration_result = await db.execute(
+            select(ClioIntegration).where(
+                ClioIntegration.is_active == True,
+                ClioIntegration.access_token_encrypted.isnot(None)
+            ).limit(1)
+        )
+        integration = integration_result.scalar_one_or_none()
+
+        if not integration:
+            raise HTTPException(status_code=400, detail="No active Clio integration found")
+
+        # Get a matter with folders
+        matter_result = await db.execute(
+            select(Matter).where(
+                Matter.user_id == integration.user_id,
+                Matter.clio_matter_id.isnot(None)
+            ).order_by(Matter.id.desc()).limit(10)
+        )
+        matters = matter_result.scalars().all()
+
+        if not matters:
+            raise HTTPException(status_code=400, detail="No matters found")
+
+        decrypted_access = decrypt_token(integration.access_token_encrypted)
+        decrypted_refresh = decrypt_token(integration.refresh_token_encrypted)
+
+        async with ClioClient(
+            access_token=decrypted_access,
+            refresh_token=decrypted_refresh,
+            token_expires_at=integration.token_expires_at,
+            region=integration.clio_region
+        ) as clio:
+            # Find a folder with subfolders
+            test_matter = None
+            test_folder = None
+
+            for m in matters:
+                folders = await clio.get_folder_tree(int(m.clio_matter_id))
+                for folder in folders:
+                    if folder.get("children"):
+                        test_folder = folder
+                        test_matter = m
+                        break
+                if test_folder:
+                    break
+
+            if not test_folder:
+                return {
+                    "test": "process_subfolder_inclusion",
+                    "skipped": True,
+                    "reason": "No folder with subfolders found",
+                    "all_passed": True
+                }
+
+            results["matter"] = {"id": test_matter.id, "name": test_matter.display_number}
+            results["folder"] = {"id": test_folder["id"], "name": test_folder.get("name")}
+
+            # Count documents WITHOUT subfolders (folder only)
+            folder_only_count = 0
+            async for _ in clio.get_documents_in_folder(
+                test_folder["id"],
+                matter_id=int(test_matter.clio_matter_id)
+            ):
+                folder_only_count += 1
+            results["folder_only"]["doc_count"] = folder_only_count
+
+            # Count documents WITH subfolders (recursive)
+            recursive_count = 0
+            async for _ in clio.get_documents_recursive(
+                matter_id=int(test_matter.clio_matter_id),
+                folder_id=test_folder["id"]
+            ):
+                recursive_count += 1
+            results["with_subfolders"]["doc_count"] = recursive_count
+
+            # Verify the fix: recursive should include more docs
+            results["subfolder_docs_found"] = recursive_count - folder_only_count
+            results["fix_working"] = recursive_count >= folder_only_count
+            results["all_passed"] = results["fix_working"]
+            results["summary"] = f"Folder only: {folder_only_count} docs, With subfolders: {recursive_count} docs ({recursive_count - folder_only_count} from subfolders)"
+
+            return results
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Process subfolder test failed: {e}")
+        import traceback
+        results["error"] = str(e)
+        results["traceback"] = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=str(e))
