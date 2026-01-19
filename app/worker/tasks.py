@@ -1416,10 +1416,12 @@ async def _search_legal_authorities_async(job_id: int, matter_id: int, user_id: 
 
             logger.info(f"Legal research for job {job_id}: detected jurisdiction {jurisdiction}")
 
-            # Get relevant witnesses for context
+            # Get relevant witnesses for context (joined through Document)
             witness_result = await session.execute(
-                select(Witness).where(
-                    Witness.matter_id == matter_id,
+                select(Witness)
+                .join(Document, Witness.document_id == Document.id)
+                .where(
+                    Document.matter_id == matter_id,
                     Witness.relevance.in_([RelevanceLevel.HIGHLY_RELEVANT, RelevanceLevel.RELEVANT])
                 ).limit(10)
             )
