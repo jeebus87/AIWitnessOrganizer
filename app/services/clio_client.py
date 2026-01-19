@@ -841,8 +841,19 @@ class ClioClient:
                 upload_response.raise_for_status()
                 logger.info(f"Uploaded file content for document {doc_id} to S3")
 
-                # Note: In Clio v4, upload completion is automatic after successful S3 upload
-                # No need to mark as fully_uploaded like in v2
+                # Mark the document version as fully uploaded
+                # This is required in Clio v4 to finalize the upload
+                version_uuid = version_data.get("uuid")
+                if version_uuid:
+                    try:
+                        patch_response = await self._request(
+                            "PATCH",
+                            f"document_versions/{version_uuid}",
+                            json={"data": {"fully_uploaded": True}}
+                        )
+                        logger.info(f"Finalized document version {version_uuid}")
+                    except Exception as patch_error:
+                        logger.warning(f"Failed to finalize document version: {patch_error}")
             else:
                 logger.warning(f"No upload URL returned for document {doc_id}")
 
