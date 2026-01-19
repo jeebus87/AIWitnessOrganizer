@@ -104,6 +104,14 @@ class ApiClient {
     });
   }
 
+  // Disconnect Clio integration (for reauthorization)
+  async disconnectClio(token: string) {
+    return this.request<{ success: boolean; message: string }>("/api/v1/auth/clio/disconnect", {
+      method: "POST",
+      token,
+    });
+  }
+
   async processMatter(id: number, token: string, options?: ProcessMatterOptions): Promise<ProcessMatterResponse> {
     const response = await fetch(`${this.baseUrl}/api/v1/matters/${id}/process`, {
       method: "POST",

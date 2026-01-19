@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ExternalLink, CheckCircle, Edit2, Save, X, CreditCard, Loader2, RefreshCw } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ExternalLink, CheckCircle, Edit2, Save, X, CreditCard, Loader2, RefreshCw, Link2Off } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -26,12 +27,14 @@ const TOPUP_PACKAGES = [
 ];
 
 export default function SettingsPage() {
-  const { userProfile, token, fetchUserProfile } = useAuthStore();
+  const router = useRouter();
+  const { userProfile, token, fetchUserProfile, logout } = useAuthStore();
   const { startSync, endSync } = useSyncStore();
   const [isEditingFirmName, setIsEditingFirmName] = useState(false);
   const [firmName, setFirmName] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const [credits, setCredits] = useState<{
     daily_remaining: number;
     bonus_remaining: number;
@@ -147,6 +150,30 @@ export default function SettingsPage() {
     } finally {
       setSyncing(false);
       endSync();
+    }
+  };
+
+  const handleReconnectClio = async () => {
+    if (!token) return;
+
+    const confirmed = window.confirm(
+      "This will disconnect your Clio account and require you to sign in again. " +
+      "Use this if you need to update your Clio permissions (e.g., to enable document uploads).\n\n" +
+      "Continue?"
+    );
+
+    if (!confirmed) return;
+
+    setReconnecting(true);
+    try {
+      await api.disconnectClio(token);
+      toast.success("Clio disconnected. Redirecting to sign in...");
+      logout();
+      router.push("/login?message=Please+sign+in+again+to+reconnect+Clio+with+updated+permissions");
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to disconnect Clio");
+      setReconnecting(false);
     }
   };
 
@@ -291,6 +318,23 @@ export default function SettingsPage() {
                   <RefreshCw className="mr-2 h-4 w-4" />
                 )}
                 Sync with Clio
+              </Button>
+            </div>
+            <Separator />
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-medium">Reconnect Clio</div>
+                <div className="text-sm text-muted-foreground">
+                  Reauthorize if permissions need updating (e.g., to enable document uploads)
+                </div>
+              </div>
+              <Button variant="outline" onClick={handleReconnectClio} disabled={reconnecting}>
+                {reconnecting ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Link2Off className="mr-2 h-4 w-4" />
+                )}
+                Reconnect
               </Button>
             </div>
           </CardContent>
