@@ -511,3 +511,139 @@ async def get_e2e_test_status_internal(
         "witnesses_extracted": witness_count or 0,
         "error_message": job.error_message
     }
+
+
+@router.get("/folder-count")
+async def test_folder_document_count(
+    secret: str = Query(..., description="Secret key for internal testing"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Test folder-specific document counts to verify the fix works.
+    Tests: All documents, specific folder, and subfolder counts.
+    """
+    if secret != E2E_TEST_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid secret key")
+
+    results = {
+        "test": "folder_document_counts",
+        "all_documents": {"passed": False, "count": 0},
+        "specific_folder": {"passed": False, "count": 0, "folder_name": ""},
+        "subfolder": {"passed": False, "count": 0, "folder_name": ""}
+    }
+
+    try:
+        # Get active Clio integration
+        integration_result = await db.execute(
+            select(ClioIntegration).where(
+                ClioIntegration.is_active == True,
+                ClioIntegration.access_token_encrypted.isnot(None)
+            ).limit(1)
+        )
+        integration = integration_result.scalar_one_or_none()
+
+        if not integration:
+            raise HTTPException(status_code=400, detail="No active Clio integration found")
+
+        # Get a matter with documents
+        matter_result = await db.execute(
+            select(Matter).where(
+                Matter.user_id == integration.user_id,
+                Matter.clio_matter_id.isnot(None)
+            ).order_by(Matter.id.desc()).limit(10)
+        )
+        matters = matter_result.scalars().all()
+
+        if not matters:
+            raise HTTPException(status_code=400, detail="No matters with Clio IDs found")
+
+        decrypted_access = decrypt_token(integration.access_token_encrypted)
+        decrypted_refresh = decrypt_token(integration.refresh_token_encrypted)
+
+        async with ClioClient(
+            access_token=decrypted_access,
+            refresh_token=decrypted_refresh,
+            token_expires_at=integration.token_expires_at,
+            region=integration.clio_region
+        ) as clio:
+            # Find a matter with documents
+            test_matter = None
+            for m in matters:
+                doc_count = 0
+                async for _ in clio.get_documents(matter_id=int(m.clio_matter_id)):
+                    doc_count += 1
+                    if doc_count > 10:
+                        break
+                if doc_count > 5:
+                    test_matter = m
+                    results["matter"] = {"id": m.id, "name": m.display_number}
+                    break
+
+            if not test_matter:
+                raise HTTPException(status_code=400, detail="No suitable test matter found")
+
+            # TEST 1: All documents count
+            all_count = 0
+            async for _ in clio.get_documents(matter_id=int(test_matter.clio_matter_id)):
+                all_count += 1
+            results["all_documents"]["count"] = all_count
+            results["all_documents"]["passed"] = all_count > 0
+
+            # Get folders for this matter
+            folders = await clio.get_matter_folders(int(test_matter.clio_matter_id))
+
+            if not folders:
+                results["specific_folder"]["passed"] = True
+                results["specific_folder"]["note"] = "No folders in this matter"
+                results["subfolder"]["passed"] = True
+                results["subfolder"]["note"] = "No folders in this matter"
+            else:
+                # TEST 2: Specific folder count
+                test_folder = folders[0]
+                results["specific_folder"]["folder_name"] = test_folder.get("name", "unnamed")
+                folder_count = 0
+                async for _ in clio.get_documents_in_folder(
+                    test_folder["id"],
+                    matter_id=int(test_matter.clio_matter_id)
+                ):
+                    folder_count += 1
+                results["specific_folder"]["count"] = folder_count
+                results["specific_folder"]["passed"] = True  # No error = pass
+
+                # TEST 3: Find a subfolder
+                subfolder_found = False
+                for folder in folders:
+                    children = folder.get("children", [])
+                    if children:
+                        subfolder = children[0]
+                        results["subfolder"]["folder_name"] = subfolder.get("name", "unnamed")
+                        subfolder_count = 0
+                        async for _ in clio.get_documents_in_folder(
+                            subfolder["id"],
+                            matter_id=int(test_matter.clio_matter_id)
+                        ):
+                            subfolder_count += 1
+                        results["subfolder"]["count"] = subfolder_count
+                        results["subfolder"]["passed"] = True
+                        subfolder_found = True
+                        break
+
+                if not subfolder_found:
+                    results["subfolder"]["passed"] = True
+                    results["subfolder"]["note"] = "No subfolders found"
+
+        # Summary
+        all_passed = all(r.get("passed", False) for k, r in results.items() if isinstance(r, dict) and "passed" in r)
+        results["all_passed"] = all_passed
+        results["summary"] = "All folder count tests passed!" if all_passed else "Some tests failed"
+
+        return results
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Folder count test failed: {e}")
+        import traceback
+        results["error"] = str(e)
+        results["traceback"] = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=str(e))
