@@ -1522,9 +1522,11 @@ async def test_document_count(
                 })
             results["folders"] = folders
 
-            # Test 3: For each root folder, count with and without subfolders
-            root_folders = [f for f in folders if f["parent_id"] is None]
-            for rf in root_folders[:3]:  # Test first 3 root folders
+            # Test 3: For the first few folders, count with and without subfolders
+            # Note: Clio may return folders whose parent is outside our query scope
+            # So we test the actual folders we have, not just "root" folders
+            test_folders = folders[:5]  # Test first 5 folders
+            for rf in test_folders:
                 folder_id = rf["id"]
                 folder_name = rf["name"]
 
