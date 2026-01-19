@@ -1561,16 +1561,22 @@ async def _save_legal_research_to_clio_async(research_id: int):
                 token_expires_at=clio_integration.token_expires_at,
                 region=clio_integration.clio_region
             ) as clio:
-                # Create "Legal Research" folder in matter
+                # Try to create "Legal Research" folder in matter
+                # If folder creation fails (403), we'll upload to matter root
+                folder_id = None
                 folder_name = "Legal Research"
-                folder = await clio.create_folder(
-                    matter_id=matter.clio_matter_id,
-                    name=folder_name
-                )
-
-                if folder and folder.get("id"):
-                    research.clio_folder_id = str(folder["id"])
-                    logger.info(f"Created Legal Research folder {folder['id']} in Clio")
+                try:
+                    folder = await clio.create_folder(
+                        matter_id=int(matter.clio_matter_id),
+                        name=folder_name
+                    )
+                    if folder and folder.get("id"):
+                        folder_id = folder["id"]
+                        research.clio_folder_id = str(folder_id)
+                        logger.info(f"Created Legal Research folder {folder_id} in Clio")
+                except Exception as e:
+                    # Folder creation failed - continue without folder
+                    logger.warning(f"Could not create folder in Clio: {e}. Uploading to matter root.")
 
                 # Download and upload each selected case
                 legal_research_service = get_legal_research_service()
@@ -1590,18 +1596,21 @@ async def _save_legal_research_to_clio_async(research_id: int):
                         pdf_content = await legal_research_service.download_opinion_pdf(case_id)
 
                         if pdf_content:
-                            # Generate filename
+                            # Generate filename with "Legal Research - " prefix if no folder
                             citation = case_info.get("citation") or case_info.get("case_name", "Unknown")
                             # Sanitize filename
                             filename = "".join(c for c in citation if c.isalnum() or c in " -_.,").strip()
-                            filename = f"{filename[:100]}.pdf"
+                            if not folder_id:
+                                filename = f"Legal Research - {filename[:80]}.pdf"
+                            else:
+                                filename = f"{filename[:100]}.pdf"
 
                             # Upload to Clio
                             await clio.upload_document(
-                                matter_id=matter.clio_matter_id,
+                                matter_id=int(matter.clio_matter_id),
                                 file_content=pdf_content,
                                 filename=filename,
-                                folder_id=folder.get("id") if folder else None
+                                folder_id=folder_id
                             )
                             uploaded_count += 1
                             logger.info(f"Uploaded {filename} to Clio")
