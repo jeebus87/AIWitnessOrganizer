@@ -590,7 +590,7 @@ async def test_folder_document_count(
             results["all_documents"]["passed"] = all_count > 0
 
             # Get folders for this matter
-            folders = await clio.get_matter_folders(int(test_matter.clio_matter_id))
+            folders = await clio.get_folder_tree(int(test_matter.clio_matter_id))
 
             if not folders:
                 results["specific_folder"]["passed"] = True
