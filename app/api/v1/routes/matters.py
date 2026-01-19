@@ -677,6 +677,8 @@ async def get_document_count(
     Returns:
         {count: int, folder_id: str|null, matter_id: int, include_subfolders: bool, source: "clio"}
     """
+    # Debug logging to verify parameters
+    logger.info(f"[DOC_COUNT] matter_id={matter_id}, folder_id={folder_id}, include_subfolders={include_subfolders}")
     # Verify matter belongs to user
     result = await db.execute(
         select(Matter).where(
@@ -737,6 +739,8 @@ async def get_document_count(
                 async for _ in clio.get_documents(matter_id=int(matter.clio_matter_id), fields=fields):
                     count += 1
 
+            # Return count with debug info
+            from datetime import datetime
             return {
                 "count": count,
                 "folder_id": folder_id,
@@ -744,7 +748,9 @@ async def get_document_count(
                 "matter_id": matter_id,
                 "sync_status": matter.sync_status.value if matter.sync_status else "idle",
                 "last_synced_at": matter.last_synced_at.isoformat() if matter.last_synced_at else None,
-                "source": "clio"  # Indicates data is fresh from Clio
+                "source": "clio",
+                "debug_timestamp": datetime.utcnow().isoformat(),
+                "debug_method": "recursive" if (folder_id and include_subfolders) else ("direct" if folder_id else "all_matter")
             }
 
     except Exception as e:

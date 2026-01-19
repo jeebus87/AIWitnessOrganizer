@@ -189,7 +189,9 @@ export function FolderSelectionDialog({
     setCountLoading(true);
     try {
       const folderIdStr = folderId ? folderId.toString() : null;
+      console.log(`[DOC_COUNT] Requesting: matterId=${matterId}, folderId=${folderIdStr}, includeSubfolders=${withSubfolders}`);
       const result = await api.getDocumentCount(matterId, token, folderIdStr, withSubfolders);
+      console.log(`[DOC_COUNT] Response:`, result);
       setDocumentCount(result.count);
 
       // Show toast with document count
