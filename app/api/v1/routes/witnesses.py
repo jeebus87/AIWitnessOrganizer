@@ -9,7 +9,7 @@ from sqlalchemy import select, func, delete
 from sqlalchemy.orm import selectinload
 
 from app.db.session import get_db
-from app.db.models import Witness, Document, Matter, ImportanceLevel, WitnessRole, User, ClioIntegration, CanonicalWitness, RelevanceLevel
+from app.db.models import Witness, Document, Matter, ImportanceLevel, WitnessRole, User, ClioIntegration, CanonicalWitness, RelevanceLevel, WitnessClaimLink
 from app.api.v1.schemas.witnesses import (
     WitnessResponse, WitnessListResponse, MatterResponse,
     MatterListResponse, DocumentResponse,
@@ -383,14 +383,15 @@ async def export_witnesses_pdf(
         job_id: Filter by job - only witnesses created by this specific job
         importance: Filter by importance levels
     """
-    # Build query
+    # Build query with claim links
     query = (
         select(Witness)
         .join(Document)
         .join(Matter)
         .where(Matter.user_id == current_user.id)
         .options(
-            selectinload(Witness.document).selectinload(Document.matter)
+            selectinload(Witness.document).selectinload(Document.matter),
+            selectinload(Witness.claim_links).selectinload(WitnessClaimLink.case_claim)
         )
     )
 
@@ -445,6 +446,17 @@ async def export_witnesses_pdf(
     # Convert to dict format for export
     witness_data = []
     for w in witnesses:
+        # Format claim links
+        claim_links_data = []
+        for link in w.claim_links:
+            if link.case_claim:
+                claim_links_data.append({
+                    "claim_type": link.case_claim.claim_type.value,
+                    "claim_number": link.case_claim.claim_number,
+                    "relationship": link.supports_or_undermines,
+                    "explanation": link.relevance_explanation or ""
+                })
+
         witness_data.append({
             "full_name": w.full_name,
             "role": w.role.value,
@@ -458,7 +470,8 @@ async def export_witnesses_pdf(
             "phone": w.phone,
             "address": w.address,
             "document_filename": w.document.filename if w.document else None,
-            "confidence_score": w.confidence_score
+            "confidence_score": w.confidence_score,
+            "claim_links": claim_links_data
         })
 
     # Generate PDF
@@ -500,14 +513,15 @@ async def export_witnesses_excel(
         job_id: Filter by job - only witnesses created by this specific job
         importance: Filter by importance levels
     """
-    # Build query
+    # Build query with claim links
     query = (
         select(Witness)
         .join(Document)
         .join(Matter)
         .where(Matter.user_id == current_user.id)
         .options(
-            selectinload(Witness.document).selectinload(Document.matter)
+            selectinload(Witness.document).selectinload(Document.matter),
+            selectinload(Witness.claim_links).selectinload(WitnessClaimLink.case_claim)
         )
     )
 
@@ -562,6 +576,17 @@ async def export_witnesses_excel(
     # Convert to dict format for export
     witness_data = []
     for w in witnesses:
+        # Format claim links for Excel
+        claim_links_data = []
+        for link in w.claim_links:
+            if link.case_claim:
+                claim_links_data.append({
+                    "claim_type": link.case_claim.claim_type.value,
+                    "claim_number": link.case_claim.claim_number,
+                    "relationship": link.supports_or_undermines,
+                    "explanation": link.relevance_explanation or ""
+                })
+
         witness_data.append({
             "full_name": w.full_name,
             "role": w.role.value,
@@ -576,7 +601,8 @@ async def export_witnesses_excel(
             "address": w.address,
             "document_filename": w.document.filename if w.document else None,
             "matter_name": w.document.matter.description if w.document and w.document.matter else None,
-            "confidence_score": w.confidence_score
+            "confidence_score": w.confidence_score,
+            "claim_links": claim_links_data
         })
 
     # Generate Excel
@@ -618,14 +644,15 @@ async def export_witnesses_docx(
         job_id: Filter by job - only witnesses created by this specific job
         importance: Filter by importance levels
     """
-    # Build query
+    # Build query with claim links
     query = (
         select(Witness)
         .join(Document)
         .join(Matter)
         .where(Matter.user_id == current_user.id)
         .options(
-            selectinload(Witness.document).selectinload(Document.matter)
+            selectinload(Witness.document).selectinload(Document.matter),
+            selectinload(Witness.claim_links).selectinload(WitnessClaimLink.case_claim)
         )
     )
 
@@ -680,6 +707,17 @@ async def export_witnesses_docx(
     # Convert to dict format for export
     witness_data = []
     for w in witnesses:
+        # Format claim links for DOCX
+        claim_links_data = []
+        for link in w.claim_links:
+            if link.case_claim:
+                claim_links_data.append({
+                    "claim_type": link.case_claim.claim_type.value,
+                    "claim_number": link.case_claim.claim_number,
+                    "relationship": link.supports_or_undermines,
+                    "explanation": link.relevance_explanation or ""
+                })
+
         witness_data.append({
             "full_name": w.full_name,
             "role": w.role.value,
@@ -697,6 +735,7 @@ async def export_witnesses_docx(
             "confidence_score": w.confidence_score,
             "document_relevance": w.document_relevance.value.upper() if w.document_relevance else None,
             "document_relevance_reason": w.document_relevance_reason,
+            "claim_links": claim_links_data
         })
 
     # Generate DOCX

@@ -312,6 +312,7 @@ class Witness(Base):
     document = relationship("Document", back_populates="witnesses")
     job = relationship("ProcessingJob", back_populates="witnesses")
     canonical_witness = relationship("CanonicalWitness", back_populates="source_witnesses")
+    claim_links = relationship("WitnessClaimLink", back_populates="witness", cascade="all, delete-orphan")
 
 
 class ProcessingJob(Base):
