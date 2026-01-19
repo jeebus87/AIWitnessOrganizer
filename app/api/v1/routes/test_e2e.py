@@ -1585,3 +1585,70 @@ async def test_document_count(
         results["error"] = str(e)
         results["traceback"] = traceback.format_exc()
         return results
+
+
+@router.post("/clear-all-jobs")
+async def clear_all_job_data(
+    secret: str = Query(..., description="Secret key for internal testing"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Clear all jobs, witnesses, and related data for fresh testing.
+
+    This deletes:
+    - legal_research_results
+    - witness_claim_links
+    - witnesses
+    - canonical_witnesses
+    - processing_jobs
+
+    And resets documents to unprocessed state.
+    """
+    if secret != E2E_TEST_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid secret")
+
+    from sqlalchemy import text
+    from app.db.models import LegalResearchResult, WitnessClaimLink, Witness, CanonicalWitness, ProcessingJob
+
+    results = {"deleted": {}}
+
+    try:
+        # Delete in order to respect foreign keys
+
+        # Legal research results
+        legal_result = await db.execute(delete(LegalResearchResult))
+        results["deleted"]["legal_research_results"] = legal_result.rowcount
+
+        # Witness claim links
+        link_result = await db.execute(delete(WitnessClaimLink))
+        results["deleted"]["witness_claim_links"] = link_result.rowcount
+
+        # Witnesses
+        witness_result = await db.execute(delete(Witness))
+        results["deleted"]["witnesses"] = witness_result.rowcount
+
+        # Canonical witnesses
+        canonical_result = await db.execute(delete(CanonicalWitness))
+        results["deleted"]["canonical_witnesses"] = canonical_result.rowcount
+
+        # Processing jobs
+        job_result = await db.execute(delete(ProcessingJob))
+        results["deleted"]["processing_jobs"] = job_result.rowcount
+
+        # Reset document processing status
+        doc_reset = await db.execute(
+            text("UPDATE documents SET is_processed = false, processed_at = NULL, content_hash = NULL, analysis_cache = NULL, processing_error = NULL")
+        )
+        results["deleted"]["documents_reset"] = doc_reset.rowcount
+
+        await db.commit()
+
+        results["success"] = True
+        results["message"] = "All job data cleared successfully"
+        return results
+
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Failed to clear job data: {e}")
+        import traceback
+        raise HTTPException(status_code=500, detail=f"Failed to clear data: {str(e)}")
