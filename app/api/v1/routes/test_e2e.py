@@ -1033,3 +1033,163 @@ async def test_small_job_with_doc_relevance(
         results["error"] = str(e)
         results["traceback"] = traceback.format_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/test-export-formats")
+async def test_export_formats(
+    secret: str = Query(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    E2E test: Verify all export formats work (PDF, Excel, DOCX).
+    Finds a completed job with witnesses and tests generating each format.
+    """
+    if secret != E2E_TEST_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid secret key")
+
+    logger = logging.getLogger(__name__)
+    results = {
+        "test": "export_formats",
+        "pdf": {"status": "pending"},
+        "excel": {"status": "pending"},
+        "docx": {"status": "pending"},
+    }
+
+    try:
+        # Get active Clio integration to find user
+        integration_result = await db.execute(
+            select(ClioIntegration).where(
+                ClioIntegration.is_active == True,
+                ClioIntegration.access_token_encrypted.isnot(None)
+            ).limit(1)
+        )
+        integration = integration_result.scalar_one_or_none()
+
+        if not integration:
+            raise HTTPException(status_code=400, detail="No active Clio integration found")
+
+        # Find a completed job with witnesses
+        job_result = await db.execute(
+            select(ProcessingJob).where(
+                ProcessingJob.user_id == integration.user_id,
+                ProcessingJob.status == "completed",
+                ProcessingJob.total_witnesses_found > 0
+            ).order_by(ProcessingJob.id.desc()).limit(1)
+        )
+        job = job_result.scalar_one_or_none()
+
+        if not job:
+            raise HTTPException(status_code=400, detail="No completed job with witnesses found")
+
+        results["job_id"] = job.id
+        results["job_number"] = job.job_number
+        results["witness_count"] = job.total_witnesses_found
+
+        # Test each export format
+        from app.services.export_service import ExportService
+        export_service = ExportService()
+
+        # Get witnesses for this job
+        witness_result = await db.execute(
+            select(Witness).where(Witness.job_id == job.id).options(
+                selectinload(Witness.document).selectinload(Document.matter)
+            )
+        )
+        witnesses = witness_result.scalars().all()
+
+        # Convert to dict format
+        witness_data = []
+        for w in witnesses:
+            witness_data.append({
+                "full_name": w.full_name,
+                "role": w.role.value,
+                "importance": w.importance.value.upper(),
+                "relevance": w.relevance.value.upper() if w.relevance else None,
+                "relevance_reason": w.relevance_reason,
+                "observation": w.observation,
+                "source_quote": w.source_quote,
+                "source_page": w.source_page,
+                "email": w.email,
+                "phone": w.phone,
+                "address": w.address,
+                "document_filename": w.document.filename if w.document else None,
+                "matter_name": w.document.matter.description if w.document and w.document.matter else None,
+                "confidence_score": w.confidence_score,
+                "document_relevance": w.document_relevance.value.upper() if w.document_relevance else None,
+                "document_relevance_reason": w.document_relevance_reason,
+            })
+
+        matter_name = "Test Matter"
+        matter_number = "TEST-001"
+        firm_name = "Test Firm"
+        generated_by = "E2E Test"
+
+        # Test PDF export
+        try:
+            pdf_bytes = export_service.generate_pdf(
+                witnesses=witness_data,
+                matter_name=matter_name,
+                matter_number=matter_number,
+                firm_name=firm_name,
+                generated_by=generated_by
+            )
+            results["pdf"] = {
+                "status": "passed",
+                "size_bytes": len(pdf_bytes),
+                "message": f"Generated {len(pdf_bytes):,} bytes"
+            }
+        except Exception as e:
+            results["pdf"] = {"status": "failed", "error": str(e)}
+
+        # Test Excel export
+        try:
+            excel_bytes = export_service.generate_excel(
+                witnesses=witness_data,
+                matter_name=matter_name,
+                matter_number=matter_number,
+                firm_name=firm_name,
+                generated_by=generated_by
+            )
+            results["excel"] = {
+                "status": "passed",
+                "size_bytes": len(excel_bytes),
+                "message": f"Generated {len(excel_bytes):,} bytes"
+            }
+        except Exception as e:
+            results["excel"] = {"status": "failed", "error": str(e)}
+
+        # Test DOCX export
+        try:
+            docx_bytes = export_service.generate_docx(
+                witnesses=witness_data,
+                matter_name=matter_name,
+                matter_number=matter_number,
+                firm_name=firm_name,
+                generated_by=generated_by
+            )
+            results["docx"] = {
+                "status": "passed",
+                "size_bytes": len(docx_bytes),
+                "message": f"Generated {len(docx_bytes):,} bytes"
+            }
+        except Exception as e:
+            results["docx"] = {"status": "failed", "error": str(e)}
+
+        # Summary
+        all_passed = all(
+            results[fmt]["status"] == "passed"
+            for fmt in ["pdf", "excel", "docx"]
+        )
+        results["all_passed"] = all_passed
+        results["summary"] = "All export formats working!" if all_passed else "Some exports failed"
+
+        return results
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Export format test failed: {e}")
+        import traceback
+        results["error"] = str(e)
+        results["traceback"] = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=str(e))
