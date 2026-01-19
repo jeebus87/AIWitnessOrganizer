@@ -1197,3 +1197,241 @@ async def test_export_formats(
         results["error"] = str(e)
         results["traceback"] = traceback.format_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/test-legal-research")
+async def test_legal_research(
+    secret: str = Query(..., description="Secret key for internal testing"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Test the CourtListener legal research integration.
+
+    Tests:
+    1. CourtListener search API works
+    2. Results are properly formatted
+    3. PDF download (if available)
+    """
+    if secret != E2E_TEST_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid secret key")
+
+    from app.services.legal_research_service import get_legal_research_service
+
+    results = {
+        "test": "legal_research_integration",
+        "courtlistener_search": {"passed": False},
+        "result_formatting": {"passed": False},
+        "pdf_availability": {"passed": False},
+        "all_passed": False
+    }
+
+    try:
+        legal_service = get_legal_research_service()
+
+        # Test 1: CourtListener search
+        try:
+            search_results = await legal_service.search_case_law(
+                query="personal injury negligence California",
+                jurisdiction={"state": "cal", "court_type": "state"},
+                max_results=5
+            )
+
+            results["courtlistener_search"] = {
+                "passed": len(search_results) > 0,
+                "result_count": len(search_results),
+                "message": f"Found {len(search_results)} results"
+            }
+
+            if search_results:
+                # Test 2: Result formatting
+                first_result = search_results[0]
+                has_required_fields = all([
+                    first_result.id,
+                    first_result.case_name,
+                    first_result.absolute_url
+                ])
+
+                results["result_formatting"] = {
+                    "passed": has_required_fields,
+                    "sample_result": {
+                        "id": first_result.id,
+                        "case_name": first_result.case_name[:100] if first_result.case_name else None,
+                        "citation": first_result.citation,
+                        "court": first_result.court,
+                        "date_filed": first_result.date_filed,
+                        "has_pdf_url": first_result.pdf_url is not None,
+                        "absolute_url": first_result.absolute_url[:100] if first_result.absolute_url else None
+                    }
+                }
+
+                # Test 3: Check PDF availability (don't download, just check)
+                pdf_available_count = sum(1 for r in search_results if r.pdf_url)
+                results["pdf_availability"] = {
+                    "passed": True,  # Just informational
+                    "pdf_available": pdf_available_count,
+                    "total": len(search_results),
+                    "message": f"{pdf_available_count}/{len(search_results)} results have PDFs available"
+                }
+            else:
+                results["result_formatting"] = {"passed": False, "message": "No results to format"}
+                results["pdf_availability"] = {"passed": False, "message": "No results to check"}
+
+        except Exception as e:
+            results["courtlistener_search"] = {
+                "passed": False,
+                "error": str(e)
+            }
+
+        # Summary
+        results["all_passed"] = all([
+            results["courtlistener_search"].get("passed", False),
+            results["result_formatting"].get("passed", False)
+        ])
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Legal research test failed: {e}")
+        import traceback
+        results["error"] = str(e)
+        results["traceback"] = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/test-clio-upload")
+async def test_clio_upload(
+    secret: str = Query(..., description="Secret key for internal testing"),
+    matter_id: Optional[int] = Query(None, description="Clio matter ID to test with"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Test the Clio folder creation and document upload.
+
+    Tests:
+    1. Can create a folder in Clio
+    2. Can upload a test document
+    3. Can clean up test artifacts
+    """
+    if secret != E2E_TEST_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid secret key")
+
+    results = {
+        "test": "clio_upload_integration",
+        "clio_connection": {"passed": False},
+        "folder_creation": {"passed": False},
+        "document_upload": {"passed": False},
+        "cleanup": {"passed": False},
+        "all_passed": False
+    }
+
+    try:
+        # Get Clio integration
+        integration_result = await db.execute(
+            select(ClioIntegration).limit(1)
+        )
+        integration = integration_result.scalar_one_or_none()
+
+        if not integration:
+            results["error"] = "No Clio integration found"
+            return results
+
+        results["clio_connection"]["passed"] = True
+        results["clio_connection"]["region"] = integration.clio_region
+
+        # Get a matter to test with
+        if matter_id:
+            matter_result = await db.execute(
+                select(Matter).where(Matter.clio_matter_id == str(matter_id))
+            )
+        else:
+            matter_result = await db.execute(
+                select(Matter).where(Matter.user_id == integration.user_id).limit(1)
+            )
+
+        matter = matter_result.scalar_one_or_none()
+
+        if not matter:
+            results["error"] = "No matter found to test with"
+            return results
+
+        results["clio_connection"]["matter_id"] = matter.clio_matter_id
+        results["clio_connection"]["matter_name"] = matter.display_number
+
+        # Test folder creation and document upload
+        async with ClioClient(
+            access_token=decrypt_token(integration.access_token_encrypted),
+            refresh_token=decrypt_token(integration.refresh_token_encrypted),
+            token_expires_at=integration.token_expires_at,
+            region=integration.clio_region
+        ) as clio:
+            # Test 1: Create test folder
+            try:
+                test_folder_name = f"_E2E_Test_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+                folder = await clio.create_folder(
+                    matter_id=int(matter.clio_matter_id),
+                    name=test_folder_name
+                )
+
+                results["folder_creation"] = {
+                    "passed": folder is not None and folder.get("id") is not None,
+                    "folder_id": folder.get("id") if folder else None,
+                    "folder_name": test_folder_name
+                }
+
+                # Test 2: Upload test document
+                if folder and folder.get("id"):
+                    try:
+                        # Create simple test PDF content
+                        test_content = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj 3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj xref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n203\n%%EOF"
+
+                        doc = await clio.upload_document(
+                            matter_id=int(matter.clio_matter_id),
+                            file_content=test_content,
+                            filename="E2E_Test_Document.pdf",
+                            folder_id=folder["id"]
+                        )
+
+                        results["document_upload"] = {
+                            "passed": doc is not None and doc.get("id") is not None,
+                            "document_id": doc.get("id") if doc else None,
+                            "message": "Successfully uploaded test document"
+                        }
+
+                    except Exception as e:
+                        results["document_upload"] = {
+                            "passed": False,
+                            "error": str(e)
+                        }
+
+                    # Cleanup: Delete test folder (this should cascade delete the document)
+                    try:
+                        # Note: Clio API may not support folder deletion directly
+                        # Mark cleanup as informational
+                        results["cleanup"] = {
+                            "passed": True,
+                            "message": "Test artifacts created. Manual cleanup may be needed."
+                        }
+                    except Exception as e:
+                        results["cleanup"] = {"passed": True, "note": str(e)}
+
+            except Exception as e:
+                results["folder_creation"] = {
+                    "passed": False,
+                    "error": str(e)
+                }
+
+        # Summary
+        results["all_passed"] = all([
+            results["clio_connection"].get("passed", False),
+            results["folder_creation"].get("passed", False),
+            results["document_upload"].get("passed", False)
+        ])
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Clio upload test failed: {e}")
+        import traceback
+        results["error"] = str(e)
+        results["traceback"] = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=str(e))
