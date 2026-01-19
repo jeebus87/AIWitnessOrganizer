@@ -10,6 +10,7 @@ import {
   Download,
   FileText,
   FileSpreadsheet,
+  File,
   Ban,
   Trash2,
   Archive,
@@ -153,12 +154,21 @@ export default function JobsPage() {
     }
   };
 
-  const handleExport = async (jobId: number, format: "pdf" | "excel") => {
+  const handleExport = async (jobId: number, format: "pdf" | "excel" | "docx") => {
     if (!token) return;
     try {
-      const url = format === "pdf"
-        ? api.getExportPdfUrl(jobId)
-        : api.getExportExcelUrl(jobId);
+      let url: string;
+      let ext: string;
+      if (format === "pdf") {
+        url = api.getExportPdfUrl(jobId);
+        ext = "pdf";
+      } else if (format === "excel") {
+        url = api.getExportExcelUrl(jobId);
+        ext = "xlsx";
+      } else {
+        url = api.getExportDocxUrl(jobId);
+        ext = "docx";
+      }
 
       const response = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` },
@@ -172,7 +182,7 @@ export default function JobsPage() {
       const downloadUrl = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = downloadUrl;
-      a.download = `witnesses-job-${jobId}.${format === "pdf" ? "pdf" : "xlsx"}`;
+      a.download = `witnesses-job-${jobId}.${ext}`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(downloadUrl);
@@ -425,6 +435,10 @@ export default function JobsPage() {
                                   <FileSpreadsheet className="mr-2 h-4 w-4" />
                                   Download Excel
                                 </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleExport(job.id, "docx")}>
+                                  <File className="mr-2 h-4 w-4" />
+                                  Download Word
+                                </DropdownMenuItem>
                               </DropdownMenuContent>
                             </DropdownMenu>
                             <Button
@@ -453,6 +467,10 @@ export default function JobsPage() {
                                 <DropdownMenuItem onClick={() => handleExport(job.id, "excel")}>
                                   <FileSpreadsheet className="mr-2 h-4 w-4" />
                                   Download Excel
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleExport(job.id, "docx")}>
+                                  <File className="mr-2 h-4 w-4" />
+                                  Download Word
                                 </DropdownMenuItem>
                               </DropdownMenuContent>
                             </DropdownMenu>

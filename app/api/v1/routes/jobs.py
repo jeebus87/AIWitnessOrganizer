@@ -496,6 +496,36 @@ async def export_job_excel(
     )
 
 
+@router.get("/{job_id}/export/docx")
+async def export_job_docx(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Export witnesses found in a job to DOCX (Word).
+    Only exports witnesses created by this specific job.
+    """
+    from fastapi.responses import RedirectResponse
+
+    result = await db.execute(
+        select(ProcessingJob).where(
+            ProcessingJob.id == job_id,
+            ProcessingJob.user_id == current_user.id
+        )
+    )
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Redirect to witnesses export with job_id to get only witnesses from this job
+    return RedirectResponse(
+        url=f"/api/v1/witnesses/export/docx?job_id={job_id}",
+        status_code=307
+    )
+
+
 def _job_to_response(job: ProcessingJob) -> JobResponse:
     """Convert a ProcessingJob to JobResponse"""
     progress = 0.0

@@ -210,6 +210,10 @@ class ApiClient {
     return `${this.baseUrl}/api/v1/jobs/${jobId}/export/excel`;
   }
 
+  getExportDocxUrl(jobId: number) {
+    return `${this.baseUrl}/api/v1/jobs/${jobId}/export/docx`;
+  }
+
   // User
   async getCurrentUser(token: string) {
     return this.request<UserProfile>("/api/v1/auth/me", { token });
