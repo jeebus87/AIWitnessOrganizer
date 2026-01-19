@@ -764,3 +764,64 @@ async def test_subfolder_recursive_count(
         results["error"] = str(e)
         results["traceback"] = traceback.format_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/fix-job-numbers")
+async def fix_existing_job_numbers(
+    secret: str = Query(..., description="Secret key for internal testing"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Fix existing job numbers to be sequential per user.
+    This one-time fix updates old jobs that had job_number = db_id.
+    """
+    if secret != E2E_TEST_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid secret key")
+
+    logger = logging.getLogger(__name__)
+
+    try:
+        # Get all users with jobs
+        from sqlalchemy import distinct
+        user_ids_result = await db.execute(
+            select(distinct(ProcessingJob.user_id))
+        )
+        user_ids = [row[0] for row in user_ids_result.all()]
+
+        fixed_count = 0
+        results = []
+
+        for user_id in user_ids:
+            # Get all jobs for this user, ordered by creation date
+            jobs_result = await db.execute(
+                select(ProcessingJob).where(
+                    ProcessingJob.user_id == user_id
+                ).order_by(ProcessingJob.created_at.asc())
+            )
+            user_jobs = jobs_result.scalars().all()
+
+            # Reassign sequential job numbers
+            for idx, job in enumerate(user_jobs, start=1):
+                old_number = job.job_number
+                if old_number != idx:
+                    job.job_number = idx
+                    fixed_count += 1
+                    results.append({
+                        "user_id": user_id,
+                        "job_id": job.id,
+                        "old_number": old_number,
+                        "new_number": idx
+                    })
+
+        await db.commit()
+
+        return {
+            "success": True,
+            "fixed_count": fixed_count,
+            "changes": results
+        }
+
+    except Exception as e:
+        logger.error(f"Fix job numbers failed: {e}")
+        import traceback
+        raise HTTPException(status_code=500, detail=str(e))
