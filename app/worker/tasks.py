@@ -1593,22 +1593,32 @@ async def _save_legal_research_to_clio_async(research_id: int):
                 token_expires_at=clio_integration.token_expires_at,
                 region=clio_integration.clio_region
             ) as clio:
-                # Try to create "Legal Research" folder in matter
-                # If folder creation fails (403), we'll upload to matter root
+                # Check if "Legal Research" folder already exists, or create it
                 folder_id = None
                 folder_name = "Legal Research"
                 try:
-                    folder = await clio.create_folder(
-                        matter_id=int(matter.clio_matter_id),
-                        name=folder_name
-                    )
-                    if folder and folder.get("id"):
-                        folder_id = folder["id"]
-                        research.clio_folder_id = str(folder_id)
-                        logger.info(f"Created Legal Research folder {folder_id} in Clio")
+                    # First, check for existing folder
+                    async for folder in clio.get_folders(int(matter.clio_matter_id)):
+                        if folder.get("name") == folder_name and not folder.get("parent"):
+                            # Found existing root-level "Legal Research" folder
+                            folder_id = folder["id"]
+                            research.clio_folder_id = str(folder_id)
+                            logger.info(f"Using existing Legal Research folder {folder_id} in Clio")
+                            break
+
+                    # Create folder if it doesn't exist
+                    if not folder_id:
+                        folder = await clio.create_folder(
+                            matter_id=int(matter.clio_matter_id),
+                            name=folder_name
+                        )
+                        if folder and folder.get("id"):
+                            folder_id = folder["id"]
+                            research.clio_folder_id = str(folder_id)
+                            logger.info(f"Created Legal Research folder {folder_id} in Clio")
                 except Exception as e:
-                    # Folder creation failed - continue without folder
-                    logger.warning(f"Could not create folder in Clio: {e}. Uploading to matter root.")
+                    # Folder lookup/creation failed - continue without folder
+                    logger.warning(f"Could not get/create folder in Clio: {e}. Uploading to matter root.")
 
                 # Download and upload each selected case
                 legal_research_service = get_legal_research_service()
