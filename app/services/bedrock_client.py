@@ -110,6 +110,9 @@ class WitnessData:
     # New relevance scoring with legal reasoning
     relevance: Optional[str] = None  # HIGHLY_RELEVANT, RELEVANT, SOMEWHAT_RELEVANT, NOT_RELEVANT
     relevance_reason: Optional[str] = None  # Legal reasoning tied to claims/defenses
+    # Document-level relevance (how relevant is the source document to the case)
+    document_relevance: Optional[str] = None  # HIGHLY_RELEVANT, RELEVANT, SOMEWHAT_RELEVANT, NOT_RELEVANT
+    document_relevance_reason: Optional[str] = None  # Why the document is relevant
     # Per-observation claim links (for granular relevance tracking)
     claim_links: List['ClaimLinkData'] = field(default_factory=list)
 
@@ -190,6 +193,12 @@ Then return {"witnesses": []} - do not extract witnesses from privileged materia
    - SOMEWHAT_RELEVANT: Peripheral knowledge; may provide context but not central
    - NOT_RELEVANT: Administrative contact only; no substantive knowledge of facts
 5. **relevanceReason**: A concise legal explanation (1-2 sentences) of WHY this witness is relevant. MUST tie to specific claims, defenses, or allegations. Examples:
+6. **documentRelevance**: Legal relevance of the SOURCE DOCUMENT to the case:
+   - HIGHLY_RELEVANT: Document contains direct evidence (contracts, correspondence, declarations)
+   - RELEVANT: Document supports claims/defenses or provides important context
+   - SOMEWHAT_RELEVANT: Document has tangential relevance or background info
+   - NOT_RELEVANT: Document is administrative/procedural with no substantive value
+7. **documentRelevanceReason**: Brief explanation of why the document itself is relevant to the case
    - "Highly Relevant - Eyewitness to the alleged harassment on 3/15/2024 that forms the basis of Plaintiff's hostile work environment claim."
    - "Relevant - As Plaintiff's supervisor, has direct knowledge of Plaintiff's job performance relevant to Defendant's legitimate business reasons defense."
    - "Somewhat Relevant - Was present in the office but did not directly witness the alleged incident."
@@ -212,6 +221,8 @@ CRITICAL: You must respond ONLY with valid JSON matching this exact schema:
       "importance": "HIGH|MEDIUM|LOW",
       "relevance": "HIGHLY_RELEVANT|RELEVANT|SOMEWHAT_RELEVANT|NOT_RELEVANT",
       "relevanceReason": "string",
+      "documentRelevance": "HIGHLY_RELEVANT|RELEVANT|SOMEWHAT_RELEVANT|NOT_RELEVANT",
+      "documentRelevanceReason": "string",
       "observation": "string or null",
       "sourceSummary": "string or null",
       "sourcePage": "number or null",
@@ -667,6 +678,8 @@ Respond with valid JSON only."""
                     confidence_score=float(w.get("confidenceScore", 0.5)),
                     relevance=relevance,
                     relevance_reason=w.get("relevanceReason"),
+                    document_relevance=w.get("documentRelevance", "RELEVANT").upper().replace(" ", "_"),
+                    document_relevance_reason=w.get("documentRelevanceReason"),
                     claim_links=claim_links
                 ))
 

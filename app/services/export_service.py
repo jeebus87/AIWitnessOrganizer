@@ -114,6 +114,27 @@ class ExportService:
             return f"{relevance_text} - {relevance_reason}"
         return relevance_text
 
+    def _format_document_relevance(self, w: Dict[str, Any]) -> str:
+        """Format document relevance level with reason"""
+        relevance_display = {
+            "HIGHLY_RELEVANT": "Highly Relevant",
+            "highly_relevant": "Highly Relevant",
+            "RELEVANT": "Relevant",
+            "relevant": "Relevant",
+            "SOMEWHAT_RELEVANT": "Somewhat Relevant",
+            "somewhat_relevant": "Somewhat Relevant",
+            "NOT_RELEVANT": "Not Relevant",
+            "not_relevant": "Not Relevant",
+        }
+
+        doc_relevance = w.get("document_relevance") or "RELEVANT"
+        relevance_text = relevance_display.get(str(doc_relevance), "Relevant")
+
+        doc_reason = w.get("document_relevance_reason", "") or ""
+        if doc_reason:
+            return f"{relevance_text} - {doc_reason}"
+        return relevance_text
+
     def _get_relevance_sort_key(self, w: Dict[str, Any]) -> int:
         """Get sort key for relevance (lower = more relevant = first)"""
         relevance = str(w.get("relevance") or w.get("importance") or "RELEVANT").upper().replace(" ", "_")
@@ -162,7 +183,8 @@ class ExportService:
                     "Confidence": f"{w.get('confidence_score', 0) * 100:.0f}%",
                     "Observation": w.get("observation", "") or "",
                     "Source Summary": w.get("source_quote", "") or "",
-                    "Source Document": self._format_source_document(w)
+                    "Source Document": self._format_source_document(w),
+                    "Doc Relevance": self._format_document_relevance(w)
                 }
                 rows.append(row)
             else:
@@ -175,7 +197,8 @@ class ExportService:
                     "Confidence": f"{first_obs.get('confidence_score', 0) * 100:.0f}%",
                     "Observation": summary_observation,
                     "Source Summary": "See Below",
-                    "Source Document": "See Below"
+                    "Source Document": "See Below",
+                    "Doc Relevance": "See Below"
                 }
                 rows.append(summary_row)
 
@@ -187,7 +210,8 @@ class ExportService:
                         "Confidence": "",
                         "Observation": w.get("observation", "") or "",
                         "Source Summary": w.get("source_quote", "") or "",
-                        "Source Document": self._format_source_document(w)
+                        "Source Document": self._format_source_document(w),
+                        "Doc Relevance": self._format_document_relevance(w)
                     }
                     rows.append(row)
 
@@ -332,8 +356,8 @@ class ExportService:
                         worksheet.write(excel_row, col_num, value, row_format)
 
             # Set column widths - matching PDF proportions
-            # Witness Info, Relevance, Confidence, Observation, Source Summary, Source Document
-            col_widths = [35, 40, 12, 45, 35, 30]  # Wider Relevance column for reason text
+            # Witness Info, Relevance, Confidence, Observation, Source Summary, Source Document, Doc Relevance
+            col_widths = [30, 35, 10, 35, 30, 25, 30]  # 7 columns
             for idx, width in enumerate(col_widths):
                 if idx < len(df.columns):
                     worksheet.set_column(idx, idx, width)
@@ -502,8 +526,8 @@ class ExportService:
                 witness_groups[name] = []
             witness_groups[name].append(w)
 
-        # Table headers - new structure with Relevance
-        headers = ["Witness Info", "Relevance", "Confidence", "Observation", "Source Summary", "Source Document"]
+        # Table headers - new structure with Relevance and Doc Relevance
+        headers = ["Witness Info", "Relevance", "Confidence", "Observation", "Source Summary", "Source Document", "Doc Relevance"]
 
         data = [headers]
 
@@ -546,13 +570,25 @@ class ExportService:
                 confidence = f"{w.get('confidence_score', 0) * 100:.0f}%"
                 relevance_text = self._format_relevance(w)
 
+                # Format document relevance
+                doc_rel = w.get("document_relevance") or "RELEVANT"
+                doc_rel_reason = w.get("document_relevance_reason") or ""
+                doc_relevance_display = {
+                    "HIGHLY_RELEVANT": "Highly Relevant", "RELEVANT": "Relevant",
+                    "SOMEWHAT_RELEVANT": "Somewhat Relevant", "NOT_RELEVANT": "Not Relevant"
+                }
+                doc_rel_text = doc_relevance_display.get(str(doc_rel).upper(), "Relevant")
+                if doc_rel_reason:
+                    doc_rel_text = f"{doc_rel_text} - {doc_rel_reason}"
+
                 row = [
                     Paragraph(witness_info, self.styles["Observation"]),
                     Paragraph(relevance_text, self.styles["Observation"]),
                     confidence,
                     Paragraph(observation, self.styles["Observation"]),
                     Paragraph(source_summary, self.styles["Observation"]),
-                    Paragraph(source_doc, self.styles["Observation"])
+                    Paragraph(source_doc, self.styles["Observation"]),
+                    Paragraph(doc_rel_text, self.styles["Observation"])
                 ]
                 data.append(row)
             else:
@@ -570,6 +606,7 @@ class ExportService:
                     confidence,
                     Paragraph(summary_observation, self.styles["Observation"]),
                     "See Below",
+                    "See Below",
                     "See Below"
                 ]
                 data.append(summary_row)
@@ -584,20 +621,32 @@ class ExportService:
                     if source_page:
                         source_doc = f"{source_doc} (Page {source_page})"
 
+                    # Format document relevance for this observation
+                    w_doc_rel = w.get("document_relevance") or "RELEVANT"
+                    w_doc_rel_reason = w.get("document_relevance_reason") or ""
+                    doc_relevance_display = {
+                        "HIGHLY_RELEVANT": "Highly Relevant", "RELEVANT": "Relevant",
+                        "SOMEWHAT_RELEVANT": "Somewhat Relevant", "NOT_RELEVANT": "Not Relevant"
+                    }
+                    w_doc_rel_text = doc_relevance_display.get(str(w_doc_rel).upper(), "Relevant")
+                    if w_doc_rel_reason:
+                        w_doc_rel_text = f"{w_doc_rel_text} - {w_doc_rel_reason}"
+
                     row = [
                         "",  # Witness Info
                         "",  # Relevance
                         "",  # Confidence
                         Paragraph(observation, self.styles["Observation"]),
                         Paragraph(source_summary, self.styles["Observation"]),
-                        Paragraph(source_doc, self.styles["Observation"])
+                        Paragraph(source_doc, self.styles["Observation"]),
+                        Paragraph(w_doc_rel_text, self.styles["Observation"])
                     ]
                     data.append(row)
 
-        # Create table - adjusted column widths for 6 columns
+        # Create table - adjusted column widths for 7 columns
         # Landscape LETTER = 11" wide, minus 1" margins = 10" available
-        # Witness Info, Relevance (wider for reason text), Confidence, Observation, Source Summary, Source Document
-        col_widths = [1.8 * inch, 1.5 * inch, 0.7 * inch, 2.3 * inch, 1.9 * inch, 1.8 * inch]
+        # Witness Info, Relevance, Confidence, Observation, Source Summary, Source Document, Doc Relevance
+        col_widths = [1.4 * inch, 1.3 * inch, 0.6 * inch, 1.8 * inch, 1.5 * inch, 1.4 * inch, 1.3 * inch]
 
         table = Table(data, colWidths=col_widths, repeatRows=1, splitByRow=True)
 
@@ -1020,19 +1069,19 @@ class ExportService:
             else:
                 total_rows += 1 + len(observations)  # Summary + individual observations
 
-        # Create table with 6 columns
-        table = doc.add_table(rows=total_rows, cols=6)
+        # Create table with 7 columns
+        table = doc.add_table(rows=total_rows, cols=7)
         table.style = 'Table Grid'
         table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-        # Set column widths
-        widths = [Inches(1.8), Inches(1.5), Inches(0.7), Inches(2.3), Inches(1.9), Inches(1.8)]
+        # Set column widths for 7 columns
+        widths = [Inches(1.4), Inches(1.2), Inches(0.6), Inches(1.7), Inches(1.4), Inches(1.3), Inches(1.2)]
         for idx, width in enumerate(widths):
             for cell in table.columns[idx].cells:
                 cell.width = width
 
         # Add headers
-        headers = ["Witness Info", "Relevance", "Confidence", "Observation", "Source Summary", "Source Document"]
+        headers = ["Witness Info", "Relevance", "Confidence", "Observation", "Source Summary", "Source Document", "Doc Relevance"]
         for col_idx, header in enumerate(headers):
             cell = table.rows[0].cells[col_idx]
             cell.text = header
@@ -1067,9 +1116,10 @@ class ExportService:
                 row.cells[3].text = w.get("observation", "") or ""
                 row.cells[4].text = w.get("source_quote", "") or ""
                 row.cells[5].text = self._format_source_document(w)
+                row.cells[6].text = self._format_document_relevance(w)
 
                 # Apply styling
-                for col_idx in range(6):
+                for col_idx in range(7):
                     cell = row.cells[col_idx]
                     self._set_cell_shading(cell, row_color)
                     for paragraph in cell.paragraphs:
@@ -1087,8 +1137,9 @@ class ExportService:
                 row.cells[3].text = f"Multiple observations ({len(observations)} entries) - see details below"
                 row.cells[4].text = "See Below"
                 row.cells[5].text = "See Below"
+                row.cells[6].text = "See Below"
 
-                for col_idx in range(6):
+                for col_idx in range(7):
                     cell = row.cells[col_idx]
                     self._set_cell_shading(cell, row_color)
                     for paragraph in cell.paragraphs:
@@ -1107,8 +1158,9 @@ class ExportService:
                     row.cells[3].text = w.get("observation", "") or ""
                     row.cells[4].text = w.get("source_quote", "") or ""
                     row.cells[5].text = self._format_source_document(w)
+                    row.cells[6].text = self._format_document_relevance(w)
 
-                    for col_idx in range(6):
+                    for col_idx in range(7):
                         cell = row.cells[col_idx]
                         self._set_cell_shading(cell, row_color)
                         for paragraph in cell.paragraphs:
