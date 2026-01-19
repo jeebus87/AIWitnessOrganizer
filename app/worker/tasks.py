@@ -848,7 +848,10 @@ async def _process_matter_async(
                     region=clio_integration.clio_region
                 ) as clio:
                     # Get documents from the legal authority folder
-                    async for la_doc in clio.get_documents_in_folder(legal_authority_folder_id):
+                    async for la_doc in clio.get_documents_in_folder(
+                        legal_authority_folder_id,
+                        matter_id=int(matter.clio_matter_id)
+                    ):
                         try:
                             # Download and process the legal authority document
                             doc_content = await clio.download_document(la_doc["id"])

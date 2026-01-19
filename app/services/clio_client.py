@@ -420,21 +420,30 @@ class ClioClient:
     async def get_documents_in_folder(
         self,
         folder_id: int,
+        matter_id: Optional[int] = None,
         fields: Optional[List[str]] = None
     ) -> AsyncIterator[Dict[str, Any]]:
-        """Get documents in a specific folder"""
+        """Get documents in a specific folder.
+
+        Note: Clio API uses parent_id to filter documents by their containing folder.
+        """
         import logging
         logger = logging.getLogger(__name__)
 
-        logger.info(f"[CLIO] get_documents_in_folder: folder_id={folder_id}")
+        logger.info(f"[CLIO] get_documents_in_folder: folder_id={folder_id}, matter_id={matter_id}")
 
         if fields is None:
             fields = self.DEFAULT_DOCUMENT_FIELDS
 
+        # Clio uses parent_id to reference the folder containing the document
         params = {
-            "folder_id": folder_id,
+            "parent_id": folder_id,
             "fields": ",".join(fields)
         }
+
+        # Include matter_id if provided for better filtering
+        if matter_id:
+            params["matter_id"] = matter_id
 
         doc_count = 0
         async for doc in self.get_paginated("documents", params):
@@ -475,7 +484,7 @@ class ClioClient:
 
         # Get documents in the current folder
         doc_count = 0
-        async for doc in self.get_documents_in_folder(folder_id, fields):
+        async for doc in self.get_documents_in_folder(folder_id, matter_id=matter_id, fields=fields):
             doc_count += 1
             yield doc
 

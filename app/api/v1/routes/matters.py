@@ -412,7 +412,10 @@ async def process_matter(
                         exclude_folder_ids=[legal_authority_folder_id] if legal_authority_folder_id else None
                     )
                 else:
-                    doc_iterator = clio.get_documents_in_folder(scan_folder_id)
+                    doc_iterator = clio.get_documents_in_folder(
+                        scan_folder_id,
+                        matter_id=int(matter.clio_matter_id)
+                    )
             else:
                 # Sync all documents for matter
                 doc_iterator = clio.get_documents(matter_id=int(matter.clio_matter_id))
@@ -651,8 +654,12 @@ async def get_document_count(
             fields = ["id"]
 
             if folder_id:
-                # Count documents in specific folder
-                async for _ in clio.get_documents_in_folder(int(folder_id), fields=fields):
+                # Count documents in specific folder (include matter_id for accuracy)
+                async for _ in clio.get_documents_in_folder(
+                    int(folder_id),
+                    matter_id=int(matter.clio_matter_id),
+                    fields=fields
+                ):
                     count += 1
             else:
                 # Count all documents for the matter
