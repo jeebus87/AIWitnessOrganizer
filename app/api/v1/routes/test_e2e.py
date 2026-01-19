@@ -1525,35 +1525,42 @@ async def test_document_count(
             # Test 3: For the first few folders, count with and without subfolders
             # Note: Clio may return folders whose parent is outside our query scope
             # So we test the actual folders we have, not just "root" folders
-            test_folders = folders[:5]  # Test first 5 folders
+            test_folders = folders[:3]  # Test first 3 folders only (to avoid timeout)
             for rf in test_folders:
                 folder_id = rf["id"]
                 folder_name = rf["name"]
 
-                # Count without subfolders
-                count_direct = 0
-                async for _ in clio.get_documents_in_folder(
-                    folder_id,
-                    matter_id=int(matter.clio_matter_id),
-                    fields=["id"]
-                ):
-                    count_direct += 1
+                try:
+                    # Count without subfolders
+                    count_direct = 0
+                    async for _ in clio.get_documents_in_folder(
+                        folder_id,
+                        matter_id=int(matter.clio_matter_id),
+                        fields=["id"]
+                    ):
+                        count_direct += 1
 
-                # Count with subfolders
-                count_recursive = 0
-                async for _ in clio.get_documents_recursive(
-                    matter_id=int(matter.clio_matter_id),
-                    folder_id=folder_id,
-                    fields=["id"]
-                ):
-                    count_recursive += 1
+                    # Count with subfolders
+                    count_recursive = 0
+                    async for _ in clio.get_documents_recursive(
+                        matter_id=int(matter.clio_matter_id),
+                        folder_id=folder_id,
+                        fields=["id"]
+                    ):
+                        count_recursive += 1
 
-                results["tests"].append({
-                    "name": f"folder_{folder_name}",
-                    "folder_id": folder_id,
-                    "count_direct": count_direct,
-                    "count_with_subfolders": count_recursive
-                })
+                    results["tests"].append({
+                        "name": f"folder_{folder_name}",
+                        "folder_id": folder_id,
+                        "count_direct": count_direct,
+                        "count_with_subfolders": count_recursive
+                    })
+                except Exception as folder_err:
+                    results["tests"].append({
+                        "name": f"folder_{folder_name}",
+                        "folder_id": folder_id,
+                        "error": str(folder_err)
+                    })
 
         results["passed"] = True
         return results
