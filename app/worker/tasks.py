@@ -1624,8 +1624,17 @@ async def _save_legal_research_to_clio_async(research_id: int):
                         continue
 
                     try:
-                        # Try to download PDF
-                        pdf_content = await legal_research_service.download_opinion_pdf(case_id)
+                        # Try to download PDF using the stored pdf_url first
+                        pdf_url = case_info.get("pdf_url")
+                        pdf_content = None
+
+                        if pdf_url:
+                            # Download directly from CourtListener storage (no auth required)
+                            pdf_content = await legal_research_service.download_pdf_from_url(pdf_url)
+
+                        if not pdf_content:
+                            # Fallback: try the opinion API (may require auth)
+                            pdf_content = await legal_research_service.download_opinion_pdf(case_id)
 
                         if pdf_content:
                             # Generate filename with "Legal Research - " prefix if no folder
@@ -1647,7 +1656,46 @@ async def _save_legal_research_to_clio_async(research_id: int):
                             uploaded_count += 1
                             logger.info(f"Uploaded {filename} to Clio")
                         else:
-                            logger.warning(f"No PDF available for case {case_id}")
+                            # No PDF available - create a text summary file instead
+                            case_name = case_info.get("case_name", "Unknown Case")
+                            citation = case_info.get("citation", "No citation")
+                            court = case_info.get("court", "Unknown court")
+                            date_filed = case_info.get("date_filed", "Unknown date")
+                            snippet = case_info.get("snippet", "")
+                            url = case_info.get("absolute_url", "")
+
+                            summary_content = f"""CASE SUMMARY
+============
+
+Case Name: {case_name}
+Citation: {citation}
+Court: {court}
+Date Filed: {date_filed}
+
+CourtListener URL: {url}
+
+RELEVANCE:
+{snippet}
+
+---
+Note: Full PDF not available from CourtListener. Visit the URL above to access the full opinion.
+"""
+                            # Sanitize filename
+                            safe_name = "".join(c for c in (citation or case_name) if c.isalnum() or c in " -_.,").strip()
+                            if not folder_id:
+                                filename = f"Legal Research - {safe_name[:80]}.txt"
+                            else:
+                                filename = f"{safe_name[:100]}.txt"
+
+                            await clio.upload_document(
+                                matter_id=int(matter.clio_matter_id),
+                                file_content=summary_content.encode('utf-8'),
+                                filename=filename,
+                                folder_id=folder_id,
+                                content_type="text/plain"
+                            )
+                            uploaded_count += 1
+                            logger.info(f"Uploaded summary {filename} to Clio (PDF not available)")
 
                     except Exception as e:
                         logger.warning(f"Failed to upload case {case_id}: {e}")

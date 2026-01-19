@@ -755,7 +755,8 @@ class ClioClient:
         matter_id: int,
         file_content: bytes,
         filename: str,
-        folder_id: Optional[int] = None
+        folder_id: Optional[int] = None,
+        content_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Upload a document to Clio using API v4.
@@ -769,6 +770,7 @@ class ClioClient:
             file_content: File content as bytes
             filename: Filename for the document
             folder_id: Optional folder ID to place document in
+            content_type: Optional content type (e.g., "text/plain", "application/pdf")
 
         Returns:
             Created document data from Clio API
@@ -823,8 +825,10 @@ class ClioClient:
                     if isinstance(header, dict) and "name" in header and "value" in header:
                         upload_headers[header["name"]] = header["value"]
 
-                # Default to PDF content type if not specified
-                if "Content-Type" not in upload_headers:
+                # Use provided content_type or default to PDF
+                if content_type:
+                    upload_headers["Content-Type"] = content_type
+                elif "Content-Type" not in upload_headers:
                     upload_headers["Content-Type"] = "application/pdf"
 
                 # Upload file content to pre-signed S3 URL

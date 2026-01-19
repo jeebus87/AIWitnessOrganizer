@@ -270,6 +270,39 @@ class LegalResearchService:
             logger.error(f"Error downloading opinion PDF {opinion_id}: {e}")
             return None
 
+    async def download_pdf_from_url(self, pdf_url: str) -> Optional[bytes]:
+        """
+        Download PDF directly from a URL.
+
+        Args:
+            pdf_url: Direct URL to the PDF file
+
+        Returns:
+            PDF bytes or None if not available
+        """
+        if not pdf_url:
+            return None
+
+        try:
+            # Build full URL if it's a relative path
+            if pdf_url.startswith("/"):
+                pdf_url = f"https://storage.courtlistener.com{pdf_url}"
+            elif not pdf_url.startswith("http"):
+                pdf_url = f"https://storage.courtlistener.com/{pdf_url}"
+
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.get(pdf_url)
+                if response.status_code == 200:
+                    logger.info(f"Downloaded PDF from {pdf_url}")
+                    return response.content
+                else:
+                    logger.warning(f"Failed to download PDF from {pdf_url}: {response.status_code}")
+                    return None
+
+        except Exception as e:
+            logger.error(f"Error downloading PDF from {pdf_url}: {e}")
+            return None
+
     def build_search_queries(
         self,
         claims: List[Dict[str, Any]],
