@@ -219,17 +219,17 @@ class ApiClient {
     });
   }
 
-  // Exports
+  // Exports - Call witnesses endpoint directly to avoid redirect auth issues
   getExportPdfUrl(jobId: number) {
-    return `${this.baseUrl}/api/v1/jobs/${jobId}/export/pdf`;
+    return `${this.baseUrl}/api/v1/witnesses/export/pdf?job_id=${jobId}`;
   }
 
   getExportExcelUrl(jobId: number) {
-    return `${this.baseUrl}/api/v1/jobs/${jobId}/export/excel`;
+    return `${this.baseUrl}/api/v1/witnesses/export/excel?job_id=${jobId}`;
   }
 
   getExportDocxUrl(jobId: number) {
-    return `${this.baseUrl}/api/v1/jobs/${jobId}/export/docx`;
+    return `${this.baseUrl}/api/v1/witnesses/export/docx?job_id=${jobId}`;
   }
 
   // User
