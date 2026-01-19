@@ -1470,9 +1470,9 @@ async def test_document_count(
     try:
         # Get first active integration
         integration_result = await db.execute(
-            select(ClioIntegration).where(ClioIntegration.is_active == True).limit(1)
+            select(ClioIntegration).where(ClioIntegration.is_active == True)
         )
-        integration = integration_result.scalar_one_or_none()
+        integration = integration_result.scalars().first()
 
         if not integration:
             results["error"] = "No active Clio integration found"
@@ -1483,9 +1483,9 @@ async def test_document_count(
             select(Matter).where(
                 Matter.user_id == integration.user_id,
                 Matter.display_number.like("%Ponce%")
-            ).limit(1)
+            )
         )
-        matter = matter_result.scalar_one_or_none()
+        matter = matter_result.scalars().first()
 
         if not matter:
             results["error"] = "No Ponce matter found"
