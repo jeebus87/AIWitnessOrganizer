@@ -1562,6 +1562,20 @@ async def test_document_count(
                         "error": str(folder_err)
                     })
 
+            # Test 4: Simulate exact frontend API call
+            # Frontend constructs: /api/v1/matters/{matterId}/documents/count?folder_id={folderId}&include_subfolders=true
+            folder_id_to_test = 14986897237  # The matter root folder
+            matter_db_id = matter.id
+
+            # This is exactly what the frontend URL would look like
+            simulated_url = f"/api/v1/matters/{matter_db_id}/documents/count?folder_id={folder_id_to_test}&include_subfolders=true"
+
+            results["frontend_simulation"] = {
+                "url": simulated_url,
+                "expected_count": 76,
+                "note": "This is the URL the frontend should be calling. If it shows 76, the API is correct."
+            }
+
         results["passed"] = True
         return results
 
