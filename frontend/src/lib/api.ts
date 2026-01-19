@@ -141,8 +141,11 @@ class ApiClient {
   }
 
   // Get document count for a matter (optionally filtered by folder)
-  async getDocumentCount(matterId: number, token: string, folderId?: string | null) {
-    const params = folderId ? `?folder_id=${folderId}` : "";
+  async getDocumentCount(matterId: number, token: string, folderId?: string | null, includeSubfolders: boolean = false) {
+    const queryParams = new URLSearchParams();
+    if (folderId) queryParams.set("folder_id", folderId);
+    queryParams.set("include_subfolders", includeSubfolders.toString());
+    const params = queryParams.toString() ? `?${queryParams.toString()}` : "";
     return this.request<DocumentCountResponse>(`/api/v1/matters/${matterId}/documents/count${params}`, { token });
   }
 

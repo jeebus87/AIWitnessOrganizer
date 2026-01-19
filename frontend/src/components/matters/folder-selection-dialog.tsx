@@ -182,14 +182,14 @@ export function FolderSelectionDialog({
     }
   }, [open]);
 
-  // Fetch document count when scan folder changes
-  const fetchDocumentCount = async (folderId: number | null) => {
+  // Fetch document count when scan folder or includeSubfolders changes
+  const fetchDocumentCount = async (folderId: number | null, withSubfolders: boolean) => {
     if (!token || !matterId) return;
 
     setCountLoading(true);
     try {
       const folderIdStr = folderId ? folderId.toString() : null;
-      const result = await api.getDocumentCount(matterId, token, folderIdStr);
+      const result = await api.getDocumentCount(matterId, token, folderIdStr, withSubfolders);
       setDocumentCount(result.count);
 
       // Show toast with document count
@@ -208,6 +208,14 @@ export function FolderSelectionDialog({
     }
   };
 
+  // Re-fetch count when includeSubfolders changes (for any selected folder including "all")
+  useEffect(() => {
+    if (open && documentCount !== null) {
+      // Only re-fetch if we've already fetched a count (meaning user has selected something)
+      fetchDocumentCount(scanFolderId, includeSubfolders);
+    }
+  }, [includeSubfolders]);
+
   const toggleExpanded = (folderId: number) => {
     setExpandedFolders((prev) => {
       const next = new Set(prev);
@@ -224,7 +232,7 @@ export function FolderSelectionDialog({
     if (selectionMode === "scan") {
       setScanFolderId(folderId);
       // Fetch and display document count when scan folder is selected
-      fetchDocumentCount(folderId);
+      fetchDocumentCount(folderId, includeSubfolders);
     } else {
       setLegalAuthorityFolderId(folderId);
     }
