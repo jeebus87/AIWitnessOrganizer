@@ -556,6 +556,15 @@ async def process_matter(
             detail="No documents found in the selected folder. Please select a different folder or check that documents exist in Clio."
         )
 
+    # Get the next job number for this user (sequential per user)
+    from sqlalchemy import func as sql_func
+    max_job_number_result = await db.execute(
+        select(sql_func.coalesce(sql_func.max(ProcessingJob.job_number), 0)).where(
+            ProcessingJob.user_id == current_user.id
+        )
+    )
+    next_job_number = (max_job_number_result.scalar() or 0) + 1
+
     # Create job record with document snapshot
     job = ProcessingJob(
         user_id=current_user.id,
@@ -563,13 +572,10 @@ async def process_matter(
         target_matter_id=matter_id,
         status=JobStatus.PENDING,
         total_documents=len(document_ids),
-        document_ids_snapshot=document_ids  # Freeze the document list
+        document_ids_snapshot=document_ids,  # Freeze the document list
+        job_number=next_job_number  # Sequential job number per user
     )
     db.add(job)
-    await db.flush()  # Flush to get the job ID without committing
-
-    # Set job_number to match database id
-    job.job_number = job.id
 
     await db.commit()
     await db.refresh(job)
