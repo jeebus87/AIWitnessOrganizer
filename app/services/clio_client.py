@@ -687,14 +687,25 @@ class ClioClient:
         import logging
         logger = logging.getLogger(__name__)
 
-        payload = {
-            "data": {
-                "name": name,
-                "matter": {"id": matter_id},
-            }
-        }
+        # Clio v4 uses "parent" with "type" field to specify the container
+        # For root-level folders in a matter, parent is the Matter itself
+        # For nested folders, parent is another Folder
         if parent_id:
-            payload["data"]["parent"] = {"id": parent_id}
+            # Nested folder inside another folder
+            payload = {
+                "data": {
+                    "name": name,
+                    "parent": {"id": parent_id, "type": "Folder"},
+                }
+            }
+        else:
+            # Root-level folder in the matter
+            payload = {
+                "data": {
+                    "name": name,
+                    "parent": {"id": matter_id, "type": "Matter"},
+                }
+            }
 
         try:
             response = await self._request("POST", "folders", json=payload)
@@ -744,15 +755,23 @@ class ClioClient:
         logger = logging.getLogger(__name__)
 
         # Step 1: Create document record and request put_url in response
-        # Clio v4 returns upload URL in the document creation response
-        payload = {
-            "data": {
-                "name": filename,
-                "matter": {"id": matter_id},
-            }
-        }
+        # Clio v4 uses "parent" with "type" field to specify the container
         if folder_id:
-            payload["data"]["parent"] = {"id": folder_id}
+            # Document in a folder
+            payload = {
+                "data": {
+                    "name": filename,
+                    "parent": {"id": folder_id, "type": "Folder"},
+                }
+            }
+        else:
+            # Document in matter root
+            payload = {
+                "data": {
+                    "name": filename,
+                    "parent": {"id": matter_id, "type": "Matter"},
+                }
+            }
 
         try:
             # Request the latest_document_version fields including put_url
