@@ -458,7 +458,8 @@ class ClioClient:
         folder_id: int,
         exclude_folder_ids: Optional[List[int]] = None,
         fields: Optional[List[str]] = None,
-        _depth: int = 0
+        _depth: int = 0,
+        _folder_children_map: Optional[Dict[int, List[Dict[str, Any]]]] = None
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Recursively get all documents in a folder and its subfolders.
@@ -469,6 +470,7 @@ class ClioClient:
             exclude_folder_ids: List of folder IDs to exclude (e.g., Legal Authority folder)
             fields: Document fields to return
             _depth: Internal recursion depth tracking
+            _folder_children_map: Internal cache of folder parent-child relationships
         """
         import logging
         logger = logging.getLogger(__name__)
@@ -482,6 +484,25 @@ class ClioClient:
         if fields is None:
             fields = self.DEFAULT_DOCUMENT_FIELDS
 
+        # Build folder children map on first call (depth=0)
+        # This fetches ALL folders once and builds a parent->children lookup
+        if _folder_children_map is None:
+            logger.info(f"[CLIO] Building folder hierarchy map for matter {matter_id}...")
+            all_folders = []
+            async for folder in self.get_folders(matter_id):
+                all_folders.append(folder)
+
+            # Build parent_id -> list of children mapping
+            _folder_children_map = {}
+            for folder in all_folders:
+                parent = folder.get("parent")
+                parent_id = parent.get("id") if parent else None
+                if parent_id not in _folder_children_map:
+                    _folder_children_map[parent_id] = []
+                _folder_children_map[parent_id].append(folder)
+
+            logger.info(f"[CLIO] Built folder map with {len(all_folders)} folders, {len(_folder_children_map)} parent groups")
+
         # Get documents in the current folder
         doc_count = 0
         async for doc in self.get_documents_in_folder(folder_id, matter_id=matter_id, fields=fields):
@@ -490,22 +511,23 @@ class ClioClient:
 
         logger.info(f"[CLIO] {indent}  -> {doc_count} documents in this folder")
 
-        # Get subfolders and recurse
+        # Get subfolders from the pre-built map and recurse
+        subfolders = _folder_children_map.get(folder_id, [])
         subfolder_count = 0
-        async for subfolder in self.get_folders(matter_id, parent_id=folder_id):
+        for subfolder in subfolders:
             subfolder_id = subfolder.get("id")
             subfolder_name = subfolder.get("name", "unnamed")
             if subfolder_id and subfolder_id not in exclude_folder_ids:
                 subfolder_count += 1
                 logger.info(f"[CLIO] {indent}  -> Entering subfolder: {subfolder_name} (id={subfolder_id})")
                 async for doc in self.get_documents_recursive(
-                    matter_id, subfolder_id, exclude_folder_ids, fields, _depth + 1
+                    matter_id, subfolder_id, exclude_folder_ids, fields, _depth + 1, _folder_children_map
                 ):
                     yield doc
             elif subfolder_id in exclude_folder_ids:
                 logger.info(f"[CLIO] {indent}  -> SKIPPING excluded folder: {subfolder_name} (id={subfolder_id})")
 
-        logger.info(f"[CLIO] {indent}Finished folder {folder_id}: {subfolder_count} subfolders processed")
+        logger.info(f"[CLIO] {indent}Finished folder {folder_id}: {subfolder_count} subfolders found")
 
     async def get_all_matter_documents_via_folders(
         self,
