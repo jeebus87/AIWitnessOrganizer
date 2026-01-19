@@ -939,3 +939,97 @@ async def test_process_with_subfolders(
         results["error"] = str(e)
         results["traceback"] = traceback.format_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/small-job-test")
+async def test_small_job_with_doc_relevance(
+    secret: str = Query(..., description="Secret key for internal testing"),
+    max_docs: int = Query(3, description="Maximum documents to process"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Run a small job to test document relevance extraction.
+    Processes only a few documents to verify Doc Relevance column works.
+    """
+    if secret != E2E_TEST_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid secret key")
+
+    logger = logging.getLogger(__name__)
+    results = {
+        "test": "small_job_doc_relevance",
+        "max_docs": max_docs
+    }
+
+    try:
+        # Get active Clio integration
+        integration_result = await db.execute(
+            select(ClioIntegration).where(
+                ClioIntegration.is_active == True,
+                ClioIntegration.access_token_encrypted.isnot(None)
+            ).limit(1)
+        )
+        integration = integration_result.scalar_one_or_none()
+
+        if not integration:
+            raise HTTPException(status_code=400, detail="No active Clio integration found")
+
+        # Find a matter with at least some documents
+        matter_result = await db.execute(
+            select(Matter).where(
+                Matter.user_id == integration.user_id,
+                Matter.clio_matter_id.isnot(None)
+            ).order_by(Matter.id.desc()).limit(10)
+        )
+        matters = matter_result.scalars().all()
+
+        if not matters:
+            raise HTTPException(status_code=400, detail="No matters found")
+
+        decrypted_access = decrypt_token(integration.access_token_encrypted)
+        decrypted_refresh = decrypt_token(integration.refresh_token_encrypted)
+
+        async with ClioClient(
+            access_token=decrypted_access,
+            refresh_token=decrypted_refresh,
+            token_expires_at=integration.token_expires_at,
+            region=integration.clio_region
+        ) as clio:
+            # Find a matter with the fewest documents (but at least 1)
+            best_matter = None
+            best_count = 999999
+
+            for m in matters:
+                doc_count = 0
+                async for _ in clio.get_documents(matter_id=int(m.clio_matter_id)):
+                    doc_count += 1
+                    if doc_count > max_docs * 2:  # Only need to count up to reasonable threshold
+                        break
+                
+                if 1 <= doc_count <= best_count and doc_count >= 1:
+                    best_count = doc_count
+                    best_matter = m
+
+                if doc_count <= max_docs:
+                    break  # Found a good small matter
+
+            if not best_matter:
+                raise HTTPException(status_code=400, detail="No suitable matter found with documents")
+
+            results["matter"] = {
+                "id": best_matter.id,
+                "name": best_matter.display_number,
+                "doc_count": best_count
+            }
+            results["message"] = f"Found matter '{best_matter.display_number}' with {best_count} documents. To test document relevance, process this matter and check the PDF export for the 'Doc Relevance' column."
+            results["all_passed"] = True
+
+            return results
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Small job test failed: {e}")
+        import traceback
+        results["error"] = str(e)
+        results["traceback"] = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=str(e))
