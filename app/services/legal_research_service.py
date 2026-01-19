@@ -119,13 +119,20 @@ class LegalResearchService:
         }
 
         # Add jurisdiction filters
+        # Note: CourtListener court parameter doesn't support wildcards
+        # Multiple courts can be specified space-separated
         if jurisdiction:
-            if jurisdiction.get("state"):
-                # Filter by state courts
-                params["court"] = f"{jurisdiction['state']}*"
             if jurisdiction.get("court_type") == "federal":
-                # Include federal courts
-                params["court"] = "ca9 cacd caed cand casd"  # 9th Circuit + CA districts
+                # Federal courts in California region
+                params["court"] = "ca9 cacd caed cand casd"
+            elif jurisdiction.get("state"):
+                # State courts - use state abbreviation without wildcard
+                # Common California courts: cal (Supreme), calctapp (Court of Appeal)
+                state = jurisdiction["state"].lower()
+                if state == "cal":
+                    params["court"] = "cal calctapp"
+                else:
+                    params["court"] = state
 
         if date_after:
             params["filed_after"] = date_after
