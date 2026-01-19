@@ -733,8 +733,6 @@ async def export_witnesses_docx(
             "document_filename": w.document.filename if w.document else None,
             "matter_name": w.document.matter.description if w.document and w.document.matter else None,
             "confidence_score": w.confidence_score,
-            "document_relevance": w.document_relevance.value.upper() if w.document_relevance else None,
-            "document_relevance_reason": w.document_relevance_reason,
             "claim_links": claim_links_data
         })
 
