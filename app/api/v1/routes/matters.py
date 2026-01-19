@@ -601,6 +601,7 @@ async def list_matter_documents(
 async def get_document_count(
     matter_id: int,
     folder_id: Optional[str] = None,
+    include_subfolders: bool = Query(False, description="Include documents in subfolders"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -611,9 +612,10 @@ async def get_document_count(
     Args:
         matter_id: The matter ID
         folder_id: Optional Clio folder ID to filter by
+        include_subfolders: Whether to include documents in subfolders (default: False)
 
     Returns:
-        {count: int, folder_id: str|null, matter_id: int, source: "clio"}
+        {count: int, folder_id: str|null, matter_id: int, include_subfolders: bool, source: "clio"}
     """
     # Verify matter belongs to user
     result = await db.execute(
@@ -654,13 +656,22 @@ async def get_document_count(
             fields = ["id"]
 
             if folder_id:
-                # Count documents in specific folder (include matter_id for accuracy)
-                async for _ in clio.get_documents_in_folder(
-                    int(folder_id),
-                    matter_id=int(matter.clio_matter_id),
-                    fields=fields
-                ):
-                    count += 1
+                if include_subfolders:
+                    # Count documents recursively in folder and all subfolders
+                    async for _ in clio.get_documents_recursive(
+                        matter_id=int(matter.clio_matter_id),
+                        folder_id=int(folder_id),
+                        fields=fields
+                    ):
+                        count += 1
+                else:
+                    # Count documents in specific folder only (not subfolders)
+                    async for _ in clio.get_documents_in_folder(
+                        int(folder_id),
+                        matter_id=int(matter.clio_matter_id),
+                        fields=fields
+                    ):
+                        count += 1
             else:
                 # Count all documents for the matter
                 async for _ in clio.get_documents(matter_id=int(matter.clio_matter_id), fields=fields):
@@ -669,6 +680,7 @@ async def get_document_count(
             return {
                 "count": count,
                 "folder_id": folder_id,
+                "include_subfolders": include_subfolders,
                 "matter_id": matter_id,
                 "sync_status": matter.sync_status.value if matter.sync_status else "idle",
                 "last_synced_at": matter.last_synced_at.isoformat() if matter.last_synced_at else None,

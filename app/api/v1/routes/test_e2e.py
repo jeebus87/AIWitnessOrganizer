@@ -647,3 +647,120 @@ async def test_folder_document_count(
         results["error"] = str(e)
         results["traceback"] = traceback.format_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/subfolder-recursive-count")
+async def test_subfolder_recursive_count(
+    secret: str = Query(..., description="Secret key for internal testing"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Test the include_subfolders feature for document counting.
+    Compares folder-only count vs recursive count (with subfolders).
+    """
+    if secret != E2E_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid secret")
+
+    logger = logging.getLogger(__name__)
+    results = {
+        "test": "subfolder_recursive_count",
+        "folder_only_count": {"passed": False, "count": 0},
+        "recursive_count": {"passed": False, "count": 0},
+        "folder_with_subfolders": {"name": "", "id": 0}
+    }
+
+    try:
+        # Get active Clio integration
+        integration_result = await db.execute(
+            select(ClioIntegration).where(
+                ClioIntegration.is_active == True,
+                ClioIntegration.access_token_encrypted.isnot(None)
+            ).limit(1)
+        )
+        integration = integration_result.scalar_one_or_none()
+
+        if not integration:
+            raise HTTPException(status_code=400, detail="No active Clio integration found")
+
+        # Get a matter with documents
+        matter_result = await db.execute(
+            select(Matter).where(
+                Matter.user_id == integration.user_id,
+                Matter.clio_matter_id.isnot(None)
+            ).order_by(Matter.id.desc()).limit(10)
+        )
+        matters = matter_result.scalars().all()
+
+        if not matters:
+            raise HTTPException(status_code=400, detail="No matters with Clio IDs found")
+
+        decrypted_access = decrypt_token(integration.access_token_encrypted)
+        decrypted_refresh = decrypt_token(integration.refresh_token_encrypted)
+
+        async with ClioClient(
+            access_token=decrypted_access,
+            refresh_token=decrypted_refresh,
+            token_expires_at=integration.token_expires_at,
+            region=integration.clio_region
+        ) as clio:
+            # Find a folder with subfolders that has documents
+            test_matter = None
+            test_folder = None
+
+            for m in matters:
+                folders = await clio.get_folder_tree(int(m.clio_matter_id))
+                for folder in folders:
+                    if folder.get("children"):  # Has subfolders
+                        test_folder = folder
+                        test_matter = m
+                        break
+                if test_folder:
+                    break
+
+            if not test_folder:
+                return {
+                    "test": "subfolder_recursive_count",
+                    "skipped": True,
+                    "reason": "No folder with subfolders found in any matter",
+                    "all_passed": True
+                }
+
+            results["folder_with_subfolders"]["name"] = test_folder.get("name", "unnamed")
+            results["folder_with_subfolders"]["id"] = test_folder["id"]
+            results["matter"] = {"id": test_matter.id, "name": test_matter.display_number}
+
+            # Count documents in folder only (no subfolders)
+            folder_only_count = 0
+            async for _ in clio.get_documents_in_folder(
+                test_folder["id"],
+                matter_id=int(test_matter.clio_matter_id)
+            ):
+                folder_only_count += 1
+            results["folder_only_count"]["count"] = folder_only_count
+            results["folder_only_count"]["passed"] = True
+
+            # Count documents recursively (with subfolders)
+            recursive_count = 0
+            async for _ in clio.get_documents_recursive(
+                matter_id=int(test_matter.clio_matter_id),
+                folder_id=test_folder["id"]
+            ):
+                recursive_count += 1
+            results["recursive_count"]["count"] = recursive_count
+            results["recursive_count"]["passed"] = True
+
+            # Recursive count should be >= folder-only count
+            results["recursive_includes_subfolder_docs"] = recursive_count >= folder_only_count
+            results["all_passed"] = results["folder_only_count"]["passed"] and results["recursive_count"]["passed"]
+            results["summary"] = f"Folder-only: {folder_only_count}, Recursive: {recursive_count}"
+
+            return results
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Subfolder recursive count test failed: {e}")
+        import traceback
+        results["error"] = str(e)
+        results["traceback"] = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=str(e))
