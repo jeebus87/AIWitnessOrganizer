@@ -658,7 +658,7 @@ async def test_subfolder_recursive_count(
     Test the include_subfolders feature for document counting.
     Compares folder-only count vs recursive count (with subfolders).
     """
-    if secret != E2E_SECRET:
+    if secret != E2E_TEST_SECRET:
         raise HTTPException(status_code=403, detail="Invalid secret")
 
     logger = logging.getLogger(__name__)
