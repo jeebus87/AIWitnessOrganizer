@@ -725,12 +725,11 @@ class ClioClient:
         folder_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Upload a document to Clio.
+        Upload a document to Clio using API v4.
 
-        Clio uses a multi-step upload process:
-        1. Create document record with metadata
-        2. Upload file to pre-signed URL
-        3. Mark upload as complete
+        Clio v4 uses a two-step upload process:
+        1. Create document with fields requesting latest_document_version{put_url,put_headers}
+        2. Upload file to the pre-signed S3 URL with provided headers
 
         Args:
             matter_id: Clio matter ID
@@ -744,7 +743,8 @@ class ClioClient:
         import logging
         logger = logging.getLogger(__name__)
 
-        # Step 1: Create document record
+        # Step 1: Create document record and request put_url in response
+        # Clio v4 returns upload URL in the document creation response
         payload = {
             "data": {
                 "name": filename,
@@ -755,7 +755,12 @@ class ClioClient:
             payload["data"]["parent"] = {"id": folder_id}
 
         try:
-            response = await self._request("POST", "documents", json=payload)
+            # Request the latest_document_version fields including put_url
+            response = await self._request(
+                "POST",
+                "documents?fields=id,name,latest_document_version{uuid,put_url,put_headers}",
+                json=payload
+            )
             doc_data = response.json().get("data", {})
             doc_id = doc_data.get("id")
 
@@ -764,40 +769,35 @@ class ClioClient:
 
             logger.info(f"Created Clio document record '{filename}' (id: {doc_id})")
 
-            # Step 2: Get upload URL - need to create a document version
-            version_payload = {
-                "data": {
-                    "document": {"id": doc_id},
-                }
-            }
-            version_response = await self._request("POST", "document_versions", json=version_payload)
-            version_data = version_response.json().get("data", {})
+            # Step 2: Get upload URL from latest_document_version
+            version_data = doc_data.get("latest_document_version", {})
             upload_url = version_data.get("put_url")
+            put_headers = version_data.get("put_headers", [])
 
             if upload_url:
-                # Step 3: Upload file content to pre-signed URL
-                # Use raw httpx client for this (not authenticated API call)
+                # Build headers from put_headers array
+                # put_headers is an array like [{"name": "Content-Type", "value": "application/pdf"}, ...]
+                upload_headers = {}
+                for header in put_headers:
+                    if isinstance(header, dict) and "name" in header and "value" in header:
+                        upload_headers[header["name"]] = header["value"]
+
+                # Default to PDF content type if not specified
+                if "Content-Type" not in upload_headers:
+                    upload_headers["Content-Type"] = "application/pdf"
+
+                # Upload file content to pre-signed S3 URL
+                # Use raw httpx client (not authenticated Clio API call)
                 upload_response = await self.client.put(
                     upload_url,
                     content=file_content,
-                    headers={"Content-Type": "application/pdf"}
+                    headers=upload_headers
                 )
                 upload_response.raise_for_status()
-                logger.info(f"Uploaded file content for document {doc_id}")
+                logger.info(f"Uploaded file content for document {doc_id} to S3")
 
-                # Step 4: Mark as fully uploaded (complete the version)
-                if version_data.get("id"):
-                    complete_payload = {
-                        "data": {
-                            "fully_uploaded": True
-                        }
-                    }
-                    await self._request(
-                        "PATCH",
-                        f"document_versions/{version_data['id']}",
-                        json=complete_payload
-                    )
-                    logger.info(f"Marked document version {version_data['id']} as fully uploaded")
+                # Note: In Clio v4, upload completion is automatic after successful S3 upload
+                # No need to mark as fully_uploaded like in v2
             else:
                 logger.warning(f"No upload URL returned for document {doc_id}")
 

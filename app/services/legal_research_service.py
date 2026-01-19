@@ -174,16 +174,29 @@ class LegalResearchService:
             if absolute_url and not absolute_url.startswith("http"):
                 absolute_url = f"https://www.courtlistener.com{absolute_url}"
 
+            # Get relevance score safely
+            try:
+                score = float(r.get("score", 0) or 0)
+            except (TypeError, ValueError):
+                score = 0.0
+
+            # Get PDF URL - can be in local_path or nested in opinions
+            pdf_url = r.get("local_path")
+            if not pdf_url:
+                opinions = r.get("opinions", [])
+                if opinions and isinstance(opinions, list):
+                    pdf_url = opinions[0].get("local_path") if opinions[0] else None
+
             formatted.append(CaseLawResult(
-                id=r.get("id", 0),
+                id=r.get("id") or r.get("cluster_id", 0),
                 case_name=r.get("caseName", r.get("case_name", "Unknown Case")),
                 citation=citation,
                 court=r.get("court", r.get("court_id", "Unknown Court")),
                 date_filed=r.get("dateFiled", r.get("date_filed")),
                 snippet=snippet[:500],
                 absolute_url=absolute_url,
-                pdf_url=r.get("local_path"),
-                relevance_score=float(r.get("score", 0))
+                pdf_url=pdf_url,
+                relevance_score=score
             ))
 
         return formatted
