@@ -1101,6 +1101,9 @@ async def test_export_formats(
         # Convert to dict format
         witness_data = []
         for w in witnesses:
+            # Get document_relevance safely (may not exist on older witnesses)
+            doc_rel = getattr(w, 'document_relevance', None)
+            doc_rel_reason = getattr(w, 'document_relevance_reason', None)
             witness_data.append({
                 "full_name": w.full_name,
                 "role": w.role.value,
@@ -1116,8 +1119,8 @@ async def test_export_formats(
                 "document_filename": w.document.filename if w.document else None,
                 "matter_name": w.document.matter.description if w.document and w.document.matter else None,
                 "confidence_score": w.confidence_score,
-                "document_relevance": w.document_relevance.value.upper() if w.document_relevance else None,
-                "document_relevance_reason": w.document_relevance_reason,
+                "document_relevance": doc_rel.value.upper() if doc_rel else None,
+                "document_relevance_reason": doc_rel_reason,
             })
 
         matter_name = "Test Matter"
