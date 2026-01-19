@@ -173,8 +173,15 @@ class LegalResearchService:
 
             # Get snippet/summary
             snippet = r.get("snippet", "") or r.get("text", "")[:300]
-            # Clean HTML tags from snippet
+            # Clean HTML tags from snippet, but preserve <mark> tags for highlighting
+            # First, temporarily replace mark tags
+            snippet = snippet.replace("<mark>", "{{MARK_START}}")
+            snippet = snippet.replace("</mark>", "{{MARK_END}}")
+            # Remove all other HTML tags
             snippet = re.sub(r'<[^>]+>', '', snippet)
+            # Restore mark tags
+            snippet = snippet.replace("{{MARK_START}}", "<mark>")
+            snippet = snippet.replace("{{MARK_END}}", "</mark>")
 
             # Build absolute URL
             absolute_url = r.get("absolute_url", "")

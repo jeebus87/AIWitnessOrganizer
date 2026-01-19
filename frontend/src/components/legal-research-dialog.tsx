@@ -227,9 +227,18 @@ function CaseLawCard({ result, isSelected, onToggle }: CaseLawCardProps) {
             {(result.citation || result.court) && result.date_filed && " | "}
             {result.date_filed}
           </p>
-          <p className="text-sm mt-2 text-muted-foreground line-clamp-3">
-            {result.snippet}
-          </p>
+          {result.snippet && (
+            <div className="mt-2 p-2 bg-muted/50 rounded text-xs">
+              <span className="font-medium text-foreground">Why it&apos;s relevant: </span>
+              <span
+                className="text-muted-foreground"
+                dangerouslySetInnerHTML={{
+                  __html: result.snippet
+                    .replace(/<mark>/g, '<mark class="bg-yellow-200 dark:bg-yellow-800 px-0.5 rounded">')
+                }}
+              />
+            </div>
+          )}
           <a
             href={result.absolute_url}
             target="_blank"
