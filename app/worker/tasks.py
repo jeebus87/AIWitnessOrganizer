@@ -16,7 +16,7 @@ from app.core.security import decrypt_token
 from app.db.models import (
     User, ClioIntegration, Matter, Document, Witness,
     ProcessingJob, JobStatus, WitnessRole, ImportanceLevel, RelevanceLevel,
-    SyncStatus
+    SyncStatus, CaseClaim, ClaimType, WitnessClaimLink
 )
 from app.services.clio_client import ClioClient
 from app.services.document_processor import DocumentProcessor
@@ -35,6 +35,28 @@ def run_async(coro):
         return loop.run_until_complete(coro)
     finally:
         loop.close()
+
+
+def _parse_claim_ref(claim_ref: str) -> tuple:
+    """
+    Parse a claim reference like "A1" or "D2" into claim_type and claim_number.
+    Returns (claim_type: ClaimType, claim_number: int) or (None, None) if invalid.
+    """
+    if not claim_ref or len(claim_ref) < 2:
+        return None, None
+
+    prefix = claim_ref[0].upper()
+    try:
+        number = int(claim_ref[1:])
+    except ValueError:
+        return None, None
+
+    if prefix == "A":
+        return ClaimType.ALLEGATION, number
+    elif prefix == "D":
+        return ClaimType.DEFENSE, number
+    else:
+        return None, None
 
 
 # === WORK PRODUCT & ATTORNEY EXCLUSION FILTERS ===
@@ -609,6 +631,35 @@ async def _process_single_document_async(
                     # Update witness with job_id
                     if result.witness_record:
                         result.witness_record.job_id = job_id
+
+                        # Save claim links if present
+                        claim_links = getattr(w_data, 'claim_links', [])
+                        if claim_links:
+                            for link in claim_links:
+                                claim_type, claim_number = _parse_claim_ref(link.claim_ref)
+                                if claim_type and claim_number:
+                                    # Find the matching claim
+                                    claim_result = await session.execute(
+                                        select(CaseClaim).where(
+                                            CaseClaim.matter_id == document.matter_id,
+                                            CaseClaim.claim_type == claim_type,
+                                            CaseClaim.claim_number == claim_number
+                                        )
+                                    )
+                                    claim = claim_result.scalar_one_or_none()
+
+                                    if claim:
+                                        # Create the witness-claim link
+                                        witness_link = WitnessClaimLink(
+                                            witness_id=result.witness_record.id,
+                                            case_claim_id=claim.id,
+                                            supports_or_undermines=link.relationship,
+                                            relevance_explanation=link.explanation[:500] if link.explanation else None
+                                        )
+                                        session.add(witness_link)
+                                        logger.debug(
+                                            f"Linked witness {result.witness_record.id} to claim {link.claim_ref}"
+                                        )
 
                     witnesses_created += 1
                     if result.is_new_canonical:
