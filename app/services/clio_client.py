@@ -667,6 +667,146 @@ class ClioClient:
             logger.error(f"Failed to renew Clio webhook {webhook_id}: {e}")
             raise
 
+    async def create_folder(
+        self,
+        matter_id: int,
+        name: str,
+        parent_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Create a folder in Clio for a matter.
+
+        Args:
+            matter_id: Clio matter ID
+            name: Folder name
+            parent_id: Optional parent folder ID
+
+        Returns:
+            Created folder data from Clio API
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        payload = {
+            "data": {
+                "name": name,
+                "matter": {"id": matter_id},
+            }
+        }
+        if parent_id:
+            payload["data"]["parent"] = {"id": parent_id}
+
+        try:
+            response = await self._request("POST", "folders", json=payload)
+            folder_data = response.json().get("data", {})
+            logger.info(f"Created Clio folder '{name}' (id: {folder_data.get('id')}) in matter {matter_id}")
+            return folder_data
+        except httpx.HTTPStatusError as e:
+            # If folder already exists (409 conflict), try to find and return existing folder
+            if e.response.status_code == 409:
+                logger.info(f"Folder '{name}' may already exist, searching...")
+                folders = await self.get_folders(matter_id)
+                for folder in folders:
+                    if folder.get("name") == name:
+                        if parent_id is None or folder.get("parent", {}).get("id") == parent_id:
+                            logger.info(f"Found existing folder '{name}' (id: {folder.get('id')})")
+                            return folder
+            logger.error(f"Failed to create Clio folder '{name}': {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to create Clio folder '{name}': {e}")
+            raise
+
+    async def upload_document(
+        self,
+        matter_id: int,
+        file_content: bytes,
+        filename: str,
+        folder_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Upload a document to Clio.
+
+        Clio uses a multi-step upload process:
+        1. Create document record with metadata
+        2. Upload file to pre-signed URL
+        3. Mark upload as complete
+
+        Args:
+            matter_id: Clio matter ID
+            file_content: File content as bytes
+            filename: Filename for the document
+            folder_id: Optional folder ID to place document in
+
+        Returns:
+            Created document data from Clio API
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Step 1: Create document record
+        payload = {
+            "data": {
+                "name": filename,
+                "matter": {"id": matter_id},
+            }
+        }
+        if folder_id:
+            payload["data"]["parent"] = {"id": folder_id}
+
+        try:
+            response = await self._request("POST", "documents", json=payload)
+            doc_data = response.json().get("data", {})
+            doc_id = doc_data.get("id")
+
+            if not doc_id:
+                raise ValueError("No document ID returned from Clio")
+
+            logger.info(f"Created Clio document record '{filename}' (id: {doc_id})")
+
+            # Step 2: Get upload URL - need to create a document version
+            version_payload = {
+                "data": {
+                    "document": {"id": doc_id},
+                }
+            }
+            version_response = await self._request("POST", "document_versions", json=version_payload)
+            version_data = version_response.json().get("data", {})
+            upload_url = version_data.get("put_url")
+
+            if upload_url:
+                # Step 3: Upload file content to pre-signed URL
+                # Use raw httpx client for this (not authenticated API call)
+                upload_response = await self.client.put(
+                    upload_url,
+                    content=file_content,
+                    headers={"Content-Type": "application/pdf"}
+                )
+                upload_response.raise_for_status()
+                logger.info(f"Uploaded file content for document {doc_id}")
+
+                # Step 4: Mark as fully uploaded (complete the version)
+                if version_data.get("id"):
+                    complete_payload = {
+                        "data": {
+                            "fully_uploaded": True
+                        }
+                    }
+                    await self._request(
+                        "PATCH",
+                        f"document_versions/{version_data['id']}",
+                        json=complete_payload
+                    )
+                    logger.info(f"Marked document version {version_data['id']} as fully uploaded")
+            else:
+                logger.warning(f"No upload URL returned for document {doc_id}")
+
+            return doc_data
+
+        except Exception as e:
+            logger.error(f"Failed to upload document '{filename}': {e}")
+            raise
+
 
 def get_clio_authorize_url(state: str, redirect_uri: Optional[str] = None) -> str:
     """Generate the Clio OAuth authorization URL"""

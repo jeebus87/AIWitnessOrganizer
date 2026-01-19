@@ -549,3 +549,52 @@ class WitnessClaimLink(Base):
     __table_args__ = (
         Index("ix_witness_claim_links_unique", "witness_id", "case_claim_id", unique=True),
     )
+
+
+class LegalResearchStatus(str, PyEnum):
+    """Status of legal research results"""
+    PENDING = "pending"  # Search in progress
+    READY = "ready"  # Results ready for review
+    APPROVED = "approved"  # User approved, saving to Clio
+    COMPLETED = "completed"  # Saved to Clio
+    DISMISSED = "dismissed"  # User dismissed results
+
+
+class LegalResearchResult(Base):
+    """
+    Stores legal research results from CourtListener searches.
+    Created after job completion when no legal authority folder was selected.
+    """
+    __tablename__ = "legal_research_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(Integer, ForeignKey("processing_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    matter_id = Column(Integer, ForeignKey("matters.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Status tracking
+    status = Column(
+        Enum(LegalResearchStatus, values_callable=lambda obj: [e.value for e in obj]),
+        default=LegalResearchStatus.PENDING,
+        nullable=False
+    )
+
+    # Search results stored as JSON array
+    # Each result: {id, case_name, citation, court, date_filed, snippet, absolute_url, pdf_url}
+    results = Column(JSON, nullable=True)
+
+    # User-selected case IDs for saving to Clio
+    selected_ids = Column(JSON, nullable=True)
+
+    # Clio folder where PDFs were saved
+    clio_folder_id = Column(String(128), nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    reviewed_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    job = relationship("ProcessingJob")
+    matter = relationship("Matter")
+    user = relationship("User")

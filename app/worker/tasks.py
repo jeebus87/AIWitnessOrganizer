@@ -16,13 +16,14 @@ from app.core.security import decrypt_token
 from app.db.models import (
     User, ClioIntegration, Matter, Document, Witness,
     ProcessingJob, JobStatus, WitnessRole, ImportanceLevel, RelevanceLevel,
-    SyncStatus, CaseClaim, ClaimType, WitnessClaimLink
+    SyncStatus, CaseClaim, ClaimType, WitnessClaimLink, LegalResearchResult, LegalResearchStatus
 )
 from app.services.clio_client import ClioClient
 from app.services.document_processor import DocumentProcessor
 from app.services.bedrock_client import BedrockClient
 from app.services.legal_authority_service import LegalAuthorityService
 from app.services.canonicalization_service import CanonicalizationService, WitnessInput
+from app.services.legal_research_service import get_legal_research_service
 
 logger = get_task_logger(__name__)
 
@@ -1240,6 +1241,19 @@ async def _finalize_job_async(
 
         logger.info(f"Job {job_id} finalized. Processed: {job.processed_documents}, Witnesses: {total_witnesses}, Failed: {failed_count}")
 
+        # Queue legal research if witnesses were found
+        # This searches CourtListener for relevant case law based on extracted content
+        if total_witnesses > 0 and job.target_matter_id and job.user_id:
+            try:
+                search_legal_authorities.delay(
+                    job_id=job_id,
+                    matter_id=job.target_matter_id,
+                    user_id=job.user_id
+                )
+                logger.info(f"Queued legal research for job {job_id}")
+            except Exception as e:
+                logger.warning(f"Failed to queue legal research for job {job_id}: {e}")
+
         return {
             "success": True,
             "job_id": job_id,
@@ -1356,3 +1370,259 @@ async def _recover_stuck_jobs_async():
                 # Don't mark as failed - let it be retried on next worker restart
 
         return {"recovered": recovered_count, "total_stuck": len(stuck_jobs)}
+
+
+# === LEGAL RESEARCH TASKS ===
+
+@celery_app.task(bind=True)
+def search_legal_authorities(self, job_id: int, matter_id: int, user_id: int):
+    """
+    Search for relevant case law after document processing completes.
+
+    This task searches CourtListener for relevant legal authorities based on
+    the witness observations and case claims extracted from documents.
+
+    Args:
+        job_id: ProcessingJob ID that triggered this search
+        matter_id: Database ID of the matter
+        user_id: User ID who owns the matter
+    """
+    return run_async(_search_legal_authorities_async(job_id, matter_id, user_id))
+
+
+async def _search_legal_authorities_async(job_id: int, matter_id: int, user_id: int):
+    """Async implementation of legal authority search."""
+    async with get_worker_session() as session:
+        try:
+            # Get matter details for jurisdiction detection
+            result = await session.execute(
+                select(Matter).where(Matter.id == matter_id)
+            )
+            matter = result.scalar_one_or_none()
+
+            if not matter:
+                logger.error(f"Legal research: Matter {matter_id} not found")
+                return {"success": False, "error": "Matter not found"}
+
+            # Detect jurisdiction from case number
+            legal_research_service = get_legal_research_service()
+            jurisdiction = legal_research_service.detect_jurisdiction(matter.display_number or "")
+
+            logger.info(f"Legal research for job {job_id}: detected jurisdiction {jurisdiction}")
+
+            # Get relevant witnesses for context
+            witness_result = await session.execute(
+                select(Witness).where(
+                    Witness.matter_id == matter_id,
+                    Witness.relevance.in_([RelevanceLevel.HIGHLY_RELEVANT, RelevanceLevel.RELEVANT])
+                ).limit(10)
+            )
+            witnesses = witness_result.scalars().all()
+
+            # Get case claims for context
+            claims_result = await session.execute(
+                select(CaseClaim).where(CaseClaim.matter_id == matter_id).limit(10)
+            )
+            claims = claims_result.scalars().all()
+
+            # Build search queries from case context
+            claim_dicts = [{"claim_text": c.claim_text} for c in claims]
+            witness_observations = [w.observation for w in witnesses if w.observation]
+
+            queries = legal_research_service.build_search_queries(
+                claims=claim_dicts,
+                witness_observations=witness_observations,
+                max_queries=5
+            )
+
+            if not queries:
+                logger.info(f"Legal research: No queries generated for job {job_id}")
+                return {"success": True, "message": "No search queries generated", "count": 0}
+
+            logger.info(f"Legal research: Searching with {len(queries)} queries")
+
+            # Search CourtListener for each query
+            all_results = []
+            for query in queries:
+                try:
+                    results = await legal_research_service.search_case_law(
+                        query=query,
+                        jurisdiction=jurisdiction,
+                        max_results=5
+                    )
+                    all_results.extend(results)
+                except Exception as e:
+                    logger.warning(f"Legal research query failed: {query[:50]}... Error: {e}")
+                    continue
+
+            # Deduplicate by case ID
+            seen_ids = set()
+            unique_results = []
+            for r in all_results:
+                if r.id not in seen_ids:
+                    seen_ids.add(r.id)
+                    unique_results.append(r)
+
+            # Convert to dict format for JSON storage
+            results_json = [
+                {
+                    "id": r.id,
+                    "case_name": r.case_name,
+                    "citation": r.citation,
+                    "court": r.court,
+                    "date_filed": r.date_filed,
+                    "snippet": r.snippet,
+                    "absolute_url": r.absolute_url,
+                    "pdf_url": r.pdf_url,
+                    "relevance_score": r.relevance_score
+                }
+                for r in unique_results[:15]  # Top 15 results
+            ]
+
+            # Create legal research record
+            research_result = LegalResearchResult(
+                job_id=job_id,
+                matter_id=matter_id,
+                user_id=user_id,
+                status=LegalResearchStatus.READY if results_json else LegalResearchStatus.COMPLETED,
+                results=results_json,
+            )
+            session.add(research_result)
+            await session.commit()
+
+            logger.info(f"Legal research complete for job {job_id}: {len(results_json)} cases found")
+
+            return {
+                "success": True,
+                "research_id": research_result.id,
+                "count": len(results_json)
+            }
+
+        except Exception as e:
+            logger.exception(f"Legal research failed for job {job_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+
+@celery_app.task(bind=True)
+def save_legal_research_to_clio(self, research_id: int):
+    """
+    Download selected cases and upload to Clio as PDFs.
+
+    Args:
+        research_id: LegalResearchResult ID with selected cases
+    """
+    return run_async(_save_legal_research_to_clio_async(research_id))
+
+
+async def _save_legal_research_to_clio_async(research_id: int):
+    """Async implementation of saving legal research to Clio."""
+    async with get_worker_session() as session:
+        try:
+            # Get the research record
+            result = await session.execute(
+                select(LegalResearchResult).where(LegalResearchResult.id == research_id)
+            )
+            research = result.scalar_one_or_none()
+
+            if not research:
+                logger.error(f"Legal research {research_id} not found")
+                return {"success": False, "error": "Research not found"}
+
+            if not research.selected_ids:
+                logger.warning(f"No cases selected for research {research_id}")
+                research.status = LegalResearchStatus.COMPLETED
+                await session.commit()
+                return {"success": True, "message": "No cases selected"}
+
+            # Get user's Clio integration
+            result = await session.execute(
+                select(ClioIntegration).where(ClioIntegration.user_id == research.user_id)
+            )
+            clio_integration = result.scalar_one_or_none()
+
+            if not clio_integration:
+                logger.error(f"No Clio integration for user {research.user_id}")
+                return {"success": False, "error": "Clio integration not found"}
+
+            # Get matter for Clio matter ID
+            result = await session.execute(
+                select(Matter).where(Matter.id == research.matter_id)
+            )
+            matter = result.scalar_one_or_none()
+
+            if not matter:
+                logger.error(f"Matter {research.matter_id} not found")
+                return {"success": False, "error": "Matter not found"}
+
+            # Initialize Clio client
+            async with ClioClient(
+                access_token=decrypt_token(clio_integration.access_token_encrypted),
+                refresh_token=decrypt_token(clio_integration.refresh_token_encrypted),
+                token_expires_at=clio_integration.token_expires_at,
+                region=clio_integration.clio_region
+            ) as clio:
+                # Create "Legal Research" folder in matter
+                folder_name = "Legal Research"
+                folder = await clio.create_folder(
+                    matter_id=matter.clio_matter_id,
+                    name=folder_name
+                )
+
+                if folder and folder.get("id"):
+                    research.clio_folder_id = str(folder["id"])
+                    logger.info(f"Created Legal Research folder {folder['id']} in Clio")
+
+                # Download and upload each selected case
+                legal_research_service = get_legal_research_service()
+                uploaded_count = 0
+
+                for case_id in research.selected_ids:
+                    # Find case info in results
+                    case_info = next(
+                        (r for r in research.results if r.get("id") == case_id),
+                        None
+                    )
+                    if not case_info:
+                        continue
+
+                    try:
+                        # Try to download PDF
+                        pdf_content = await legal_research_service.download_opinion_pdf(case_id)
+
+                        if pdf_content:
+                            # Generate filename
+                            citation = case_info.get("citation") or case_info.get("case_name", "Unknown")
+                            # Sanitize filename
+                            filename = "".join(c for c in citation if c.isalnum() or c in " -_.,").strip()
+                            filename = f"{filename[:100]}.pdf"
+
+                            # Upload to Clio
+                            await clio.upload_document(
+                                matter_id=matter.clio_matter_id,
+                                file_content=pdf_content,
+                                filename=filename,
+                                folder_id=folder.get("id") if folder else None
+                            )
+                            uploaded_count += 1
+                            logger.info(f"Uploaded {filename} to Clio")
+                        else:
+                            logger.warning(f"No PDF available for case {case_id}")
+
+                    except Exception as e:
+                        logger.warning(f"Failed to upload case {case_id}: {e}")
+                        continue
+
+                research.status = LegalResearchStatus.COMPLETED
+                await session.commit()
+
+                logger.info(f"Legal research {research_id} complete: uploaded {uploaded_count} cases")
+
+                return {
+                    "success": True,
+                    "uploaded": uploaded_count,
+                    "folder_id": research.clio_folder_id
+                }
+
+        except Exception as e:
+            logger.exception(f"Failed to save legal research {research_id} to Clio: {e}")
+            return {"success": False, "error": str(e)}

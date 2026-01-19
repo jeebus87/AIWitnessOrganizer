@@ -312,6 +312,36 @@ class ApiClient {
       body: link,
     });
   }
+
+  // Legal Research
+  async getLegalResearchForJob(jobId: number, token: string) {
+    return this.request<LegalResearchResponse>(`/api/v1/legal-research/job/${jobId}`, { token });
+  }
+
+  async approveLegalResearch(researchId: number, token: string, selectedCaseIds: number[]) {
+    return this.request<{ status: string; message: string; research_id: number }>(
+      `/api/v1/legal-research/${researchId}/approve`,
+      {
+        method: "POST",
+        token,
+        body: { selected_case_ids: selectedCaseIds },
+      }
+    );
+  }
+
+  async dismissLegalResearch(researchId: number, token: string) {
+    return this.request<{ status: string; message: string; research_id: number }>(
+      `/api/v1/legal-research/${researchId}/dismiss`,
+      {
+        method: "POST",
+        token,
+      }
+    );
+  }
+
+  async getPendingLegalResearch(token: string) {
+    return this.request<PendingLegalResearchResponse>("/api/v1/legal-research/pending", { token });
+  }
 }
 
 // Types
@@ -631,6 +661,42 @@ export interface CreateWitnessLinkRequest {
   case_claim_id: number;
   relevance_explanation?: string;
   supports_or_undermines?: "supports" | "undermines" | "neutral";
+}
+
+// Legal Research types
+export interface CaseLawResult {
+  id: number;
+  case_name: string;
+  citation: string | null;
+  court: string;
+  date_filed: string | null;
+  snippet: string;
+  absolute_url: string;
+  pdf_url: string | null;
+  relevance_score: number;
+}
+
+export interface LegalResearchResponse {
+  has_results: boolean;
+  id?: number;
+  job_id?: number;
+  status?: string;
+  results?: CaseLawResult[];
+  selected_ids?: number[];
+  created_at?: string;
+}
+
+export interface PendingLegalResearchItem {
+  id: number;
+  job_id: number;
+  matter_id: number;
+  result_count: number;
+  created_at: string | null;
+}
+
+export interface PendingLegalResearchResponse {
+  pending_count: number;
+  items: PendingLegalResearchItem[];
 }
 
 export const api = new ApiClient(API_BASE_URL);

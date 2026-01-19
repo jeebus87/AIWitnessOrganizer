@@ -15,6 +15,7 @@ import {
   Trash2,
   Archive,
   ArchiveRestore,
+  Scale,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,8 +42,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuthStore } from "@/store/auth";
-import { api, ProcessingJob, JobStatus, JobListResponse, JobStats } from "@/lib/api";
+import { api, ProcessingJob, JobStatus, JobListResponse, JobStats, PendingLegalResearchItem } from "@/lib/api";
 import { toast } from "sonner";
+import { LegalResearchDialog } from "@/components/legal-research-dialog";
 
 const statusConfig: Record<JobStatus, { icon: typeof Clock; color: string; label: string }> = {
   pending: { icon: Clock, color: "text-yellow-500", label: "Pending" },
@@ -65,6 +67,8 @@ function getProgressPercent(job: ProcessingJob) {
 export default function JobsPage() {
   const { token } = useAuthStore();
   const [showArchived, setShowArchived] = useState(false);
+  const [legalResearchJobId, setLegalResearchJobId] = useState<number | null>(null);
+  const [pendingResearch, setPendingResearch] = useState<PendingLegalResearchItem[]>([]);
 
   const {
     data: jobsResponse,
@@ -84,6 +88,23 @@ export default function JobsPage() {
   );
 
   const jobs = jobsResponse?.jobs;
+
+  // Check for pending legal research when jobs load
+  useEffect(() => {
+    if (token && jobs) {
+      api.getPendingLegalResearch(token)
+        .then((response) => {
+          setPendingResearch(response.items || []);
+          // Auto-show dialog for the first pending research
+          if (response.items && response.items.length > 0 && !legalResearchJobId) {
+            setLegalResearchJobId(response.items[0].job_id);
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to fetch pending legal research:", err);
+        });
+    }
+  }, [token, jobs, legalResearchJobId]);
 
   // Debug logging for job data
   useEffect(() => {
@@ -419,6 +440,18 @@ export default function JobsPage() {
                       <TableCell className="text-right">
                         {job.status === "completed" && !job.is_archived ? (
                           <div className="flex items-center justify-end gap-2">
+                            {/* Legal Research Button - show if job has pending research */}
+                            {pendingResearch.some(r => r.job_id === job.id) && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setLegalResearchJobId(job.id)}
+                                className="text-primary border-primary/50"
+                              >
+                                <Scale className="mr-2 h-4 w-4" />
+                                Case Law
+                              </Button>
+                            )}
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <Button variant="ghost" size="sm">
@@ -512,6 +545,26 @@ export default function JobsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Legal Research Dialog */}
+      {legalResearchJobId && token && (
+        <LegalResearchDialog
+          open={legalResearchJobId !== null}
+          onOpenChange={(open) => {
+            if (!open) setLegalResearchJobId(null);
+          }}
+          jobId={legalResearchJobId}
+          token={token}
+          onComplete={() => {
+            // Refresh pending research list
+            api.getPendingLegalResearch(token)
+              .then((response) => {
+                setPendingResearch(response.items || []);
+              })
+              .catch(console.error);
+          }}
+        />
+      )}
     </div>
   );
 }
