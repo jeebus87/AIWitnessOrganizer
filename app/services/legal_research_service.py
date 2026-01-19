@@ -345,5 +345,9 @@ def get_legal_research_service() -> LegalResearchService:
     """Get or create the legal research service singleton."""
     global _legal_research_service
     if _legal_research_service is None:
-        _legal_research_service = LegalResearchService()
+        import os
+        api_token = os.environ.get("COURTLISTENER_API_TOKEN")
+        _legal_research_service = LegalResearchService(api_token=api_token)
+        if api_token:
+            logger.info("CourtListener API token configured - using authenticated requests")
     return _legal_research_service
