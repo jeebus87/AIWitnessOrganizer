@@ -17,22 +17,32 @@ depends_on = None
 
 
 def upgrade():
-    # Create the legal_research_status enum type
-    legal_research_status = postgresql.ENUM(
-        'pending', 'ready', 'approved', 'completed', 'dismissed',
-        name='legalresearchstatus'
-    )
-    legal_research_status.create(op.get_bind(), checkfirst=True)
+    # Create the legal_research_status enum type if it doesn't exist
+    bind = op.get_bind()
+    result = bind.execute(sa.text(
+        "SELECT 1 FROM pg_type WHERE typname = 'legalresearchstatus'"
+    ))
+    if not result.fetchone():
+        op.execute("CREATE TYPE legalresearchstatus AS ENUM ('pending', 'ready', 'approved', 'completed', 'dismissed')")
 
-    # Create legal_research_results table
+    # Check if table already exists
+    result = bind.execute(sa.text(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = 'legal_research_results'"
+    ))
+    if result.fetchone():
+        # Table already exists, skip creation
+        return
+
+    # Create legal_research_results table using the existing enum type
     op.create_table(
         'legal_research_results',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('job_id', sa.Integer(), nullable=False),
         sa.Column('matter_id', sa.Integer(), nullable=False),
         sa.Column('user_id', sa.Integer(), nullable=False),
-        sa.Column('status', sa.Enum('pending', 'ready', 'approved', 'completed', 'dismissed',
-                                     name='legalresearchstatus'), nullable=False, server_default='pending'),
+        sa.Column('status', postgresql.ENUM('pending', 'ready', 'approved', 'completed', 'dismissed',
+                                             name='legalresearchstatus', create_type=False),
+                  nullable=False, server_default='pending'),
         sa.Column('results', postgresql.JSON(astext_type=sa.Text()), nullable=True),
         sa.Column('selected_ids', postgresql.JSON(astext_type=sa.Text()), nullable=True),
         sa.Column('clio_folder_id', sa.String(128), nullable=True),
@@ -45,10 +55,10 @@ def upgrade():
         sa.PrimaryKeyConstraint('id')
     )
 
-    # Create indexes
-    op.create_index('ix_legal_research_results_job_id', 'legal_research_results', ['job_id'])
-    op.create_index('ix_legal_research_results_matter_id', 'legal_research_results', ['matter_id'])
-    op.create_index('ix_legal_research_results_user_id', 'legal_research_results', ['user_id'])
+    # Create indexes (only if table was just created)
+    op.create_index('ix_legal_research_results_job_id', 'legal_research_results', ['job_id'], if_not_exists=True)
+    op.create_index('ix_legal_research_results_matter_id', 'legal_research_results', ['matter_id'], if_not_exists=True)
+    op.create_index('ix_legal_research_results_user_id', 'legal_research_results', ['user_id'], if_not_exists=True)
 
 
 def downgrade():
