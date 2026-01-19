@@ -97,6 +97,13 @@ class ApiClient {
     });
   }
 
+  // Get current sync status for the user
+  async getSyncStatus(token: string) {
+    return this.request<{ is_syncing: boolean; syncing_count: number; recovered_stale_count: number }>("/api/v1/matters/sync-status", {
+      token,
+    });
+  }
+
   async processMatter(id: number, token: string, options?: ProcessMatterOptions): Promise<ProcessMatterResponse> {
     const response = await fetch(`${this.baseUrl}/api/v1/matters/${id}/process`, {
       method: "POST",

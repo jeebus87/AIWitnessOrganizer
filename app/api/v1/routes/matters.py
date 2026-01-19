@@ -41,6 +41,54 @@ async def sync_all_matters_endpoint(
     }
 
 
+@router.get("/sync-status")
+async def get_sync_status(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get the current sync status for the user.
+    Returns whether any matters are currently syncing.
+    Used by frontend to determine when to hide the sync overlay.
+    """
+    # Check if any matters are currently syncing
+    result = await db.execute(
+        select(func.count(Matter.id)).where(
+            Matter.user_id == current_user.id,
+            Matter.sync_status == SyncStatus.SYNCING
+        )
+    )
+    syncing_count = result.scalar() or 0
+
+    # Check for stale syncs (started more than 30 minutes ago)
+    stale_timeout = timedelta(minutes=30)
+    stale_check = await db.execute(
+        select(Matter).where(
+            Matter.user_id == current_user.id,
+            Matter.sync_status == SyncStatus.SYNCING,
+            Matter.sync_started_at.isnot(None),
+            Matter.sync_started_at < datetime.utcnow() - stale_timeout
+        )
+    )
+    stale_matters = stale_check.scalars().all()
+
+    # Auto-recover stale syncs
+    for matter in stale_matters:
+        matter.sync_status = SyncStatus.IDLE
+        matter.sync_started_at = None
+        syncing_count -= 1
+        logger.info(f"Auto-recovered stale sync for matter {matter.id}")
+
+    if stale_matters:
+        await db.commit()
+
+    return {
+        "is_syncing": syncing_count > 0,
+        "syncing_count": syncing_count,
+        "recovered_stale_count": len(stale_matters)
+    }
+
+
 @router.post("/{matter_id}/sync")
 async def sync_single_matter_endpoint(
     matter_id: int,

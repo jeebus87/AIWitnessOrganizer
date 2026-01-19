@@ -125,6 +125,21 @@ export default function SettingsPage() {
     try {
       const result = await api.syncMatters(token);
       toast.success(`Synced ${result.matters_synced} matters from Clio`);
+
+      // Check if any documents are still syncing in the background
+      const status = await api.getSyncStatus(token);
+      if (status.is_syncing) {
+        // Wait for background sync to complete (max 60 seconds)
+        const maxWait = 60000;
+        const pollInterval = 2000;
+        const startTime = Date.now();
+
+        while (Date.now() - startTime < maxWait) {
+          await new Promise(resolve => setTimeout(resolve, pollInterval));
+          const currentStatus = await api.getSyncStatus(token);
+          if (!currentStatus.is_syncing) break;
+        }
+      }
     } catch (error: unknown) {
       console.error("Sync error:", error);
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
