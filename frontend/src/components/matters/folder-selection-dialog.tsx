@@ -1,4 +1,5 @@
 "use client";
+// Version: 2026-01-19-include-subfolders-fix
 
 import { useState, useEffect } from "react";
 import { ChevronRight, ChevronDown, Folder as FolderIcon, FolderOpen, Loader2, CheckCircle2 } from "lucide-react";
