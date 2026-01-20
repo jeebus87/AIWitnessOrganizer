@@ -161,18 +161,18 @@ You should create THREE separate witness entries for John Smith, one for each co
 
 For each mention you identify, extract:
 1. **fullName**: The person's full name. Use "FNU" (First Name Unknown) if first name is unknown, "LNU" (Last Name Unknown) if last name is unknown. Example: "FNU Smith" or "John LNU"
-2. **role**: Their SPECIFIC role - be as accurate and specific as possible:
-   - plaintiff, defendant (parties to the case)
-   - eyewitness (directly witnessed events)
-   - expert (expert witness, medical expert, technical expert)
-   - attorney, paralegal (legal professionals)
-   - physician, nurse, medical_staff (healthcare providers)
-   - police_officer, detective, investigator (law enforcement)
-   - family_member (spouse, parent, child, sibling)
-   - employer, supervisor, coworker, colleague (work relationships)
-   - friend, neighbor, acquaintance (personal relationships)
-   - insurance_adjuster, claims_representative (insurance)
-   - government_official (government employees)
+2. **role**: Their SPECIFIC role - use ONLY these exact values:
+   - plaintiff (party bringing the case)
+   - defendant (party being sued)
+   - eyewitness (directly witnessed events relevant to the case)
+   - expert (expert witness, medical expert, technical expert, any specialist)
+   - attorney (legal professionals including paralegals)
+   - physician (healthcare providers including nurses, medical staff)
+   - police_officer (law enforcement including detectives, investigators)
+   - family_member (spouse, parent, child, sibling, or other relative)
+   - colleague (work relationships: employer, supervisor, coworker, employee)
+   - bystander (present but not directly involved; friends, neighbors, acquaintances)
+   - mentioned (referenced in documents but role unclear or administrative only)
    - other (only if none of the above fit)
 
 EXCLUSION RULES - DO NOT EXTRACT:
@@ -861,12 +861,9 @@ EXTRACTED DATA:
 
 Please verify and improve each witness entry:
 1. **Names**: If a name appears incomplete, use "FNU" (First Name Unknown) or "LNU" (Last Name Unknown) appropriately
-2. **Roles**: Verify the role is the most accurate and specific classification:
-   - plaintiff, defendant, eyewitness, expert, attorney, paralegal
-   - physician, nurse, medical_staff, police_officer, detective, investigator
-   - family_member, employer, supervisor, coworker, colleague
-   - friend, neighbor, acquaintance, insurance_adjuster, claims_representative
-   - government_official, other
+2. **Roles**: Verify the role uses ONLY these exact values:
+   - plaintiff, defendant, eyewitness, expert, attorney, physician
+   - police_officer, family_member, colleague, bystander, mentioned, other
 3. **Importance**: Verify HIGH/MEDIUM/LOW is accurate based on their involvement
 4. **Duplicates**: If the same person appears multiple times with slight variations, consolidate into one entry with the most complete information
 5. **Confidence**: Adjust confidence scores based on how certain the information is

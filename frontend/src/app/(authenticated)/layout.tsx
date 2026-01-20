@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar";
 import { HelpChatbot } from "@/components/help-chatbot";
 import { SyncOverlay } from "@/components/sync-overlay";
+import { DemoModal, useDemoModal } from "@/components/onboarding/demo-modal";
 import { useAuthStore } from "@/store/auth";
 
 export default function AuthenticatedLayout({
@@ -14,6 +15,7 @@ export default function AuthenticatedLayout({
 }) {
   const router = useRouter();
   const { token, isLoading, isHydrated } = useAuthStore();
+  const { showDemo, setShowDemo, openDemo, markComplete } = useDemoModal();
 
   useEffect(() => {
     if (isHydrated && !isLoading && !token) {
@@ -35,9 +37,16 @@ export default function AuthenticatedLayout({
 
   return (
     <>
+      {/* Demo Modal */}
+      <DemoModal
+        open={showDemo}
+        onOpenChange={setShowDemo}
+        onComplete={markComplete}
+      />
+
       <SyncOverlay />
       <div className="flex h-screen">
-        <AppSidebar />
+        <AppSidebar onViewDemo={openDemo} />
         <main className="flex-1 overflow-auto bg-muted/30">
           <div className="p-6">{children}</div>
         </main>

@@ -55,9 +55,27 @@ AI Witness Organizer Help Guide
 - Export completed jobs to PDF or Excel
 
 ## Exporting Reports
-- After processing completes, click "Export PDF" or "Export Excel"
+- After processing completes, click "Export PDF", "Export Excel", or "Export Word"
 - Reports include all witnesses with their details
 - Great for trial preparation and deposition planning
+
+## Canonical vs Raw Witnesses
+- **Canonical View**: Same person across multiple documents is merged into one entry
+- **Raw View**: Every individual witness extraction shown separately
+- Toggle between views on the Witnesses page
+
+## Relevancy Analysis
+- Go to a matter's Relevancy page to manage claims
+- Add allegations (plaintiff's claims) and defenses (defendant's claims)
+- AI can extract claims from pleading documents
+- See which witnesses support or undermine each claim
+- Link witnesses to specific allegations or defenses
+
+## Legal Research
+- Search CourtListener for relevant case law
+- Based on your case claims and witness observations
+- Select relevant cases to save to your Clio matter
+- AI helps identify precedents related to your case
 
 ## Subscription & Credits
 - Free plan: 10 reports per user per day
@@ -87,16 +105,28 @@ function getHelpResponse(question: string): string {
     return "**Witnesses** are automatically extracted from your documents.\n\nEach witness includes:\n- Name and role (plaintiff, defendant, eyewitness, expert, etc.)\n- Relevance level with legal reasoning\n- What they observed or testified\n- Contact information (if found)\n- Source document and page number\n\nView all witnesses on the Witnesses page, or see matter-specific witnesses on a matter's detail page.";
   }
 
-  if (q.includes("process") || q.includes("scan") || q.includes("extract")) {
-    return "**Processing Documents:**\n\n1. Go to a matter's detail page\n2. Click 'Process Matter'\n3. The AI scans all documents (PDFs, emails, images)\n4. Witnesses are extracted automatically\n\nProcessing runs in the background - check the Jobs page for status. You'll see:\n- Total documents being processed\n- Progress percentage\n- Witnesses found";
+  if (q.includes("process") || q.includes("scan") || q.includes("extract") || q.includes("folder")) {
+    return "**Processing Documents:**\n\n1. Go to a matter and click 'Process'\n2. Select which **folders** to scan (you can choose specific folders)\n3. Optionally designate a **Legal Authority** folder for case law context\n4. The AI scans all documents (PDFs, emails, images)\n5. Witnesses are extracted automatically\n\nProcessing runs in the background - check the Jobs page for status. You'll see:\n- Total documents being processed\n- Progress percentage\n- Witnesses found";
   }
 
   if (q.includes("relevance") || q.includes("important") || q.includes("level")) {
     return "**Relevance Levels** indicate how important a witness is to your case:\n\n- **Highly Relevant**: Directly supports or undermines core claims/defenses. Critical testimony expected.\n- **Relevant**: Has knowledge of facts material to the case. Likely to be deposed.\n- **Somewhat Relevant**: Peripheral knowledge. May provide context but not central.\n- **Not Relevant**: Administrative contact only. No substantive knowledge.\n\nEach witness also includes a **relevance reason** explaining WHY they're relevant to the specific claims or defenses.";
   }
 
-  if (q.includes("export") || q.includes("pdf") || q.includes("excel") || q.includes("report")) {
-    return "**Exporting Reports:**\n\n1. Go to the Jobs page\n2. Find a completed job\n3. Click 'Export PDF' or 'Export Excel'\n\nReports include all extracted witnesses with their:\n- Names and roles\n- Relevance levels and reasons\n- Observations and context\n- Contact information\n- Source documents\n\nGreat for trial preparation and deposition planning!";
+  if (q.includes("export") || q.includes("pdf") || q.includes("excel") || q.includes("word") || q.includes("report")) {
+    return "**Exporting Reports:**\n\n1. Go to the Jobs page\n2. Find a completed job\n3. Click 'Export PDF', 'Export Excel', or 'Export Word'\n\nReports include all extracted witnesses with their:\n- Names and roles\n- Relevance levels and reasons\n- Observations and context\n- Contact information\n- Source documents\n\nGreat for trial preparation and deposition planning!";
+  }
+
+  if (q.includes("relevancy") || q.includes("claim") || q.includes("allegation") || q.includes("defense")) {
+    return "**Relevancy Analysis:**\n\nManage case claims and see how witnesses relate to them.\n\n1. Go to a matter's **Relevancy** page\n2. Add **allegations** (plaintiff's claims) or **defenses** (defendant's claims)\n3. AI can extract claims automatically from pleading documents\n4. See which witnesses support or undermine each claim\n5. Link witnesses to specific allegations or defenses\n\nThis helps you understand which witnesses are most important for proving or disproving specific claims.";
+  }
+
+  if (q.includes("legal research") || q.includes("courtlistener") || q.includes("case law") || q.includes("precedent")) {
+    return "**Legal Research:**\n\nSearch for relevant case law using CourtListener integration.\n\n1. After processing a matter, go to the Jobs page\n2. Click the legal research option on a completed job\n3. AI generates search queries based on your claims and witnesses\n4. Review relevant cases from CourtListener\n5. Select cases to save to your Clio matter\n\nThis helps you find precedents and authorities related to your case.";
+  }
+
+  if (q.includes("canonical") || q.includes("raw") || q.includes("deduplicate") || q.includes("merge")) {
+    return "**Canonical vs Raw Witness Views:**\n\nThe Witnesses page offers two viewing modes:\n\n**Canonical View** (default):\n- Same person across multiple documents is merged into one entry\n- Shows consolidated information and all observations\n- Best for getting a complete picture of each witness\n\n**Raw View**:\n- Every individual witness extraction shown separately\n- See exactly what was extracted from each document\n- Useful for reviewing extraction accuracy\n\nToggle between views using the tabs at the top of the Witnesses page.";
   }
 
   if (q.includes("credit") || q.includes("limit") || q.includes("usage")) {
@@ -124,7 +154,7 @@ function getHelpResponse(question: string): string {
   }
 
   // Default response
-  return "I can help you with:\n\n- **Getting started** - How to begin using the app\n- **Matters** - Viewing and syncing your cases\n- **Processing** - Scanning documents for witnesses\n- **Witnesses** - Understanding extracted witness data\n- **Relevance levels** - How witnesses are categorized\n- **Exporting** - Creating PDF/Excel reports\n- **Credits** - Usage limits and top-ups\n- **Subscription** - Plans and billing\n- **Settings** - Account and firm settings\n\nAsk me about any of these topics!";
+  return "I can help you with:\n\n- **Getting started** - How to begin using the app\n- **Matters** - Viewing and syncing your cases\n- **Processing** - Scanning documents for witnesses\n- **Witnesses** - Understanding extracted witness data\n- **Canonical vs Raw** - Different witness viewing modes\n- **Relevance levels** - How witnesses are categorized\n- **Relevancy analysis** - Managing claims and witness links\n- **Legal research** - Finding case law via CourtListener\n- **Exporting** - Creating PDF/Excel/Word reports\n- **Credits** - Usage limits and top-ups\n- **Subscription** - Plans and billing\n- **Settings** - Account and firm settings\n\nAsk me about any of these topics!";
 }
 
 export function HelpChatbot() {

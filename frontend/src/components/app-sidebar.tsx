@@ -11,6 +11,7 @@ import {
   Loader2,
   Building2,
   CreditCard,
+  PlayCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -46,7 +47,11 @@ function getTierColor(tier: string | undefined): string {
   return "secondary";
 }
 
-export function AppSidebar() {
+interface AppSidebarProps {
+  onViewDemo?: () => void;
+}
+
+export function AppSidebar({ onViewDemo }: AppSidebarProps) {
   const pathname = usePathname();
   const { userProfile, logout, isLoading } = useAuthStore();
 
@@ -91,6 +96,22 @@ export function AppSidebar() {
             </Link>
           );
         })}
+
+        {/* Help Section */}
+        {onViewDemo && (
+          <div className="pt-4 mt-4 border-t border-white/20">
+            <div className="px-3 py-2 text-xs font-medium text-white/60 uppercase tracking-wider">
+              Help
+            </div>
+            <button
+              onClick={onViewDemo}
+              className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white/80 hover:bg-white/10 hover:text-white transition-colors w-full text-left"
+            >
+              <PlayCircle className="h-5 w-5" />
+              View Demo
+            </button>
+          </div>
+        )}
       </nav>
 
       {/* User/Firm Section */}
