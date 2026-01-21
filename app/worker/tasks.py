@@ -1563,6 +1563,24 @@ async def _recover_stuck_jobs_async():
 
         if not stuck_jobs:
             logger.info("No stuck jobs found to recover")
+
+            # DEBUG: Log failed documents for matter 12982 (Juan Munoz)
+            failed_docs_result = await session.execute(
+                text("""
+                    SELECT id, filename, LEFT(processing_error, 400) as error
+                    FROM documents
+                    WHERE matter_id = 12982
+                    AND is_processed = FALSE
+                    AND processing_error IS NOT NULL
+                """)
+            )
+            failed_docs = failed_docs_result.fetchall()
+            if failed_docs:
+                logger.info(f"=== FAILED DOCUMENTS FOR MATTER 12982 ===")
+                for doc in failed_docs:
+                    logger.info(f"Doc {doc[0]} ({doc[1]}): {doc[2]}")
+                logger.info(f"=== END FAILED DOCUMENTS ===")
+
             return {"recovered": 0}
 
         logger.info(f"Found {len(stuck_jobs)} stuck job(s) to recover")
