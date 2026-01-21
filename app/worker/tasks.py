@@ -975,7 +975,7 @@ async def _process_matter_async(
             # When starting a new job, clear existing witnesses and reset documents
             # This ensures all documents are processed, not just "new" ones
             from app.db.models import CanonicalWitness
-            from sqlalchemy import update
+            from sqlalchemy import update, text
 
             logger.info(f"Clearing old witness data for matter {matter_id}...")
 
