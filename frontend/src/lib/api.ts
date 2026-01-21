@@ -329,6 +329,13 @@ class ApiClient {
     return this.request<LegalResearchResponse>(`/api/v1/legal-research/job/${jobId}`, { token });
   }
 
+  async generateLegalResearch(jobId: number, token: string) {
+    return this.request<LegalResearchResponse>(`/api/v1/legal-research/job/${jobId}/generate`, {
+      method: "POST",
+      token,
+    });
+  }
+
   async approveLegalResearch(researchId: number, token: string, selectedCaseIds: number[]) {
     return this.request<{ status: string; message: string; research_id: number }>(
       `/api/v1/legal-research/${researchId}/approve`,

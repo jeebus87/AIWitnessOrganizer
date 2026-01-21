@@ -498,18 +498,16 @@ export default function JobsPage() {
                       <TableCell className="text-right">
                         {job.status === "completed" && !job.is_archived ? (
                           <div className="flex items-center justify-end gap-1">
-                            {/* Legal Research Button - show if job has pending research */}
-                            {pendingResearch.some(r => r.job_id === job.id) && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setLegalResearchJobId(job.id)}
-                                className="text-primary border-primary/50"
-                              >
-                                <Scale className="mr-2 h-4 w-4" />
-                                Case Law
-                              </Button>
-                            )}
+                            {/* Legal Research Button - always show for completed jobs */}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setLegalResearchJobId(job.id)}
+                              className="text-primary border-primary/50"
+                            >
+                              <Scale className="mr-2 h-4 w-4" />
+                              Case Law
+                            </Button>
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <Button variant="ghost" size="icon" title="Export">

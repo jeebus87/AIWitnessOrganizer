@@ -35,11 +35,12 @@ export function LegalResearchDialog({
   const [researchData, setResearchData] = useState<LegalResearchResponse | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
-  // Fetch results when dialog opens
+  // Generate/fetch results when dialog opens
   useEffect(() => {
     if (open && jobId && token) {
       setLoading(true);
-      api.getLegalResearchForJob(jobId, token)
+      // Use generate endpoint - returns existing results or creates new ones
+      api.generateLegalResearch(jobId, token)
         .then((data) => {
           setResearchData(data);
           // Pre-select top 5 results
@@ -49,8 +50,8 @@ export function LegalResearchDialog({
           }
         })
         .catch((err) => {
-          console.error("Failed to fetch legal research:", err);
-          toast.error("Failed to load legal research results");
+          console.error("Failed to generate legal research:", err);
+          toast.error("Failed to generate legal research results");
         })
         .finally(() => {
           setLoading(false);
@@ -146,8 +147,9 @@ export function LegalResearchDialog({
 
         <div className="flex-1 overflow-auto min-h-[200px]">
           {loading ? (
-            <div className="flex items-center justify-center h-full py-12">
+            <div className="flex flex-col items-center justify-center h-full py-12">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <p className="text-sm text-muted-foreground mt-3">Searching for relevant case law...</p>
             </div>
           ) : !hasResults ? (
             <div className="flex flex-col items-center justify-center h-full py-12 text-muted-foreground">

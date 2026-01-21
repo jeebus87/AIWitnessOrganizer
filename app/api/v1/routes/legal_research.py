@@ -9,8 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.session import get_db
-from app.db.models import User, LegalResearchResult, LegalResearchStatus, ProcessingJob, JobStatus
+from app.db.models import User, LegalResearchResult, LegalResearchStatus, ProcessingJob, JobStatus, Matter, Witness, CaseClaim, Document, RelevanceLevel
 from app.api.deps import get_current_user
+from app.services.legal_research_service import get_legal_research_service
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,204 @@ async def get_legal_research_for_job(
         "selected_ids": research.selected_ids or [],
         "created_at": research.created_at.isoformat() if research.created_at else None
     }
+
+
+@router.post("/job/{job_id}/generate")
+async def generate_legal_research(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Generate legal research for a job on-demand.
+
+    If results already exist, returns them. Otherwise generates new results.
+    """
+    # Verify the job belongs to the user and is completed
+    job_result = await db.execute(
+        select(ProcessingJob).where(
+            ProcessingJob.id == job_id,
+            ProcessingJob.user_id == current_user.id
+        )
+    )
+    job = job_result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != JobStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="Job must be completed first")
+
+    if not job.matter_id:
+        raise HTTPException(status_code=400, detail="Job has no associated matter")
+
+    # Check if results already exist
+    existing_result = await db.execute(
+        select(LegalResearchResult).where(
+            LegalResearchResult.job_id == job_id,
+            LegalResearchResult.user_id == current_user.id
+        ).order_by(LegalResearchResult.created_at.desc()).limit(1)
+    )
+    existing = existing_result.scalar_one_or_none()
+
+    if existing and existing.results:
+        # Return existing results
+        formatted_results = []
+        for r in existing.results:
+            formatted_results.append({
+                "id": r.get("id", 0),
+                "case_name": r.get("case_name", "Unknown"),
+                "citation": r.get("citation"),
+                "court": r.get("court", "Unknown"),
+                "date_filed": r.get("date_filed"),
+                "snippet": r.get("snippet", "")[:300],
+                "absolute_url": r.get("absolute_url", ""),
+                "matched_query": r.get("matched_query"),
+                "relevance_score": r.get("relevance_score")
+            })
+        return {
+            "has_results": True,
+            "id": existing.id,
+            "job_id": existing.job_id,
+            "status": existing.status.value,
+            "results": formatted_results,
+            "selected_ids": existing.selected_ids or [],
+            "created_at": existing.created_at.isoformat() if existing.created_at else None
+        }
+
+    # Generate new results
+    try:
+        # Get matter info
+        matter_result = await db.execute(
+            select(Matter).where(Matter.id == job.matter_id)
+        )
+        matter = matter_result.scalar_one_or_none()
+
+        if not matter:
+            raise HTTPException(status_code=404, detail="Matter not found")
+
+        # Get legal research service
+        legal_service = get_legal_research_service()
+        jurisdiction = legal_service.detect_jurisdiction(matter.display_number or "")
+
+        # Get case claims
+        claims_result = await db.execute(
+            select(CaseClaim).where(CaseClaim.matter_id == job.matter_id).limit(10)
+        )
+        claims = claims_result.scalars().all()
+        claim_dicts = [{"claim_text": c.claim_text} for c in claims]
+
+        # Get witness observations
+        witness_result = await db.execute(
+            select(Witness)
+            .join(Document, Witness.document_id == Document.id)
+            .where(
+                Document.matter_id == job.matter_id,
+                Witness.relevance.in_([RelevanceLevel.HIGHLY_RELEVANT, RelevanceLevel.RELEVANT])
+            ).limit(10)
+        )
+        witnesses = witness_result.scalars().all()
+        witness_observations = [w.observation for w in witnesses if w.observation]
+
+        # Build search queries
+        queries = legal_service.build_search_queries(
+            claims=claim_dicts,
+            witness_observations=witness_observations,
+            max_queries=5
+        )
+
+        if not queries:
+            # No queries generated - return empty results
+            return {
+                "has_results": False,
+                "status": None,
+                "message": "No search queries could be generated from case data"
+            }
+
+        # Search CourtListener
+        all_results = []
+        seen_ids = set()
+        for query in queries:
+            try:
+                results = await legal_service.search_case_law(
+                    query=query,
+                    jurisdiction=jurisdiction,
+                    max_results=5
+                )
+                for r in results:
+                    if r.id not in seen_ids:
+                        seen_ids.add(r.id)
+                        r.matched_query = query
+                        all_results.append(r)
+            except Exception as e:
+                logger.warning(f"Legal research query failed: {query[:50]}... Error: {e}")
+
+        if not all_results:
+            return {
+                "has_results": False,
+                "status": None,
+                "message": "No relevant case law found"
+            }
+
+        # Save results to database
+        results_json = [
+            {
+                "id": r.id,
+                "case_name": r.case_name,
+                "citation": r.citation,
+                "court": r.court,
+                "date_filed": r.date_filed,
+                "snippet": r.snippet,
+                "absolute_url": r.absolute_url,
+                "pdf_url": r.pdf_url,
+                "relevance_score": r.relevance_score,
+                "matched_query": r.matched_query
+            }
+            for r in all_results[:15]  # Limit to top 15
+        ]
+
+        research_record = LegalResearchResult(
+            job_id=job_id,
+            user_id=current_user.id,
+            matter_id=job.matter_id,
+            status=LegalResearchStatus.READY,
+            results=results_json,
+            selected_ids=[]
+        )
+        db.add(research_record)
+        await db.commit()
+        await db.refresh(research_record)
+
+        # Format and return
+        formatted_results = []
+        for r in results_json:
+            formatted_results.append({
+                "id": r.get("id", 0),
+                "case_name": r.get("case_name", "Unknown"),
+                "citation": r.get("citation"),
+                "court": r.get("court", "Unknown"),
+                "date_filed": r.get("date_filed"),
+                "snippet": r.get("snippet", "")[:300],
+                "absolute_url": r.get("absolute_url", ""),
+                "matched_query": r.get("matched_query"),
+                "relevance_score": r.get("relevance_score")
+            })
+
+        return {
+            "has_results": True,
+            "id": research_record.id,
+            "job_id": job_id,
+            "status": "ready",
+            "results": formatted_results,
+            "selected_ids": [],
+            "created_at": research_record.created_at.isoformat() if research_record.created_at else None
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to generate legal research for job {job_id}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate legal research: {str(e)}")
 
 
 @router.post("/{research_id}/approve")
