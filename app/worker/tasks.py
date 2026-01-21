@@ -1043,8 +1043,13 @@ async def _process_matter_async(
             docs_reset = doc_reset_result.rowcount
             logger.info(f"  Reset {docs_reset} documents to unprocessed")
 
+            # 4. Reset job counters for fresh processing
+            job.processed_documents = 0
+            job.failed_documents = 0
+            job.total_witnesses_found = 0
+
             await session.commit()
-            logger.info(f"Old data cleared - ready for fresh processing")
+            logger.info(f"Old data cleared and job counters reset - ready for fresh processing")
             logger.info(f"{'='*60}")
 
             # Check if job has a document snapshot (preferred - created at job creation time)
