@@ -858,19 +858,30 @@ class ClioClient:
                 upload_response.raise_for_status()
                 logger.info(f"Uploaded file content for document {doc_id} to S3")
 
-                # Mark the document version as fully uploaded
-                # This is required in Clio v4 to finalize the upload
+                # Mark the document as fully uploaded
+                # Clio v4 uses documents/{id} endpoint for finalization
                 version_uuid = version_data.get("uuid")
                 if version_uuid:
                     try:
+                        # Try the document endpoint first (newer v4 approach)
                         patch_response = await self._request(
                             "PATCH",
-                            f"document_versions/{version_uuid}",
+                            f"documents/{doc_id}",
                             json={"data": {"fully_uploaded": True}}
                         )
-                        logger.info(f"Finalized document version {version_uuid}")
-                    except Exception as patch_error:
-                        logger.warning(f"Failed to finalize document version: {patch_error}")
+                        logger.info(f"Finalized document {doc_id} via documents endpoint")
+                    except Exception as doc_patch_error:
+                        logger.warning(f"Documents endpoint failed: {doc_patch_error}")
+                        # Fallback: try document_versions endpoint (older approach)
+                        try:
+                            patch_response = await self._request(
+                                "PATCH",
+                                f"documents/{doc_id}/document_versions/{version_uuid}",
+                                json={"data": {"fully_uploaded": True}}
+                            )
+                            logger.info(f"Finalized document version {version_uuid} via nested endpoint")
+                        except Exception as nested_error:
+                            logger.warning(f"Nested endpoint also failed: {nested_error}")
             else:
                 logger.warning(f"No upload URL returned for document {doc_id}")
 
