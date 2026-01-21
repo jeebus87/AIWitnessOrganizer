@@ -417,7 +417,7 @@ async def _process_single_document_async(
                 if job_id:
                     from sqlalchemy import text
                     await session.execute(
-                        text("UPDATE processing_jobs SET processed_documents = processed_documents + 1, last_activity_at = NOW() WHERE id = :job_id"),
+                        text("UPDATE processing_jobs SET processed_documents = LEAST(processed_documents + 1, total_documents), last_activity_at = NOW() WHERE id = :job_id"),
                         {"job_id": job_id}
                     )
                     await session.commit()
@@ -444,7 +444,7 @@ async def _process_single_document_async(
                 if job_id:
                     from sqlalchemy import text
                     await session.execute(
-                        text("UPDATE processing_jobs SET processed_documents = processed_documents + 1, last_activity_at = NOW() WHERE id = :job_id"),
+                        text("UPDATE processing_jobs SET processed_documents = LEAST(processed_documents + 1, total_documents), last_activity_at = NOW() WHERE id = :job_id"),
                         {"job_id": job_id}
                     )
                     await session.commit()
@@ -485,7 +485,7 @@ async def _process_single_document_async(
                 if job_id:
                     from sqlalchemy import text
                     await session.execute(
-                        text("UPDATE processing_jobs SET processed_documents = processed_documents + 1, last_activity_at = NOW() WHERE id = :job_id"),
+                        text("UPDATE processing_jobs SET processed_documents = LEAST(processed_documents + 1, total_documents), last_activity_at = NOW() WHERE id = :job_id"),
                         {"job_id": job_id}
                     )
                     await session.commit()
@@ -853,7 +853,7 @@ async def _process_single_document_async(
             if job_id:
                 from sqlalchemy import text
                 await session.execute(
-                    text("UPDATE processing_jobs SET processed_documents = processed_documents + 1, last_activity_at = NOW() WHERE id = :job_id"),
+                    text("UPDATE processing_jobs SET processed_documents = LEAST(processed_documents + 1, total_documents), last_activity_at = NOW() WHERE id = :job_id"),
                     {"job_id": job_id}
                 )
                 await session.commit()
@@ -912,7 +912,7 @@ async def _process_single_document_async(
                 try:
                     from sqlalchemy import text
                     await session.execute(
-                        text("UPDATE processing_jobs SET processed_documents = processed_documents + 1, last_activity_at = NOW() WHERE id = :job_id"),
+                        text("UPDATE processing_jobs SET processed_documents = LEAST(processed_documents + 1, total_documents), last_activity_at = NOW() WHERE id = :job_id"),
                         {"job_id": job_id}
                     )
                     await session.commit()
