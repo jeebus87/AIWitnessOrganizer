@@ -11,7 +11,6 @@ from sqlalchemy import select
 from app.db.session import get_db
 from app.db.models import User, LegalResearchResult, LegalResearchStatus, ProcessingJob
 from app.api.deps import get_current_user
-from app.worker.tasks import search_legal_authorities
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +256,9 @@ async def rerun_legal_research(
 
     if not job.matter_id:
         raise HTTPException(status_code=400, detail="Job has no associated matter")
+
+    # Import inside function to avoid circular imports
+    from app.worker.tasks import search_legal_authorities
 
     # Trigger the legal research task
     search_legal_authorities.delay(
