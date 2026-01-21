@@ -137,7 +137,7 @@ async def generate_legal_research(
     if job.status != JobStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Job must be completed first")
 
-    if not job.matter_id:
+    if not job.target_matter_id:
         raise HTTPException(status_code=400, detail="Job has no associated matter")
 
     # Check if results already exist
@@ -178,7 +178,7 @@ async def generate_legal_research(
     try:
         # Get matter info
         matter_result = await db.execute(
-            select(Matter).where(Matter.id == job.matter_id)
+            select(Matter).where(Matter.id == job.target_matter_id)
         )
         matter = matter_result.scalar_one_or_none()
 
@@ -191,7 +191,7 @@ async def generate_legal_research(
 
         # Get case claims
         claims_result = await db.execute(
-            select(CaseClaim).where(CaseClaim.matter_id == job.matter_id).limit(10)
+            select(CaseClaim).where(CaseClaim.matter_id == job.target_matter_id).limit(10)
         )
         claims = claims_result.scalars().all()
         claim_dicts = [{"claim_text": c.claim_text} for c in claims]
@@ -201,7 +201,7 @@ async def generate_legal_research(
             select(Witness)
             .join(Document, Witness.document_id == Document.id)
             .where(
-                Document.matter_id == job.matter_id,
+                Document.matter_id == job.target_matter_id,
                 Witness.relevance.in_([RelevanceLevel.HIGHLY_RELEVANT, RelevanceLevel.RELEVANT])
             ).limit(10)
         )
@@ -268,7 +268,7 @@ async def generate_legal_research(
         research_record = LegalResearchResult(
             job_id=job_id,
             user_id=current_user.id,
-            matter_id=job.matter_id,
+            matter_id=job.target_matter_id,
             status=LegalResearchStatus.READY,
             results=results_json,
             selected_ids=[]
