@@ -495,8 +495,8 @@ Respond with valid JSON only."""
 
     @retry(
         retry=retry_if_exception_type(BedrockThrottlingError),
-        stop=stop_after_attempt(8),  # More attempts for better resilience
-        wait=wait_exponential(multiplier=3, min=10, max=300)  # Longer delays: 10s min, 5min max
+        stop=stop_after_attempt(25),  # Very resilient: 25 attempts before giving up
+        wait=wait_exponential(multiplier=5, min=15, max=600)  # Longer delays: 15s min, 10min max
     )
     def _invoke_model(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Invoke the Bedrock model with rate limiting, retry logic, and automatic fallback"""

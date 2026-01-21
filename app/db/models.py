@@ -223,6 +223,7 @@ class Document(Base):
     # Processing status
     is_processed = Column(Boolean, default=False, nullable=False)
     processing_error = Column(Text, nullable=True)
+    retry_count = Column(Integer, default=0, nullable=False)  # Track retry attempts
     processed_at = Column(DateTime, nullable=True)
 
     # AI analysis cache (JSON of extracted data)

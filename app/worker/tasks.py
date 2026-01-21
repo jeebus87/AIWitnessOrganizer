@@ -884,16 +884,22 @@ async def _process_single_document_async(
             except Exception as rollback_error:
                 logger.warning(f"Rollback failed for doc {document_id}: {rollback_error}")
 
-            # Try to save the error to the document record
+            # Try to save the error and increment retry count
+            # Use raw SQL to handle the case where retry_count column doesn't exist yet
             try:
-                # Re-fetch document in fresh transaction state
-                result = await session.execute(
-                    select(Document).where(Document.id == document_id)
+                from sqlalchemy import text
+                # Increment retry_count and save error
+                await session.execute(
+                    text("""
+                        UPDATE documents
+                        SET processing_error = :error,
+                            retry_count = COALESCE(retry_count, 0) + 1
+                        WHERE id = :doc_id
+                    """),
+                    {"error": error_details[:4000], "doc_id": document_id}
                 )
-                doc = result.scalar_one_or_none()
-                if doc:
-                    doc.processing_error = error_details[:4000]  # Truncate to fit in column
-                    await session.commit()
+                await session.commit()
+                logger.info(f"Saved error for doc {document_id}, will be retried by recovery task")
             except Exception as save_error:
                 logger.warning(f"Failed to save error to doc {document_id}: {save_error}")
                 try:
@@ -1561,7 +1567,13 @@ def recover_stuck_jobs(self):
         return {"skipped": True, "reason": "lock held by another worker"}
 
     try:
+        # Run both recovery tasks: stuck jobs AND failed documents
         result = run_async(_recover_stuck_jobs_async())
+
+        # Also retry any failed documents (this ensures "no failure" policy)
+        retry_result = run_async(_retry_failed_documents_async())
+        result["retry_result"] = retry_result
+
         return result
     finally:
         # Schedule next run in 60 seconds (only from the worker that holds the lock)
@@ -2122,3 +2134,126 @@ Note: Full PDF not available from CourtListener. Visit the URL above to access t
         except Exception as e:
             logger.exception(f"Failed to save legal research {research_id} to Clio: {e}")
             return {"success": False, "error": str(e)}
+
+
+# === DOCUMENT RETRY TASK ===
+
+@celery_app.task(bind=True)
+def retry_failed_documents(self):
+    """
+    Retry all documents that have failed processing.
+
+    This task ensures "no failure" by continuously retrying documents
+    until they succeed. It runs automatically as part of the recovery loop.
+
+    The system never gives up on a document - it will keep retrying indefinitely.
+    """
+    return run_async(_retry_failed_documents_async())
+
+
+async def _retry_failed_documents_async():
+    """Async implementation of failed document retry."""
+    from sqlalchemy import text
+
+    async with get_worker_session() as session:
+        try:
+            # Ensure retry_count column exists (migration safe)
+            try:
+                await session.execute(text("""
+                    ALTER TABLE documents ADD COLUMN IF NOT EXISTS retry_count INTEGER DEFAULT 0
+                """))
+                await session.commit()
+            except Exception:
+                await session.rollback()
+
+            # Find documents that failed but haven't been retried too recently
+            # Exponential backoff: wait longer between retries based on retry_count
+            # retry_count 0-2: retry immediately
+            # retry_count 3-5: wait 5 minutes
+            # retry_count 6-9: wait 30 minutes
+            # retry_count 10+: wait 2 hours
+            result = await session.execute(
+                text("""
+                    SELECT d.id, d.matter_id, d.filename, d.retry_count, d.updated_at
+                    FROM documents d
+                    JOIN matters m ON d.matter_id = m.id
+                    JOIN processing_jobs pj ON pj.target_matter_id = m.id
+                    WHERE d.is_processed = FALSE
+                    AND d.processing_error IS NOT NULL
+                    AND d.is_soft_deleted = FALSE
+                    AND pj.status IN ('processing', 'completed')
+                    AND (
+                        -- Exponential backoff based on retry count
+                        (COALESCE(d.retry_count, 0) <= 2)
+                        OR (COALESCE(d.retry_count, 0) BETWEEN 3 AND 5 AND d.updated_at < NOW() - INTERVAL '5 minutes')
+                        OR (COALESCE(d.retry_count, 0) BETWEEN 6 AND 9 AND d.updated_at < NOW() - INTERVAL '30 minutes')
+                        OR (COALESCE(d.retry_count, 0) >= 10 AND d.updated_at < NOW() - INTERVAL '2 hours')
+                    )
+                    ORDER BY d.retry_count ASC, d.updated_at ASC
+                    LIMIT 10
+                """)
+            )
+            failed_docs = result.fetchall()
+
+            if not failed_docs:
+                return {"retried": 0, "message": "No failed documents ready for retry"}
+
+            logger.info(f"Found {len(failed_docs)} failed documents to retry")
+
+            retried_count = 0
+            for doc_row in failed_docs:
+                doc_id = doc_row.id
+                matter_id = doc_row.matter_id
+                filename = doc_row.filename
+                retry_count = doc_row.retry_count or 0
+
+                logger.info(f"Retrying document {doc_id} ({filename}) - attempt #{retry_count + 1}")
+
+                # Clear the error so it can be reprocessed
+                await session.execute(
+                    text("""
+                        UPDATE documents
+                        SET processing_error = NULL
+                        WHERE id = :doc_id
+                    """),
+                    {"doc_id": doc_id}
+                )
+                await session.commit()
+
+                # Find the most recent job for this matter to get search targets
+                job_result = await session.execute(
+                    text("""
+                        SELECT id, search_witnesses
+                        FROM processing_jobs
+                        WHERE target_matter_id = :matter_id
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    """),
+                    {"matter_id": matter_id}
+                )
+                job_row = job_result.fetchone()
+
+                if job_row:
+                    job_id = job_row.id
+                    search_targets = job_row.search_witnesses
+
+                    # Queue the document for reprocessing
+                    process_single_document.delay(
+                        document_id=doc_id,
+                        job_id=job_id,
+                        search_targets=search_targets
+                    )
+                    retried_count += 1
+                    logger.info(f"Queued document {doc_id} for retry (job {job_id})")
+                else:
+                    logger.warning(f"No job found for matter {matter_id}, skipping document {doc_id}")
+
+            return {
+                "retried": retried_count,
+                "total_failed": len(failed_docs),
+                "message": f"Queued {retried_count} documents for retry"
+            }
+
+        except Exception as e:
+            logger.exception(f"Failed to retry documents: {e}")
+            return {"retried": 0, "error": str(e)}
