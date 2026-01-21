@@ -2032,12 +2032,15 @@ async def _search_legal_authorities_async(job_id: int, matter_id: int, user_id: 
                         jurisdiction=jurisdiction,
                         max_results=5
                     )
+                    # Track which query found each result for relevance explanation
+                    for r in results:
+                        r.matched_query = query
                     all_results.extend(results)
                 except Exception as e:
                     logger.warning(f"Legal research query failed: {query[:50]}... Error: {e}")
                     continue
 
-            # Deduplicate by case ID
+            # Deduplicate by case ID (keep first occurrence with its matched_query)
             seen_ids = set()
             unique_results = []
             for r in all_results:
@@ -2056,7 +2059,8 @@ async def _search_legal_authorities_async(job_id: int, matter_id: int, user_id: 
                     "snippet": r.snippet,
                     "absolute_url": r.absolute_url,
                     "pdf_url": r.pdf_url,
-                    "relevance_score": r.relevance_score
+                    "relevance_score": r.relevance_score,
+                    "matched_query": getattr(r, 'matched_query', None)  # Query that found this case
                 }
                 for r in unique_results[:15]  # Top 15 results
             ]

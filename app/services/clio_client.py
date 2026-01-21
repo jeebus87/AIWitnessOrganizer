@@ -858,21 +858,32 @@ class ClioClient:
                 upload_response.raise_for_status()
                 logger.info(f"Uploaded file content for document {doc_id} to S3")
 
+                # Give Clio time to process the S3 upload before finalization
+                import asyncio
+                await asyncio.sleep(1)
+
                 # Mark the document as fully uploaded
-                # Clio v4 uses documents/{id} endpoint for finalization
+                # Clio v4 requires finalization - try multiple endpoints
                 version_uuid = version_data.get("uuid")
                 if version_uuid:
+                    finalized = False
+                    last_error = None
+
+                    # Try the document endpoint first (newer v4 approach)
                     try:
-                        # Try the document endpoint first (newer v4 approach)
                         patch_response = await self._request(
                             "PATCH",
                             f"documents/{doc_id}",
                             json={"data": {"fully_uploaded": True}}
                         )
                         logger.info(f"Finalized document {doc_id} via documents endpoint")
+                        finalized = True
                     except Exception as doc_patch_error:
                         logger.warning(f"Documents endpoint failed: {doc_patch_error}")
-                        # Fallback: try document_versions endpoint (older approach)
+                        last_error = doc_patch_error
+
+                    # Fallback: try document_versions endpoint (older approach)
+                    if not finalized:
                         try:
                             patch_response = await self._request(
                                 "PATCH",
@@ -880,8 +891,14 @@ class ClioClient:
                                 json={"data": {"fully_uploaded": True}}
                             )
                             logger.info(f"Finalized document version {version_uuid} via nested endpoint")
+                            finalized = True
                         except Exception as nested_error:
                             logger.warning(f"Nested endpoint also failed: {nested_error}")
+                            last_error = nested_error
+
+                    # If both endpoints failed, raise so task can retry
+                    if not finalized:
+                        raise ValueError(f"Failed to finalize document {doc_id}: {last_error}")
             else:
                 logger.warning(f"No upload URL returned for document {doc_id}")
 

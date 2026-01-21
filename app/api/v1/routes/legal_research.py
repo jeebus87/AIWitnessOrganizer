@@ -26,6 +26,8 @@ class CaseLawResultResponse(BaseModel):
     date_filed: Optional[str]
     snippet: str
     absolute_url: str
+    matched_query: Optional[str] = None  # The search query that found this case
+    relevance_score: Optional[float] = None  # CourtListener relevance score
 
 
 class LegalResearchResultResponse(BaseModel):
@@ -92,7 +94,9 @@ async def get_legal_research_for_job(
                 "court": r.get("court", "Unknown"),
                 "date_filed": r.get("date_filed"),
                 "snippet": r.get("snippet", "")[:300],
-                "absolute_url": r.get("absolute_url", "")
+                "absolute_url": r.get("absolute_url", ""),
+                "matched_query": r.get("matched_query"),
+                "relevance_score": r.get("relevance_score")
             })
 
     return {

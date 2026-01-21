@@ -688,6 +688,7 @@ export interface CaseLawResult {
   absolute_url: string;
   pdf_url: string | null;
   relevance_score: number;
+  matched_query: string | null;  // The search query that found this case
 }
 
 export interface LegalResearchResponse {

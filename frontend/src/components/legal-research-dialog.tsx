@@ -117,7 +117,18 @@ export function LegalResearchDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
+      <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col relative">
+        {/* Saving overlay */}
+        {submitting && (
+          <div className="absolute inset-0 bg-background/80 flex items-center justify-center z-50 rounded-lg">
+            <div className="flex flex-col items-center gap-3">
+              <Loader2 className="h-10 w-10 animate-spin text-primary" />
+              <span className="text-sm font-medium">Saving cases to Clio...</span>
+              <span className="text-xs text-muted-foreground">This may take a moment</span>
+            </div>
+          </div>
+        )}
+
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Scale className="h-5 w-5 text-primary" />
@@ -227,9 +238,15 @@ function CaseLawCard({ result, isSelected, onToggle }: CaseLawCardProps) {
             {(result.citation || result.court) && result.date_filed && " | "}
             {result.date_filed}
           </p>
+          {result.matched_query && (
+            <div className="mt-2 text-xs">
+              <span className="font-medium text-primary">Matched: </span>
+              <span className="text-muted-foreground italic">&quot;{result.matched_query}&quot;</span>
+            </div>
+          )}
           {result.snippet && (
             <div className="mt-2 p-2 bg-muted/50 rounded text-xs">
-              <span className="font-medium text-foreground">Why it&apos;s relevant: </span>
+              <span className="font-medium text-foreground">Relevant excerpt: </span>
               <span
                 className="text-muted-foreground"
                 dangerouslySetInnerHTML={{

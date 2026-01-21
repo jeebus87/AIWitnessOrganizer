@@ -43,6 +43,7 @@ class CaseLawResult:
     absolute_url: str
     pdf_url: Optional[str] = None
     relevance_score: float = 0.0
+    matched_query: Optional[str] = None  # The search query that found this case
 
 
 class LegalResearchService:
