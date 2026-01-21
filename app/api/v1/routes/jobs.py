@@ -436,49 +436,6 @@ async def clear_finished_jobs(
     return {"success": True, "deleted_count": result.rowcount}
 
 
-@router.get("/{job_id}/failed-documents")
-async def get_failed_documents(
-    job_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """Get documents that failed processing for a specific job."""
-    # Get the job
-    result = await db.execute(
-        select(ProcessingJob).where(
-            ProcessingJob.id == job_id,
-            ProcessingJob.user_id == current_user.id
-        )
-    )
-    job = result.scalar_one_or_none()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    # Get failed documents for this matter
-    from app.db.models import Document
-    result = await db.execute(
-        select(Document).where(
-            Document.matter_id == job.target_matter_id,
-            Document.is_processed == False,
-            Document.processing_error != None
-        )
-    )
-    failed_docs = result.scalars().all()
-
-    return {
-        "job_id": job_id,
-        "failed_count": len(failed_docs),
-        "documents": [
-            {
-                "id": doc.id,
-                "filename": doc.filename,
-                "error": doc.processing_error[:500] if doc.processing_error else None
-            }
-            for doc in failed_docs
-        ]
-    }
-
-
 @router.get("/{job_id}/export/pdf")
 async def export_job_pdf(
     job_id: int,
