@@ -503,50 +503,114 @@ async def _process_single_document_async(
 
             # Initialize AI client (processor already created above for hash)
             bedrock = BedrockClient()
+            from app.services.bedrock_client import ExtractionResult
 
-            # Check if this is a large PDF that needs chunked processing
-            # Large = > 20MB, which typically means 100+ pages
-            is_large_pdf = (
-                len(content) > 20 * 1024 * 1024 and
-                (document.filename.lower().endswith('.pdf') or content[:4] == b'%PDF')
+            # Check if this is a PDF
+            is_pdf = (
+                document.filename.lower().endswith('.pdf') or content[:4] == b'%PDF'
             )
-            
+
+            # Helper function for adaptive chunked processing
+            async def process_with_adaptive_chunks(
+                assets_to_process: list,
+                initial_batch_size: int = 10
+            ) -> ExtractionResult:
+                """
+                Process assets with adaptive batch sizing.
+                If "Input is too long" error occurs, reduces batch size and retries.
+                """
+                all_witnesses = []
+                min_batch_size = 1  # Can go down to single page processing
+
+                i = 0
+                current_batch_size = initial_batch_size
+
+                while i < len(assets_to_process):
+                    batch = assets_to_process[i:i + current_batch_size]
+                    logger.info(f"Processing batch at index {i}, size {len(batch)}")
+
+                    result = await bedrock.extract_witnesses(
+                        assets=batch,
+                        search_targets=search_targets,
+                        legal_context=legal_context
+                    )
+
+                    # Check for "Input is too long" error
+                    if not result.success and result.error and "too long" in result.error.lower():
+                        if current_batch_size <= min_batch_size:
+                            # Already at minimum, skip this asset
+                            logger.error(f"Asset at index {i} too large even individually, skipping")
+                            i += 1
+                            current_batch_size = initial_batch_size  # Reset for next batch
+                            continue
+
+                        # Reduce batch size and retry same position
+                        new_batch_size = max(min_batch_size, current_batch_size // 2)
+                        logger.warning(
+                            f"Batch too large ({len(batch)} assets), "
+                            f"reducing batch size from {current_batch_size} to {new_batch_size}"
+                        )
+                        current_batch_size = new_batch_size
+                        continue  # Retry with smaller batch
+
+                    if result.success:
+                        all_witnesses.extend(result.witnesses)
+                        logger.info(f"Batch extracted {len(result.witnesses)} witnesses")
+                    else:
+                        logger.warning(f"Batch extraction failed: {result.error}")
+
+                    # Move to next batch
+                    i += current_batch_size
+                    # Gradually restore batch size if successful
+                    if result.success and current_batch_size < initial_batch_size:
+                        current_batch_size = min(current_batch_size + 2, initial_batch_size)
+
+                    gc.collect()
+
+                return ExtractionResult(
+                    success=True,
+                    witnesses=all_witnesses,
+                    input_tokens=0,
+                    output_tokens=0
+                )
+
+            # Use chunked processing for larger PDFs (> 5MB)
+            # This catches documents that would otherwise exceed token limits
+            should_use_chunked = is_pdf and len(content) > 5 * 1024 * 1024
+
             all_witnesses = []
-            
-            if is_large_pdf:
-                logger.info(f"Large PDF detected ({len(content)} bytes), using chunked processing")
-                
-                # Process PDF in chunks to avoid memory exhaustion
+
+            if should_use_chunked:
+                logger.info(f"PDF detected ({len(content)} bytes), using chunked processing")
+
+                # Process PDF in smaller chunks (15 pages) to avoid token limits
                 chunk_num = 0
                 async for chunk_assets in processor.process_pdf_chunked(
                     content=content,
                     filename=document.filename,
-                    chunk_size=30  # Process 30 pages at a time
+                    chunk_size=15  # Reduced from 30 to 15 pages
                 ):
                     chunk_num += 1
                     logger.info(f"Processing chunk {chunk_num} with {len(chunk_assets)} pages")
-                    
-                    # Extract witnesses from this chunk
-                    extraction_result = await bedrock.extract_witnesses(
-                        assets=chunk_assets,
-                        search_targets=search_targets,
-                        legal_context=legal_context
+
+                    # Use adaptive processing for each chunk
+                    chunk_result = await process_with_adaptive_chunks(
+                        chunk_assets,
+                        initial_batch_size=len(chunk_assets)  # Try full chunk first
                     )
-                    
-                    if extraction_result.success:
-                        all_witnesses.extend(extraction_result.witnesses)
-                        logger.info(f"Chunk {chunk_num}: found {len(extraction_result.witnesses)} witnesses")
+
+                    if chunk_result.success:
+                        all_witnesses.extend(chunk_result.witnesses)
+                        logger.info(f"Chunk {chunk_num}: found {len(chunk_result.witnesses)} witnesses")
                     else:
-                        logger.warning(f"Chunk {chunk_num} extraction failed: {extraction_result.error}")
-                    
+                        logger.warning(f"Chunk {chunk_num} extraction failed: {chunk_result.error}")
+
                     # Clear chunk memory
                     del chunk_assets
                     gc.collect()
-                
-                logger.info(f"Large PDF processing complete: {len(all_witnesses)} total witnesses found")
-                
-                # Create a mock successful extraction result with all witnesses
-                from app.services.bedrock_client import ExtractionResult
+
+                logger.info(f"Chunked processing complete: {len(all_witnesses)} total witnesses found")
+
                 extraction_result = ExtractionResult(
                     success=True,
                     witnesses=all_witnesses
@@ -563,12 +627,23 @@ async def _process_single_document_async(
                     await session.commit()
                     return {"success": False, "error": proc_result.error}
 
-                # Extract witnesses using AI
+                # Try extraction - if "too long" error, fall back to adaptive chunking
                 extraction_result = await bedrock.extract_witnesses(
                     assets=proc_result.assets,
                     search_targets=search_targets,
                     legal_context=legal_context
                 )
+
+                # Handle "Input is too long" error with adaptive processing
+                if not extraction_result.success and extraction_result.error and "too long" in extraction_result.error.lower():
+                    logger.warning(
+                        f"Document {document.filename} too large for single request, "
+                        f"falling back to adaptive chunked processing"
+                    )
+                    extraction_result = await process_with_adaptive_chunks(
+                        proc_result.assets,
+                        initial_batch_size=10  # Start with batches of 10 pages
+                    )
 
                 if not extraction_result.success:
                     document.processing_error = extraction_result.error
