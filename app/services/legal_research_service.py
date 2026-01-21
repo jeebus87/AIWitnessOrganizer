@@ -421,6 +421,16 @@ class LegalResearchService:
                 if simplified and len(simplified) > 20:
                     queries.append(simplified)
 
+        # Final fallback: use witness observations if still no queries
+        if not queries and witness_observations:
+            for obs in witness_observations[:3]:
+                if obs and len(obs) > 20:
+                    # Clean up observation text
+                    cleaned = re.sub(r"[^\w\s]", " ", obs)
+                    cleaned = " ".join(cleaned.split())[:100]
+                    if cleaned and len(cleaned) > 15:
+                        queries.append(cleaned)
+
         return queries[:max_queries]
 
 
