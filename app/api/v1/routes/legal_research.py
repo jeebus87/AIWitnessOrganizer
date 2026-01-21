@@ -71,12 +71,12 @@ async def get_legal_research_for_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # Get the legal research results
+    # Get the most recent legal research results for this job
     result = await db.execute(
         select(LegalResearchResult).where(
             LegalResearchResult.job_id == job_id,
             LegalResearchResult.user_id == current_user.id
-        )
+        ).order_by(LegalResearchResult.created_at.desc()).limit(1)
     )
     research = result.scalar_one_or_none()
 
