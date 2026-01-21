@@ -861,23 +861,54 @@ async def _process_single_document_async(
             import traceback
             error_details = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
             logger.exception(f"Error processing document {document_id}: {error_details}")
-            document.processing_error = error_details[:4000]  # Truncate to fit in column
-            await session.commit()
+
+            # Rollback any failed transaction before trying to save error
+            # This is critical when a deadlock or other DB error occurs -
+            # the session is in a "failed transaction" state and needs rollback
+            try:
+                await session.rollback()
+            except Exception as rollback_error:
+                logger.warning(f"Rollback failed for doc {document_id}: {rollback_error}")
+
+            # Try to save the error to the document record
+            try:
+                # Re-fetch document in fresh transaction state
+                result = await session.execute(
+                    select(Document).where(Document.id == document_id)
+                )
+                doc = result.scalar_one_or_none()
+                if doc:
+                    doc.processing_error = error_details[:4000]  # Truncate to fit in column
+                    await session.commit()
+            except Exception as save_error:
+                logger.warning(f"Failed to save error to doc {document_id}: {save_error}")
+                try:
+                    await session.rollback()
+                except:
+                    pass
 
             # Update job progress and activity timestamp even on failure (for parallel processing)
             if job_id:
-                from sqlalchemy import text
-                await session.execute(
-                    text("UPDATE processing_jobs SET processed_documents = processed_documents + 1, last_activity_at = NOW() WHERE id = :job_id"),
-                    {"job_id": job_id}
-                )
-                await session.commit()
-                logger.info(f"=== PROGRESS UPDATE === Job {job_id}: incremented processed_documents (doc {document_id} FAILED)")
+                try:
+                    from sqlalchemy import text
+                    await session.execute(
+                        text("UPDATE processing_jobs SET processed_documents = processed_documents + 1, last_activity_at = NOW() WHERE id = :job_id"),
+                        {"job_id": job_id}
+                    )
+                    await session.commit()
+                    logger.info(f"=== PROGRESS UPDATE === Job {job_id}: incremented processed_documents (doc {document_id} FAILED)")
+                except Exception as job_update_error:
+                    logger.warning(f"Failed to update job progress for doc {document_id}: {job_update_error}")
+                    try:
+                        await session.rollback()
+                    except:
+                        pass
 
             # Clean up memory even on error
             gc.collect()
 
             # Return failure instead of retrying indefinitely
+            # Note: We return a dict (not raise) so the chord can still complete
             return {"success": False, "error": str(e), "document_id": document_id}
 
 
@@ -1566,6 +1597,130 @@ async def _recover_stuck_jobs_async():
                 # Don't mark as failed - let it be retried on next worker restart
 
         return {"recovered": recovered_count, "total_stuck": len(stuck_jobs)}
+
+
+@celery_app.task(bind=True)
+def manual_finalize_job(self, job_id: int):
+    """
+    Manually finalize a job that completed processing but failed the chord callback.
+
+    This task is used to recover jobs where all documents were processed but the
+    finalization step failed due to a ChordError (e.g., from a transaction error
+    in one of the parallel tasks).
+
+    Args:
+        job_id: ProcessingJob ID to finalize
+    """
+    return run_async(_manual_finalize_job_async(job_id))
+
+
+async def _manual_finalize_job_async(job_id: int):
+    """Async implementation of manual job finalization"""
+    async with get_worker_session() as session:
+        from sqlalchemy import text
+
+        # Get the job
+        result = await session.execute(
+            select(ProcessingJob).where(ProcessingJob.id == job_id)
+        )
+        job = result.scalar_one_or_none()
+
+        if not job:
+            logger.error(f"Manual finalize: Job {job_id} not found")
+            return {"success": False, "error": "Job not found"}
+
+        if job.status == JobStatus.COMPLETED:
+            logger.info(f"Manual finalize: Job {job_id} already completed")
+            return {"success": True, "message": "Job already completed"}
+
+        # Get matter for this job
+        matter_id = job.target_matter_id
+
+        # Count processed documents and witnesses
+        doc_count_result = await session.execute(
+            text("""
+                SELECT COUNT(*) FROM documents
+                WHERE matter_id = :matter_id AND is_processed = TRUE
+            """),
+            {"matter_id": matter_id}
+        )
+        processed_count = doc_count_result.scalar() or 0
+
+        witness_count_result = await session.execute(
+            text("""
+                SELECT COUNT(*) FROM witnesses w
+                JOIN documents d ON w.document_id = d.id
+                WHERE d.matter_id = :matter_id
+            """),
+            {"matter_id": matter_id}
+        )
+        witness_count = witness_count_result.scalar() or 0
+
+        canonical_count_result = await session.execute(
+            text("""
+                SELECT COUNT(*) FROM canonical_witnesses
+                WHERE matter_id = :matter_id
+            """),
+            {"matter_id": matter_id}
+        )
+        canonical_count = canonical_count_result.scalar() or 0
+
+        # Check for failed documents
+        failed_result = await session.execute(
+            text("""
+                SELECT COUNT(*) FROM documents
+                WHERE matter_id = :matter_id
+                AND is_processed = FALSE
+                AND processing_error IS NOT NULL
+            """),
+            {"matter_id": matter_id}
+        )
+        failed_count = failed_result.scalar() or 0
+
+        logger.info(
+            f"Manual finalize job {job_id}: "
+            f"processed={processed_count}, witnesses={witness_count}, "
+            f"canonical={canonical_count}, failed={failed_count}"
+        )
+
+        # Update job to completed
+        job.status = JobStatus.COMPLETED
+        job.completed_at = datetime.utcnow()
+        job.processed_documents = processed_count
+        job.total_witnesses_found = canonical_count  # Use canonical count as the de-duplicated total
+        job.failed_documents = failed_count
+        job.result_summary = {
+            "total_documents": job.total_documents,
+            "processed": processed_count,
+            "failed": failed_count,
+            "witnesses_found": witness_count,
+            "canonical_witnesses": canonical_count,
+            "manually_finalized": True
+        }
+        await session.commit()
+
+        logger.info(f"Manual finalize complete: Job {job_id} marked as COMPLETED")
+
+        # Queue legal research if witnesses were found
+        if canonical_count > 0 and job.target_matter_id and job.user_id:
+            try:
+                search_legal_authorities.delay(
+                    job_id=job_id,
+                    matter_id=job.target_matter_id,
+                    user_id=job.user_id
+                )
+                logger.info(f"Queued legal research for manually finalized job {job_id}")
+            except Exception as e:
+                logger.warning(f"Failed to queue legal research for job {job_id}: {e}")
+
+        return {
+            "success": True,
+            "job_id": job_id,
+            "processed": processed_count,
+            "witnesses": witness_count,
+            "canonical_witnesses": canonical_count,
+            "failed": failed_count
+        }
 
 
 # === LEGAL RESEARCH TASKS ===
