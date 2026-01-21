@@ -1550,7 +1550,7 @@ def recover_stuck_jobs(self):
     # Use Redis lock to prevent multiple workers from running this simultaneously
     redis_client = redis.from_url(settings.redis_url)
     lock_key = "recover_stuck_jobs_lock"
-    lock_ttl = 90  # Lock expires after 90 seconds (longer than 60s interval)
+    lock_ttl = 55  # Lock expires after 55 seconds (BEFORE the 60s interval, so next scheduled task can run)
 
     # Try to acquire lock (NX = only set if not exists, EX = expire time)
     acquired = redis_client.set(lock_key, "1", nx=True, ex=lock_ttl)
