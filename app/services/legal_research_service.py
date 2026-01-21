@@ -304,6 +304,51 @@ class LegalResearchService:
             logger.error(f"Error downloading PDF from {pdf_url}: {e}")
             return None
 
+    # Common causes of action and legal concepts to search for
+    LEGAL_CONCEPTS = {
+        # Tort causes of action
+        "negligence": ["negligence", "duty of care", "breach of duty", "proximate cause", "negligent"],
+        "negligent hiring": ["negligent hiring", "negligent retention", "negligent supervision", "employer liability"],
+        "premises liability": ["premises liability", "dangerous condition", "slip and fall", "property owner duty"],
+        "product liability": ["product liability", "defective product", "manufacturing defect", "design defect", "failure to warn"],
+        "medical malpractice": ["medical malpractice", "standard of care", "medical negligence", "healthcare provider"],
+        "wrongful death": ["wrongful death", "survival action", "decedent", "wrongful death damages"],
+        "assault and battery": ["assault", "battery", "intentional tort", "harmful contact"],
+        "false imprisonment": ["false imprisonment", "unlawful detention", "restraint"],
+        "intentional infliction": ["intentional infliction of emotional distress", "IIED", "outrageous conduct"],
+        "negligent infliction": ["negligent infliction of emotional distress", "NIED", "bystander recovery"],
+
+        # Contract causes of action
+        "breach of contract": ["breach of contract", "contractual obligation", "material breach", "anticipatory breach"],
+        "breach of warranty": ["breach of warranty", "express warranty", "implied warranty", "merchantability"],
+        "fraud": ["fraud", "fraudulent misrepresentation", "intentional misrepresentation", "fraudulent inducement"],
+        "negligent misrepresentation": ["negligent misrepresentation", "false statement", "justifiable reliance"],
+        "breach of fiduciary duty": ["breach of fiduciary duty", "fiduciary relationship", "fiduciary obligation"],
+        "unjust enrichment": ["unjust enrichment", "restitution", "quantum meruit"],
+
+        # Employment causes of action
+        "discrimination": ["employment discrimination", "wrongful termination", "discriminatory discharge", "protected class"],
+        "harassment": ["workplace harassment", "hostile work environment", "sexual harassment"],
+        "retaliation": ["retaliation", "whistleblower", "protected activity", "adverse employment action"],
+        "wage and hour": ["wage and hour", "unpaid wages", "overtime", "meal and rest breaks", "FLSA"],
+
+        # Property causes of action
+        "trespass": ["trespass", "unlawful entry", "interference with property"],
+        "conversion": ["conversion", "wrongful possession", "chattel"],
+        "nuisance": ["nuisance", "private nuisance", "public nuisance", "interference with use"],
+
+        # Business torts
+        "unfair competition": ["unfair competition", "unfair business practices", "UCL", "Business and Professions Code"],
+        "interference": ["tortious interference", "interference with contract", "interference with prospective advantage"],
+        "defamation": ["defamation", "libel", "slander", "false statement of fact"],
+
+        # Insurance
+        "bad faith": ["insurance bad faith", "breach of implied covenant", "unreasonable denial", "failure to settle"],
+
+        # Civil rights
+        "civil rights": ["civil rights violation", "Section 1983", "constitutional violation", "due process"],
+    }
+
     def build_search_queries(
         self,
         claims: List[Dict[str, Any]],
@@ -311,7 +356,7 @@ class LegalResearchService:
         max_queries: int = 5
     ) -> List[str]:
         """
-        Build search queries from case claims and witness observations.
+        Build search queries from case claims by extracting legal concepts.
 
         Args:
             claims: List of claim dicts with 'claim_text' key
@@ -319,21 +364,62 @@ class LegalResearchService:
             max_queries: Maximum number of queries to generate
 
         Returns:
-            List of search query strings
+            List of search query strings with legal terminology
         """
         queries = []
+        found_concepts = set()
 
-        # Build queries from claims (most important)
-        for claim in claims[:3]:
-            claim_text = claim.get("claim_text", "")[:150]
-            if claim_text:
-                # Extract key legal concepts
-                queries.append(claim_text)
+        # Combine all claim text for analysis
+        all_claim_text = " ".join(
+            claim.get("claim_text", "").lower() for claim in claims
+        )
 
-        # Build queries from witness observations
-        for obs in witness_observations[:2]:
-            if obs and len(obs) > 20:
-                queries.append(obs[:150])
+        # Search for legal concepts in claims
+        for concept_name, keywords in self.LEGAL_CONCEPTS.items():
+            for keyword in keywords:
+                if keyword.lower() in all_claim_text:
+                    if concept_name not in found_concepts:
+                        found_concepts.add(concept_name)
+                        # Build a legal search query using the primary term
+                        queries.append(keywords[0])  # Use the primary term
+                    break
+
+        # If we found legal concepts, use those
+        if queries:
+            return queries[:max_queries]
+
+        # Fallback: Extract key legal phrases from claims using patterns
+        legal_patterns = [
+            r"cause of action for (\w+(?:\s+\w+)?)",
+            r"(\w+(?:\s+\w+)?) claim",
+            r"liable for (\w+(?:\s+\w+)?)",
+            r"damages for (\w+(?:\s+\w+)?)",
+        ]
+
+        for claim in claims:
+            claim_text = claim.get("claim_text", "")
+            for pattern in legal_patterns:
+                matches = re.findall(pattern, claim_text, re.IGNORECASE)
+                for match in matches:
+                    clean_match = match.strip().lower()
+                    if clean_match and len(clean_match) > 3 and clean_match not in found_concepts:
+                        found_concepts.add(clean_match)
+                        queries.append(clean_match)
+
+        # If still no queries, use simplified claim text (remove procedural language)
+        if not queries:
+            for claim in claims[:3]:
+                claim_text = claim.get("claim_text", "")
+                # Remove common procedural phrases
+                simplified = re.sub(
+                    r"(named as|plaintiff|defendant|court|case caption|form|document|attached|exhibit|paragraph|\d+)",
+                    "",
+                    claim_text,
+                    flags=re.IGNORECASE
+                )
+                simplified = " ".join(simplified.split())[:100]
+                if simplified and len(simplified) > 20:
+                    queries.append(simplified)
 
         return queries[:max_queries]
 
