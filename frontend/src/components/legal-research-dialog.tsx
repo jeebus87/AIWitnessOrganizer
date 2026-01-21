@@ -117,7 +117,7 @@ export function LegalResearchDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col relative !top-[20%]">
+      <DialogContent className="max-w-3xl max-h-[60vh] flex flex-col relative !top-[15%] !translate-y-0">
         {/* Saving overlay */}
         {submitting && (
           <div className="absolute inset-0 bg-background/80 flex items-center justify-center z-50 rounded-lg">
