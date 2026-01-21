@@ -334,21 +334,38 @@ class ClioClient:
         """
         Download document content.
         Handles the 303 redirect to pre-signed S3 URL.
+        Retries with exponential backoff on 429 rate limit errors.
         """
-        await self._ensure_valid_token()
-        await self.rate_limiter.acquire()
+        import asyncio
 
         url = f"{self.api_url}/documents/{document_id}/download"
+        max_retries = 5
+        base_delay = 2  # seconds
 
-        # Make initial request with follow_redirects=True
-        response = await self.client.get(
-            url,
-            headers=self._get_headers(),
-            follow_redirects=True
-        )
-        response.raise_for_status()
+        for attempt in range(max_retries):
+            await self._ensure_valid_token()
+            await self.rate_limiter.acquire()
 
-        return response.content
+            response = await self.client.get(
+                url,
+                headers=self._get_headers(),
+                follow_redirects=True
+            )
+
+            if response.status_code == 429:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)  # Exponential backoff: 2, 4, 8, 16, 32 seconds
+                    logger.warning(f"Rate limited (429) downloading doc {document_id}, retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    response.raise_for_status()  # Raise on final attempt
+
+            response.raise_for_status()
+            return response.content
+
+        # Should not reach here, but just in case
+        raise Exception(f"Failed to download document {document_id} after {max_retries} attempts")
 
     # =========================================================================
     # Folder Operations

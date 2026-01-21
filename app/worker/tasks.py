@@ -511,7 +511,7 @@ async def _process_single_document_async(
             )
 
             # Helper function to split large text assets into smaller chunks
-            def split_text_asset(asset, max_chars: int = 50000):
+            def split_text_asset(asset, max_chars: int = 25000):
                 """Split a text asset into smaller chunks if it exceeds max_chars."""
                 from app.services.document_processor import ProcessedAsset
 
@@ -577,7 +577,7 @@ async def _process_single_document_async(
                             asset = batch[0]
                             if asset.asset_type in ("text", "email_body"):
                                 logger.info(f"Splitting large text asset at index {i} into smaller chunks")
-                                text_chunks = split_text_asset(asset, max_chars=30000)
+                                text_chunks = split_text_asset(asset, max_chars=20000)
 
                                 if len(text_chunks) > 1:
                                     # Process each text chunk separately
@@ -686,6 +686,20 @@ async def _process_single_document_async(
                     document.processing_error = proc_result.error
                     await session.commit()
                     return {"success": False, "error": proc_result.error}
+
+                # Pre-split any large text/email assets before attempting extraction
+                # This prevents "Input is too long" errors on large emails
+                presplit_assets = []
+                for asset in proc_result.assets:
+                    if asset.asset_type in ("text", "email_body"):
+                        chunks = split_text_asset(asset, max_chars=25000)
+                        presplit_assets.extend(chunks)
+                    else:
+                        presplit_assets.append(asset)
+
+                if len(presplit_assets) != len(proc_result.assets):
+                    logger.info(f"Pre-split assets: {len(proc_result.assets)} -> {len(presplit_assets)}")
+                    proc_result.assets = presplit_assets
 
                 # Try extraction - if "too long" error, fall back to adaptive chunking
                 extraction_result = await bedrock.extract_witnesses(
@@ -1031,17 +1045,17 @@ async def _process_matter_async(
             canonicals_deleted = canonical_delete_result.rowcount
             logger.info(f"  Deleted {canonicals_deleted} canonical witnesses")
 
-            # 3. Reset is_processed = False for all documents in this matter
+            # 3. Reset is_processed = False and clear errors for all documents in this matter
             doc_reset_result = await session.execute(
                 text("""
                     UPDATE documents
-                    SET is_processed = FALSE, content_hash = NULL, analysis_cache = NULL
+                    SET is_processed = FALSE, content_hash = NULL, analysis_cache = NULL, processing_error = NULL
                     WHERE matter_id = :matter_id
                 """),
                 {"matter_id": matter_id}
             )
             docs_reset = doc_reset_result.rowcount
-            logger.info(f"  Reset {docs_reset} documents to unprocessed")
+            logger.info(f"  Reset {docs_reset} documents to unprocessed (errors cleared)")
 
             # 4. Reset job counters for fresh processing
             job.processed_documents = 0
@@ -1563,24 +1577,6 @@ async def _recover_stuck_jobs_async():
 
         if not stuck_jobs:
             logger.info("No stuck jobs found to recover")
-
-            # DEBUG: Log failed documents for matter 12982 (Juan Munoz)
-            failed_docs_result = await session.execute(
-                text("""
-                    SELECT id, filename, LEFT(processing_error, 400) as error
-                    FROM documents
-                    WHERE matter_id = 12982
-                    AND is_processed = FALSE
-                    AND processing_error IS NOT NULL
-                """)
-            )
-            failed_docs = failed_docs_result.fetchall()
-            if failed_docs:
-                logger.info(f"=== FAILED DOCUMENTS FOR MATTER 12982 ===")
-                for doc in failed_docs:
-                    logger.info(f"Doc {doc[0]} ({doc[1]}): {doc[2]}")
-                logger.info(f"=== END FAILED DOCUMENTS ===")
-
             return {"recovered": 0}
 
         logger.info(f"Found {len(stuck_jobs)} stuck job(s) to recover")
