@@ -1,9 +1,18 @@
 [build]
 builder = "dockerfile"
-dockerfilePath = "./Dockerfile"
+dockerfilePath = "Dockerfile"
+
+# Pass environment variables as build arguments
+[build.args]
+NEXT_PUBLIC_API_URL = "${{NEXT_PUBLIC_API_URL}}"
+NEXT_PUBLIC_FIREBASE_API_KEY = "${{NEXT_PUBLIC_FIREBASE_API_KEY}}"
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN = "${{NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN}}"
+NEXT_PUBLIC_FIREBASE_PROJECT_ID = "${{NEXT_PUBLIC_FIREBASE_PROJECT_ID}}"
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET = "${{NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET}}"
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID = "${{NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID}}"
+NEXT_PUBLIC_FIREBASE_APP_ID = "${{NEXT_PUBLIC_FIREBASE_APP_ID}}"
 
 [deploy]
+startCommand = "node server.js"
 healthcheckPath = "/"
 healthcheckTimeout = 300
-restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 3
