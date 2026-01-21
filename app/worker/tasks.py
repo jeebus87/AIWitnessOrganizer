@@ -1542,14 +1542,31 @@ def recover_stuck_jobs(self):
     """
     Recover jobs that are stuck in 'processing' status with no recent activity.
     Called on worker startup and then reschedules itself every 60 seconds.
+    Uses a Redis lock to ensure only ONE instance runs across all workers.
     """
-    result = run_async(_recover_stuck_jobs_async())
+    import redis
+    from app.core.config import settings
 
-    # Schedule next run in 60 seconds (self-perpetuating loop)
-    # This replaces the need for celery beat
-    recover_stuck_jobs.apply_async(countdown=60)
+    # Use Redis lock to prevent multiple workers from running this simultaneously
+    redis_client = redis.from_url(settings.redis_url)
+    lock_key = "recover_stuck_jobs_lock"
+    lock_ttl = 90  # Lock expires after 90 seconds (longer than 60s interval)
 
-    return result
+    # Try to acquire lock (NX = only set if not exists, EX = expire time)
+    acquired = redis_client.set(lock_key, "1", nx=True, ex=lock_ttl)
+
+    if not acquired:
+        # Another worker is handling this, skip
+        logger.debug("recover_stuck_jobs: Another worker holds the lock, skipping")
+        return {"skipped": True, "reason": "lock held by another worker"}
+
+    try:
+        result = run_async(_recover_stuck_jobs_async())
+        return result
+    finally:
+        # Schedule next run in 60 seconds (only from the worker that holds the lock)
+        recover_stuck_jobs.apply_async(countdown=60)
+        # Don't release the lock - let it expire naturally to prevent race conditions
 
 
 async def _recover_stuck_jobs_async():
