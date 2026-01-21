@@ -38,8 +38,10 @@ class JobResponse(BaseModel):
     progress_percent: float = 0.0
     error_message: Optional[str] = None
     result_summary: Optional[Dict[str, Any]] = None
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
+    queued_at: Optional[datetime] = None  # When job was queued (for QUEUED status)
+    queue_position: Optional[int] = None  # Position in user's queue (1 = next to run)
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
     created_at: datetime
     is_archived: bool = False
     archived_at: Optional[datetime] = None

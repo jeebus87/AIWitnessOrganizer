@@ -10,7 +10,7 @@ from sqlalchemy.orm import joinedload
 from app.db.session import get_db
 from app.db.models import ProcessingJob, Matter, JobStatus, User, OrganizationJobCounter
 from app.api.v1.schemas.jobs import JobCreateRequest, JobResponse, JobListResponse
-from app.worker.tasks import process_matter, process_full_database
+from app.worker.tasks import process_matter, process_full_database, promote_queued_job_for_user
 from app.api.deps import get_current_user
 
 
@@ -54,18 +54,19 @@ async def create_job(
         if not matter:
             raise HTTPException(status_code=404, detail="Matter not found")
 
-        # Check for existing active job on this matter
+        # Check for existing active job on this matter (includes queued jobs)
         result = await db.execute(
             select(ProcessingJob).where(
                 ProcessingJob.target_matter_id == request.matter_id,
-                ProcessingJob.status.in_([JobStatus.PENDING, JobStatus.PROCESSING])
+                ProcessingJob.status.in_([JobStatus.QUEUED, JobStatus.PENDING, JobStatus.PROCESSING])
             )
         )
         existing_job = result.scalar_one_or_none()
         if existing_job:
+            status_text = "queued" if existing_job.status == JobStatus.QUEUED else "active"
             raise HTTPException(
                 status_code=409,
-                detail=f"Matter already has an active job (Job #{existing_job.job_number}). Please wait for it to complete or cancel it first."
+                detail=f"Matter already has a {status_text} job (Job #{existing_job.job_number}). Please wait for it to complete or cancel it first."
             )
 
         # Count existing documents for this matter to show initial progress
@@ -100,6 +101,26 @@ async def create_job(
     )
     next_job_number = (max_job_number_result.scalar() or 0) + 1
 
+    # Check if user already has a job running (per-user queue)
+    # Only one job can run at a time per user
+    result = await db.execute(
+        select(ProcessingJob).where(
+            ProcessingJob.user_id == current_user.id,
+            ProcessingJob.status == JobStatus.PROCESSING
+        )
+    )
+    user_has_running_job = result.scalar_one_or_none() is not None
+
+    # Determine initial status based on whether user has a running job
+    if user_has_running_job:
+        # Queue the job - it will start when current job finishes
+        initial_status = JobStatus.QUEUED
+        queued_at = datetime.utcnow()
+    else:
+        # No running job - this one can start immediately
+        initial_status = JobStatus.PENDING
+        queued_at = None
+
     # Create job record with initial document count
     job = ProcessingJob(
         user_id=current_user.id,
@@ -107,7 +128,8 @@ async def create_job(
         target_matter_id=request.matter_id,
         search_witnesses=request.search_witnesses,
         include_archived=request.include_archived,
-        status=JobStatus.PENDING,
+        status=initial_status,
+        queued_at=queued_at,
         total_documents=initial_doc_count,  # Set initial count for progress bar
         job_number=next_job_number  # Sequential job number per user
     )
@@ -116,24 +138,25 @@ async def create_job(
     await db.commit()
     await db.refresh(job)
 
-    # Start Celery task
-    if request.job_type == "single_matter":
-        task = process_matter.delay(
-            job_id=job.id,
-            matter_id=request.matter_id,
-            search_targets=request.search_witnesses
-        )
-    else:
-        task = process_full_database.delay(
-            job_id=job.id,
-            user_id=current_user.id,
-            search_targets=request.search_witnesses,
-            include_archived=request.include_archived
-        )
+    # Only start Celery task if job is PENDING (not QUEUED)
+    if initial_status == JobStatus.PENDING:
+        if request.job_type == "single_matter":
+            task = process_matter.delay(
+                job_id=job.id,
+                matter_id=request.matter_id,
+                search_targets=request.search_witnesses
+            )
+        else:
+            task = process_full_database.delay(
+                job_id=job.id,
+                user_id=current_user.id,
+                search_targets=request.search_witnesses,
+                include_archived=request.include_archived
+            )
 
-    # Store task ID
-    job.celery_task_id = task.id
-    await db.commit()
+        # Store task ID
+        job.celery_task_id = task.id
+        await db.commit()
 
     return _job_to_response(job)
 
@@ -178,11 +201,14 @@ async def list_jobs(
     import logging
     logger = logging.getLogger(__name__)
     for j in jobs:
-        if j.status in (JobStatus.PENDING, JobStatus.PROCESSING):
+        if j.status in (JobStatus.QUEUED, JobStatus.PENDING, JobStatus.PROCESSING):
             logger.info(f"=== API RETURNING JOB {j.id} === status={j.status.value}, processed={j.processed_documents}/{j.total_documents}")
 
+    # Calculate queue positions for QUEUED jobs
+    queue_positions = await _calculate_queue_positions(db, jobs, current_user.id)
+
     return JobListResponse(
-        jobs=[_job_to_response(j) for j in jobs],
+        jobs=[_job_to_response(j, queue_positions.get(j.id)) for j in jobs],
         total=total
     )
 
@@ -201,11 +227,11 @@ async def purge_queue(
     # Purge the Celery queue
     purged = celery_app.control.purge()
 
-    # Mark any pending/processing jobs as cancelled
+    # Mark any queued/pending/processing jobs as cancelled
     result = await db.execute(
         select(ProcessingJob).where(
             ProcessingJob.user_id == current_user.id,
-            ProcessingJob.status.in_([JobStatus.PENDING, JobStatus.PROCESSING])
+            ProcessingJob.status.in_([JobStatus.QUEUED, JobStatus.PENDING, JobStatus.PROCESSING])
         )
     )
     jobs = result.scalars().all()
@@ -250,7 +276,13 @@ async def get_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    return _job_to_response(job)
+    # Calculate queue position for QUEUED jobs
+    queue_position = None
+    if job.status == JobStatus.QUEUED:
+        positions = await _calculate_queue_positions(db, [job], current_user.id)
+        queue_position = positions.get(job.id)
+
+    return _job_to_response(job, queue_position)
 
 
 @router.post("/{job_id}/cancel")
@@ -273,11 +305,14 @@ async def cancel_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if job.status not in (JobStatus.PENDING, JobStatus.PROCESSING):
+    if job.status not in (JobStatus.QUEUED, JobStatus.PENDING, JobStatus.PROCESSING):
         raise HTTPException(
             status_code=400,
-            detail="Can only cancel pending or processing jobs"
+            detail="Can only cancel queued, pending, or processing jobs"
         )
+
+    # Remember if this was a running job (to promote next queued job)
+    was_processing = job.status == JobStatus.PROCESSING
 
     # Revoke Celery task if it exists
     if job.celery_task_id:
@@ -287,6 +322,10 @@ async def cancel_job(
     job.status = JobStatus.CANCELLED
     job.completed_at = datetime.utcnow()
     await db.commit()
+
+    # If a running job was cancelled, promote the next queued job for this user
+    if was_processing:
+        promote_queued_job_for_user.delay(current_user.id)
 
     return {"success": True, "message": "Job cancelled"}
 
@@ -367,6 +406,7 @@ async def get_job_stats(
             func.sum(case((ProcessingJob.status == JobStatus.COMPLETED, 1), else_=0)).label("completed"),
             func.sum(case((ProcessingJob.status == JobStatus.PROCESSING, 1), else_=0)).label("processing"),
             func.sum(case((ProcessingJob.status == JobStatus.PENDING, 1), else_=0)).label("pending"),
+            func.sum(case((ProcessingJob.status == JobStatus.QUEUED, 1), else_=0)).label("queued"),
             func.sum(case((ProcessingJob.status == JobStatus.FAILED, 1), else_=0)).label("failed"),
             func.sum(case((ProcessingJob.is_archived == True, 1), else_=0)).label("archived"),
         ).where(ProcessingJob.user_id == current_user.id)
@@ -378,6 +418,7 @@ async def get_job_stats(
         "completed": row.completed or 0,
         "processing": row.processing or 0,
         "pending": row.pending or 0,
+        "queued": row.queued or 0,
         "failed": row.failed or 0,
         "archived": row.archived or 0,
     }
@@ -526,7 +567,33 @@ async def export_job_docx(
     )
 
 
-def _job_to_response(job: ProcessingJob) -> JobResponse:
+async def _calculate_queue_positions(db: AsyncSession, jobs: list, user_id: int) -> dict:
+    """
+    Calculate queue positions for QUEUED jobs.
+
+    Returns a dict mapping job_id -> queue_position (1 = next to run)
+    """
+    # Get all QUEUED jobs for this user ordered by queued_at
+    from sqlalchemy import func
+    result = await db.execute(
+        select(ProcessingJob.id, ProcessingJob.queued_at)
+        .where(
+            ProcessingJob.user_id == user_id,
+            ProcessingJob.status == JobStatus.QUEUED
+        )
+        .order_by(ProcessingJob.queued_at.asc())
+    )
+    queued_jobs = result.fetchall()
+
+    # Build position map
+    positions = {}
+    for idx, (job_id, _) in enumerate(queued_jobs, start=1):
+        positions[job_id] = idx
+
+    return positions
+
+
+def _job_to_response(job: ProcessingJob, queue_position: int = None) -> JobResponse:
     """Convert a ProcessingJob to JobResponse"""
     progress = 0.0
     if job.total_documents > 0:
@@ -561,6 +628,8 @@ def _job_to_response(job: ProcessingJob) -> JobResponse:
         progress_percent=round(progress, 1),
         error_message=job.error_message,
         result_summary=job.result_summary,
+        queued_at=job.queued_at,
+        queue_position=queue_position,  # Calculated for QUEUED jobs
         started_at=job.started_at,
         completed_at=job.completed_at,
         created_at=job.created_at,

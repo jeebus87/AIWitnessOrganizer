@@ -22,7 +22,8 @@ class SubscriptionTier(str, PyEnum):
 
 class JobStatus(str, PyEnum):
     """Status of a processing job"""
-    PENDING = "pending"
+    QUEUED = "queued"  # Waiting in per-user queue (another job is running)
+    PENDING = "pending"  # Ready to process (will be picked up by Celery)
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -353,6 +354,7 @@ class ProcessingJob(Base):
     error_message = Column(Text, nullable=True)
 
     # Timestamps
+    queued_at = Column(DateTime, nullable=True)  # When job entered queue (for FIFO ordering)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)

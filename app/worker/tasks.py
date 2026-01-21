@@ -1506,6 +1506,14 @@ async def _finalize_job_async(
         else:
             logger.info(f"[LEGAL RESEARCH DEBUG] Skipping legal research - conditions not met: witnesses={total_witnesses}, matter_id={job.target_matter_id}, user_id={job.user_id}")
 
+        # Promote next queued job for this user (per-user queue)
+        try:
+            promoted_job_id = await promote_next_queued_job(session, job.user_id)
+            if promoted_job_id:
+                logger.info(f"Promoted queued job {promoted_job_id} after job {job_id} completed")
+        except Exception as e:
+            logger.exception(f"Failed to promote next queued job for user {job.user_id}: {e}")
+
         return {
             "success": True,
             "job_id": job_id,
@@ -1513,6 +1521,92 @@ async def _finalize_job_async(
             "witnesses_found": total_witnesses,
             "failed": failed_count
         }
+
+
+async def promote_next_queued_job(session, user_id: int) -> Optional[int]:
+    """
+    Promote the oldest QUEUED job for a user to PENDING and start processing.
+
+    This implements the per-user job queue - only one job runs at a time per user.
+    When a job finishes (completes, fails, or is cancelled), this function is called
+    to start the next queued job.
+
+    Args:
+        session: Database session
+        user_id: User ID to check for queued jobs
+
+    Returns:
+        The job ID that was promoted, or None if no queued jobs found
+    """
+    from sqlalchemy import text
+
+    # Find the oldest QUEUED job for this user (FIFO order by queued_at)
+    result = await session.execute(
+        select(ProcessingJob).where(
+            ProcessingJob.user_id == user_id,
+            ProcessingJob.status == JobStatus.QUEUED
+        ).order_by(ProcessingJob.queued_at.asc()).limit(1)
+    )
+    next_job = result.scalar_one_or_none()
+
+    if not next_job:
+        logger.info(f"No queued jobs for user {user_id}")
+        return None
+
+    logger.info(f"Promoting queued job {next_job.id} (Job #{next_job.job_number}) for user {user_id}")
+
+    # Update job status to PENDING
+    next_job.status = JobStatus.PENDING
+    next_job.queued_at = None  # Clear queued_at since it's no longer queued
+    await session.commit()
+
+    # Start the Celery task
+    if next_job.job_type == "single_matter":
+        task = process_matter.delay(
+            job_id=next_job.id,
+            matter_id=next_job.target_matter_id,
+            search_targets=next_job.search_witnesses
+        )
+    else:
+        task = process_full_database.delay(
+            job_id=next_job.id,
+            user_id=next_job.user_id,
+            search_targets=next_job.search_witnesses,
+            include_archived=next_job.include_archived
+        )
+
+    # Store task ID
+    next_job.celery_task_id = task.id
+    await session.commit()
+
+    logger.info(f"Started queued job {next_job.id} with Celery task {task.id}")
+    return next_job.id
+
+
+@celery_app.task(bind=True)
+def promote_queued_job_for_user(self, user_id: int):
+    """
+    Celery task to promote the next queued job for a user.
+
+    Called when a running job is cancelled to start the next one in queue.
+    This is exposed as a task so the API can call it without blocking.
+
+    Args:
+        user_id: User ID to check for queued jobs
+    """
+    return run_async(_promote_queued_job_for_user_async(user_id))
+
+
+async def _promote_queued_job_for_user_async(user_id: int):
+    """Async implementation of promote queued job task"""
+    async with get_worker_session() as session:
+        promoted_job_id = await promote_next_queued_job(session, user_id)
+        if promoted_job_id:
+            logger.info(f"Promoted queued job {promoted_job_id} for user {user_id} after cancellation")
+            return {"promoted": True, "job_id": promoted_job_id}
+        else:
+            logger.info(f"No queued jobs to promote for user {user_id}")
+            return {"promoted": False}
 
 
 def _map_role(role_str: str) -> WitnessRole:
@@ -1680,7 +1774,46 @@ async def _recover_stuck_jobs_async():
                 logger.exception(f"Failed to recover job {job.id}: {e}")
                 # Don't mark as failed - let it be retried on next worker restart
 
-        return {"recovered": recovered_count, "finalized": finalized_count, "total_stuck": len(stuck_jobs)}
+        # Check for orphaned QUEUED jobs (users with queued jobs but no processing jobs)
+        # This handles the edge case where a job finished but promote_next_queued_job failed
+        promoted_count = 0
+        try:
+            # Find users who have QUEUED jobs but NO PROCESSING jobs
+            orphan_result = await session.execute(
+                text("""
+                    SELECT DISTINCT pj.user_id
+                    FROM processing_jobs pj
+                    WHERE pj.status = 'queued'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM processing_jobs pj2
+                        WHERE pj2.user_id = pj.user_id
+                        AND pj2.status = 'processing'
+                    )
+                """)
+            )
+            orphan_users = [row[0] for row in orphan_result.fetchall()]
+
+            if orphan_users:
+                logger.info(f"Found {len(orphan_users)} users with orphaned queued jobs")
+
+            for user_id in orphan_users:
+                try:
+                    promoted_job_id = await promote_next_queued_job(session, user_id)
+                    if promoted_job_id:
+                        promoted_count += 1
+                        logger.info(f"Promoted orphaned queued job {promoted_job_id} for user {user_id}")
+                except Exception as e:
+                    logger.exception(f"Failed to promote orphaned queued job for user {user_id}: {e}")
+
+        except Exception as e:
+            logger.exception(f"Failed to check for orphaned queued jobs: {e}")
+
+        return {
+            "recovered": recovered_count,
+            "finalized": finalized_count,
+            "promoted_queued": promoted_count,
+            "total_stuck": len(stuck_jobs)
+        }
 
 
 @celery_app.task(bind=True)
@@ -1796,6 +1929,14 @@ async def _manual_finalize_job_async(job_id: int):
                 logger.info(f"Queued legal research for manually finalized job {job_id}")
             except Exception as e:
                 logger.warning(f"Failed to queue legal research for job {job_id}: {e}")
+
+        # Promote next queued job for this user (per-user queue)
+        try:
+            promoted_job_id = await promote_next_queued_job(session, job.user_id)
+            if promoted_job_id:
+                logger.info(f"Promoted queued job {promoted_job_id} after manually finalizing job {job_id}")
+        except Exception as e:
+            logger.exception(f"Failed to promote next queued job for user {job.user_id}: {e}")
 
         return {
             "success": True,

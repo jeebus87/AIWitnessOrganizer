@@ -47,6 +47,7 @@ import { toast } from "sonner";
 import { LegalResearchDialog } from "@/components/legal-research-dialog";
 
 const statusConfig: Record<JobStatus, { icon: typeof Clock; color: string; label: string }> = {
+  queued: { icon: Clock, color: "text-orange-500", label: "Queued" },
   pending: { icon: Clock, color: "text-yellow-500", label: "Pending" },
   processing: { icon: Loader2, color: "text-blue-500", label: "Processing" },
   completed: { icon: CheckCircle, color: "text-green-500", label: "Completed" },
@@ -258,7 +259,7 @@ export default function JobsPage() {
   ).length || 0;
 
   const activeJobs = jobs?.filter(
-    (job) => job.status === "pending" || job.status === "processing"
+    (job) => job.status === "queued" || job.status === "pending" || job.status === "processing"
   ).length;
 
   // Calculate non-archived completed jobs for stat card
@@ -407,8 +408,15 @@ export default function JobsPage() {
                                 job.status === "processing" ? "animate-spin" : ""
                               }`}
                             />
-                            {statusConfig[job.status].label}
+                            {job.status === "queued" && job.queue_position
+                              ? `Queued (#${job.queue_position})`
+                              : statusConfig[job.status].label}
                           </Badge>
+                          {job.status === "queued" && (
+                            <span className="text-xs text-muted-foreground">
+                              Waiting for other job to complete
+                            </span>
+                          )}
                           {job.status === "failed" && job.error_message && (
                             <span className="text-xs text-red-500 max-w-[200px] truncate" title={job.error_message}>
                               {job.error_message.substring(0, 50)}{job.error_message.length > 50 ? "..." : ""}

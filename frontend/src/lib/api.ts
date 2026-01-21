@@ -400,7 +400,7 @@ export type WitnessRole =
 
 export type ImportanceLevel = "high" | "medium" | "low";
 
-export type JobStatus = "pending" | "processing" | "completed" | "failed" | "cancelled";
+export type JobStatus = "queued" | "pending" | "processing" | "completed" | "failed" | "cancelled";
 
 export interface ProcessingJob {
   id: number;
@@ -416,6 +416,8 @@ export interface ProcessingJob {
   failed_documents: number;
   total_witnesses_found: number;
   error_message: string;
+  queued_at: string | null;  // When job was queued (for QUEUED status)
+  queue_position: number | null;  // Position in user's queue (1 = next to run)
   started_at: string;
   completed_at: string;
   created_at: string;
@@ -428,6 +430,7 @@ export interface JobStats {
   completed: number;
   processing: number;
   pending: number;
+  queued: number;
   failed: number;
   archived: number;
 }
