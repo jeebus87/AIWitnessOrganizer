@@ -451,7 +451,7 @@ export default function JobsPage() {
                       </TableCell>
                       <TableCell className="text-right">
                         {job.status === "completed" && !job.is_archived ? (
-                          <div className="flex items-center justify-end gap-2">
+                          <div className="flex items-center justify-end gap-1">
                             {/* Legal Research Button - show if job has pending research */}
                             {pendingResearch.some(r => r.job_id === job.id) && (
                               <Button
@@ -466,9 +466,8 @@ export default function JobsPage() {
                             )}
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="sm">
-                                  <Download className="mr-2 h-4 w-4" />
-                                  Export
+                                <Button variant="ghost" size="icon" title="Export">
+                                  <Download className="h-4 w-4" />
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
@@ -488,20 +487,28 @@ export default function JobsPage() {
                             </DropdownMenu>
                             <Button
                               variant="ghost"
-                              size="sm"
+                              size="icon"
                               onClick={() => handleArchive(job.id)}
                               title="Archive job"
                             >
                               <Archive className="h-4 w-4" />
                             </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDelete(job.id)}
+                              title="Delete job"
+                              className="text-muted-foreground hover:text-destructive"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
                           </div>
                         ) : job.status === "completed" && job.is_archived ? (
-                          <div className="flex items-center justify-end gap-2">
+                          <div className="flex items-center justify-end gap-1">
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="sm">
-                                  <Download className="mr-2 h-4 w-4" />
-                                  Export
+                                <Button variant="ghost" size="icon" title="Export">
+                                  <Download className="h-4 w-4" />
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
@@ -521,11 +528,20 @@ export default function JobsPage() {
                             </DropdownMenu>
                             <Button
                               variant="ghost"
-                              size="sm"
+                              size="icon"
                               onClick={() => handleUnarchive(job.id)}
                               title="Unarchive job"
                             >
                               <ArchiveRestore className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDelete(job.id)}
+                              title="Delete job"
+                              className="text-muted-foreground hover:text-destructive"
+                            >
+                              <Trash2 className="h-4 w-4" />
                             </Button>
                           </div>
                         ) : job.status === "processing" || job.status === "pending" ? (
