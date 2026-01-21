@@ -76,6 +76,40 @@ function getProgressPercent(job: ProcessingJob) {
   return Math.round((job.processed_documents / job.total_documents) * 100);
 }
 
+function formatTimeRemaining(job: ProcessingJob): string | null {
+  // Only for processing jobs with progress
+  if (job.status !== "processing" || !job.started_at || job.processed_documents === 0) {
+    return null;
+  }
+
+  // Parse started_at - ensure UTC
+  const startedAtStr = job.started_at.endsWith("Z") || job.started_at.includes("+") || job.started_at.includes("-", 10)
+    ? job.started_at
+    : job.started_at + "Z";
+  const startedAt = new Date(startedAtStr);
+  const elapsed = Date.now() - startedAt.getTime();
+
+  // Don't show if elapsed time is negative (clock skew)
+  if (elapsed <= 0) return null;
+
+  const avgTimePerDoc = elapsed / job.processed_documents;
+  const remainingDocs = job.total_documents - job.processed_documents;
+  const remainingMs = avgTimePerDoc * remainingDocs;
+
+  // Format as human-readable string
+  const totalMinutes = Math.floor(remainingMs / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours > 0) {
+    return `~${hours}h ${minutes}m remaining`;
+  } else if (totalMinutes > 0) {
+    return `~${totalMinutes} min remaining`;
+  } else {
+    return "< 1 min remaining";
+  }
+}
+
 export default function JobsPage() {
   const { token } = useAuthStore();
   const [showArchived, setShowArchived] = useState(false);
@@ -415,6 +449,11 @@ export default function JobsPage() {
                           {job.status === "queued" && (
                             <span className="text-xs text-muted-foreground">
                               Waiting for other job to complete
+                            </span>
+                          )}
+                          {job.status === "processing" && (
+                            <span className="text-xs text-muted-foreground">
+                              {formatTimeRemaining(job) || "Calculating..."}
                             </span>
                           )}
                           {job.status === "failed" && job.error_message && (
