@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.db.session import get_db
 from app.db.models import User, LegalResearchResult, LegalResearchStatus, ProcessingJob
 from app.api.deps import get_current_user
+from app.worker.tasks import search_legal_authorities
 
 logger = logging.getLogger(__name__)
 
@@ -225,4 +226,47 @@ async def get_pending_legal_research(
             }
             for r in research_list
         ]
+    }
+
+
+@router.post("/job/{job_id}/rerun")
+async def rerun_legal_research(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Re-run legal research for a specific job.
+
+    This will create new legal research results using the latest query logic.
+    """
+    # Verify the job belongs to the user and is completed
+    job_result = await db.execute(
+        select(ProcessingJob).where(
+            ProcessingJob.id == job_id,
+            ProcessingJob.user_id == current_user.id
+        )
+    )
+    job = job_result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != "completed":
+        raise HTTPException(status_code=400, detail="Job must be completed to run legal research")
+
+    if not job.matter_id:
+        raise HTTPException(status_code=400, detail="Job has no associated matter")
+
+    # Trigger the legal research task
+    search_legal_authorities.delay(
+        job_id=job_id,
+        matter_id=job.matter_id,
+        user_id=current_user.id
+    )
+
+    return {
+        "status": "started",
+        "message": "Legal research re-run started",
+        "job_id": job_id
     }
