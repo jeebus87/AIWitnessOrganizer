@@ -258,14 +258,17 @@ async def rerun_legal_research(
         raise HTTPException(status_code=400, detail="Job has no associated matter")
 
     try:
-        # Import inside function to avoid circular imports
-        from app.worker.tasks import search_legal_authorities
+        # Use Celery send_task to avoid importing the heavy tasks module
+        from app.worker.celery_app import celery_app
 
-        # Trigger the legal research task
-        search_legal_authorities.delay(
-            job_id=job_id,
-            matter_id=job.matter_id,
-            user_id=current_user.id
+        # Trigger the legal research task by name
+        celery_app.send_task(
+            'app.worker.tasks.search_legal_authorities',
+            kwargs={
+                'job_id': job_id,
+                'matter_id': job.matter_id,
+                'user_id': current_user.id
+            }
         )
     except Exception as e:
         logger.exception(f"Failed to trigger legal research for job {job_id}")
