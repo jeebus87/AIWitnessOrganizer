@@ -56,7 +56,19 @@ const statusConfig: Record<JobStatus, { icon: typeof Clock; color: string; label
 
 function formatDate(dateString: string | null) {
   if (!dateString) return "—";
-  return new Date(dateString).toLocaleString();
+  // Ensure UTC dates are parsed correctly by appending Z if not present
+  const normalized = dateString.endsWith("Z") || dateString.includes("+") || dateString.includes("-", 10)
+    ? dateString
+    : dateString + "Z";
+  return new Date(normalized).toLocaleString(undefined, {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  });
 }
 
 function getProgressPercent(job: ProcessingJob) {

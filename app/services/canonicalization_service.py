@@ -23,8 +23,9 @@ from dataclasses import dataclass
 
 import boto3
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text, func
+from sqlalchemy import select, text, func, update
 from sqlalchemy.orm import selectinload
+from sqlalchemy.exc import OperationalError
 
 from app.core.config import settings
 from app.db.models import (
@@ -972,11 +973,17 @@ class CanonicalizationService:
         document_id: int,
         filename: str
     ) -> CanonicalWitness:
-        """Merge new witness data into existing canonical record"""
+        """Merge new witness data into existing canonical record.
+
+        Uses atomic SQL UPDATE for source_document_count to prevent deadlocks
+        when multiple workers process documents with the same witness.
+        """
+        # Build updates dict for atomic update
+        updates = {}
 
         # Update name if new one is more detailed
         if len(witness_input.full_name) > len(canonical.full_name):
-            canonical.full_name = witness_input.full_name
+            updates["full_name"] = witness_input.full_name
 
         # Update relevance if higher
         if witness_input.relevance:
@@ -992,46 +999,62 @@ class CanonicalizationService:
                     relevance_order.index(new_relevance) >
                     relevance_order.index(canonical.relevance)
                 ):
-                    canonical.relevance = new_relevance
-                    canonical.relevance_reason = witness_input.relevance_reason
+                    updates["relevance"] = new_relevance
+                    updates["relevance_reason"] = witness_input.relevance_reason
             except (ValueError, AttributeError):
                 pass
 
         # Merge observations
+        new_observations = canonical.merged_observations or []
         if witness_input.observation:
-            if canonical.merged_observations is None:
-                canonical.merged_observations = []
-
             # Check if this observation from this doc already exists
             existing_doc_ids = [
-                o.get("doc_id") for o in canonical.merged_observations
+                o.get("doc_id") for o in new_observations
                 if isinstance(o, dict)
             ]
 
             if document_id not in existing_doc_ids:
-                canonical.merged_observations.append({
+                new_observations = new_observations + [{
                     "doc_id": document_id,
                     "filename": filename,
                     "page": witness_input.source_page,
                     "text": witness_input.observation
-                })
+                }]
+                updates["merged_observations"] = new_observations
 
         # Update contact info (prefer non-empty values)
         if witness_input.email and not canonical.email:
-            canonical.email = witness_input.email
+            updates["email"] = witness_input.email
         if witness_input.phone and not canonical.phone:
-            canonical.phone = witness_input.phone
+            updates["phone"] = witness_input.phone
         if witness_input.address and not canonical.address:
-            canonical.address = witness_input.address
+            updates["address"] = witness_input.address
 
         # Update confidence (take max)
         if witness_input.confidence_score:
             if canonical.max_confidence_score is None or \
                witness_input.confidence_score > canonical.max_confidence_score:
-                canonical.max_confidence_score = witness_input.confidence_score
+                updates["max_confidence_score"] = witness_input.confidence_score
 
-        # Increment document count
-        canonical.source_document_count += 1
+        # Use atomic SQL UPDATE to increment source_document_count
+        # This prevents deadlocks from concurrent read-modify-write operations
+        await db.execute(
+            text("""
+                UPDATE canonical_witnesses
+                SET source_document_count = source_document_count + 1,
+                    updated_at = NOW()
+                WHERE id = :canonical_id
+            """),
+            {"canonical_id": canonical.id}
+        )
+
+        # Apply other updates if any
+        if updates:
+            for key, value in updates.items():
+                setattr(canonical, key, value)
+
+        # Refresh the canonical object to get updated source_document_count
+        await db.refresh(canonical)
 
         return canonical
 
