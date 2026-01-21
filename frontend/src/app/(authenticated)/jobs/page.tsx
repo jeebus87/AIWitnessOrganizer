@@ -62,11 +62,10 @@ function formatDate(dateString: string | null) {
     : dateString + "Z";
   return new Date(normalized).toLocaleString(undefined, {
     year: "numeric",
-    month: "numeric",
+    month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
-    second: "2-digit",
     hour12: true,
   });
 }
