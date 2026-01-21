@@ -971,24 +971,67 @@ async def _process_matter_async(
             logger.info(f"  legal_authority_folder_id: {legal_authority_folder_id}")
             logger.info(f"{'='*60}")
 
+            # === CLEAR OLD DATA FOR FRESH REPROCESSING ===
+            # When starting a new job, clear existing witnesses and reset documents
+            # This ensures all documents are processed, not just "new" ones
+            from app.db.models import CanonicalWitness
+            from sqlalchemy import update
+
+            logger.info(f"Clearing old witness data for matter {matter_id}...")
+
+            # 1. Delete all witnesses for documents in this matter
+            witness_delete_result = await session.execute(
+                text("""
+                    DELETE FROM witnesses
+                    WHERE document_id IN (
+                        SELECT id FROM documents WHERE matter_id = :matter_id
+                    )
+                """),
+                {"matter_id": matter_id}
+            )
+            witnesses_deleted = witness_delete_result.rowcount
+            logger.info(f"  Deleted {witnesses_deleted} witnesses")
+
+            # 2. Delete all canonical witnesses for this matter
+            canonical_delete_result = await session.execute(
+                text("DELETE FROM canonical_witnesses WHERE matter_id = :matter_id"),
+                {"matter_id": matter_id}
+            )
+            canonicals_deleted = canonical_delete_result.rowcount
+            logger.info(f"  Deleted {canonicals_deleted} canonical witnesses")
+
+            # 3. Reset is_processed = False for all documents in this matter
+            doc_reset_result = await session.execute(
+                text("""
+                    UPDATE documents
+                    SET is_processed = FALSE, content_hash = NULL, analysis_cache = NULL
+                    WHERE matter_id = :matter_id
+                """),
+                {"matter_id": matter_id}
+            )
+            docs_reset = doc_reset_result.rowcount
+            logger.info(f"  Reset {docs_reset} documents to unprocessed")
+
+            await session.commit()
+            logger.info(f"Old data cleared - ready for fresh processing")
+            logger.info(f"{'='*60}")
+
             # Check if job has a document snapshot (preferred - created at job creation time)
             if job.document_ids_snapshot:
                 logger.info(f"Using document snapshot from job creation ({len(job.document_ids_snapshot)} documents)")
                 snapshot_ids = job.document_ids_snapshot
 
-                # Query actual Document objects that are unprocessed
+                # Query all documents in snapshot (all should be unprocessed now after reset)
                 result = await session.execute(
                     select(Document).where(
                         Document.id.in_(snapshot_ids),
-                        Document.is_processed == False,
                         Document.is_soft_deleted == False
                     )
                 )
                 unprocessed_docs = list(result.scalars().all())
                 document_ids_to_process = [d.id for d in unprocessed_docs]
 
-                if len(snapshot_ids) > len(unprocessed_docs):
-                    logger.info(f"RESUME MODE: Skipping {len(snapshot_ids) - len(unprocessed_docs)} already-processed documents")
+                logger.info(f"Processing all {len(unprocessed_docs)} documents in snapshot")
             else:
                 # Fallback: Query documents from database (for backwards compatibility)
                 logger.info(f"No snapshot - querying documents from database")
@@ -1017,19 +1060,11 @@ async def _process_matter_async(
                     if len(docs_in_scope) < original_count:
                         logger.info(f"Excluded {original_count - len(docs_in_scope)} legal authority documents")
 
-                # Filter out already processed documents (for job resume)
-                unprocessed_docs = [d for d in docs_in_scope if not d.is_processed]
+                # All documents should be unprocessed now (we reset them above)
+                unprocessed_docs = docs_in_scope
                 document_ids_to_process = [d.id for d in unprocessed_docs]
-                already_processed_count = len(docs_in_scope) - len(unprocessed_docs)
 
-                if already_processed_count > 0:
-                    logger.info(f"RESUME MODE: Skipping {already_processed_count} already-processed documents")
-                    # Initialize processed_documents counter to reflect already-done work
-                    job.processed_documents = already_processed_count
-                    await session.commit()
-                    logger.info(f"RESUME MODE: Initialized processed_documents to {already_processed_count}")
-
-            logger.info(f"Found {len(document_ids_to_process)} unprocessed documents for processing")
+            logger.info(f"Found {len(document_ids_to_process)} documents to process")
 
 
             # Process Legal Authority folder if specified (needs Clio access for RAG)
