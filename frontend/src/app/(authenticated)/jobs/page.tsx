@@ -305,7 +305,7 @@ export default function JobsPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Processing Jobs</h1>
           <p className="text-muted-foreground">
-            Track the status of your document processing jobs
+            Track the status of your document processing jobs (v2.1)
           </p>
         </div>
         <div className="flex items-center gap-4">
