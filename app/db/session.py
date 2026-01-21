@@ -5,13 +5,19 @@ from sqlalchemy.orm import declarative_base
 from app.core.config import settings
 
 
-# Create async engine
+# Create async engine with connection pooling optimized for multi-tenant scalability
+# pool_size: base number of persistent connections
+# max_overflow: additional connections allowed when pool is full
+# pool_recycle: recycle connections after 30 min to avoid stale connections
+# pool_timeout: wait up to 30 sec for a connection before raising error
 engine = create_async_engine(
     settings.database_url_async,
     echo=settings.debug,
     pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=20,
+    max_overflow=40,
+    pool_recycle=1800,
+    pool_timeout=30,
 )
 
 # Create async session factory

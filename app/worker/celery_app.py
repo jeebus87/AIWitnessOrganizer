@@ -17,7 +17,7 @@ celery_app = Celery(
     ]
 )
 
-# Configure Celery
+# Configure Celery for multi-tenant scalability
 celery_app.conf.update(
     # Serialization
     task_serializer="json",
@@ -38,13 +38,21 @@ celery_app.conf.update(
     # Result settings
     result_expires=86400,  # 24 hours
 
-    # Worker settings
-    worker_prefetch_multiplier=1,  # One task at a time per worker
+    # Worker settings for high concurrency
+    worker_prefetch_multiplier=1,  # One task at a time per worker for fairness
     # Autoscaling: 8-100 workers based on queue depth (set via --autoscale=100,8 in Procfile)
+
+    # Broker (Redis) settings for reliability
+    broker_connection_retry_on_startup=True,
+    broker_pool_limit=50,  # Redis connection pool limit
 
     # Retry settings
     task_default_retry_delay=60,  # 1 minute
     task_max_retries=3,
+
+    # Enable task events for monitoring (optional, can disable if too noisy)
+    worker_send_task_events=False,
+    task_send_sent_event=False,
 )
 
 

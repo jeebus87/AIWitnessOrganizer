@@ -81,8 +81,10 @@ class TokenBucketRateLimiter:
 
 
 # Global rate limiter shared across all BedrockClient instances
-# Allows 5 requests/second sustained, with burst up to 10
-_bedrock_rate_limiter = TokenBucketRateLimiter(rate=5.0, capacity=10.0)
+# Increased for multi-tenant scalability: 20 req/sec sustained, burst to 40
+# AWS Bedrock handles its own throttling, so we can be more aggressive
+# and rely on retry logic for ThrottlingException
+_bedrock_rate_limiter = TokenBucketRateLimiter(rate=20.0, capacity=40.0)
 
 
 @dataclass
