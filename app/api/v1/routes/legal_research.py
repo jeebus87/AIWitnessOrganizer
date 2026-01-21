@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.session import get_db
-from app.db.models import User, LegalResearchResult, LegalResearchStatus, ProcessingJob
+from app.db.models import User, LegalResearchResult, LegalResearchStatus, ProcessingJob, JobStatus
 from app.api.deps import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -251,21 +251,25 @@ async def rerun_legal_research(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if job.status != "completed":
-        raise HTTPException(status_code=400, detail="Job must be completed to run legal research")
+    if job.status != JobStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail=f"Job must be completed to run legal research (current: {job.status})")
 
     if not job.matter_id:
         raise HTTPException(status_code=400, detail="Job has no associated matter")
 
-    # Import inside function to avoid circular imports
-    from app.worker.tasks import search_legal_authorities
+    try:
+        # Import inside function to avoid circular imports
+        from app.worker.tasks import search_legal_authorities
 
-    # Trigger the legal research task
-    search_legal_authorities.delay(
-        job_id=job_id,
-        matter_id=job.matter_id,
-        user_id=current_user.id
-    )
+        # Trigger the legal research task
+        search_legal_authorities.delay(
+            job_id=job_id,
+            matter_id=job.matter_id,
+            user_id=current_user.id
+        )
+    except Exception as e:
+        logger.exception(f"Failed to trigger legal research for job {job_id}")
+        raise HTTPException(status_code=500, detail=f"Failed to trigger legal research: {str(e)}")
 
     return {
         "status": "started",
