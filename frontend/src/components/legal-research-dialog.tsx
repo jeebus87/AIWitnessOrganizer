@@ -96,7 +96,11 @@ export function LegalResearchDialog({
   };
 
   const handleDismiss = async () => {
-    if (!researchData?.id) return;
+    // If no research data (API failed or no results), just close the dialog
+    if (!researchData?.id) {
+      onOpenChange(false);
+      return;
+    }
 
     setSubmitting(true);
     try {
