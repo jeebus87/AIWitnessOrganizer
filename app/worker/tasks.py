@@ -510,6 +510,40 @@ async def _process_single_document_async(
                 document.filename.lower().endswith('.pdf') or content[:4] == b'%PDF'
             )
 
+            # Helper function to split large text assets into smaller chunks
+            def split_text_asset(asset, max_chars: int = 50000):
+                """Split a text asset into smaller chunks if it exceeds max_chars."""
+                from app.services.document_processor import ProcessedAsset
+
+                if asset.asset_type not in ("text", "email_body"):
+                    return [asset]
+
+                try:
+                    text = asset.content.decode('utf-8', errors='replace')
+                except:
+                    text = str(asset.content)
+
+                if len(text) <= max_chars:
+                    return [asset]
+
+                # Split into chunks
+                chunks = []
+                for j in range(0, len(text), max_chars):
+                    chunk_text = text[j:j + max_chars]
+                    chunk_asset = ProcessedAsset(
+                        asset_type=asset.asset_type,
+                        content=chunk_text.encode('utf-8'),
+                        media_type=asset.media_type,
+                        filename=f"{asset.filename}_chunk_{j // max_chars + 1}",
+                        original_filename=asset.original_filename,
+                        context=asset.context,
+                        page_number=asset.page_number
+                    )
+                    chunks.append(chunk_asset)
+
+                logger.info(f"Split large text asset ({len(text)} chars) into {len(chunks)} chunks")
+                return chunks
+
             # Helper function for adaptive chunked processing
             async def process_with_adaptive_chunks(
                 assets_to_process: list,
@@ -518,6 +552,7 @@ async def _process_single_document_async(
                 """
                 Process assets with adaptive batch sizing.
                 If "Input is too long" error occurs, reduces batch size and retries.
+                For single text assets that are too large, splits them into smaller text chunks.
                 """
                 all_witnesses = []
                 min_batch_size = 1  # Can go down to single page processing
@@ -538,8 +573,33 @@ async def _process_single_document_async(
                     # Check for "Input is too long" error
                     if not result.success and result.error and "too long" in result.error.lower():
                         if current_batch_size <= min_batch_size:
-                            # Already at minimum, skip this asset
-                            logger.error(f"Asset at index {i} too large even individually, skipping")
+                            # Single asset is too large - try to split it if it's text
+                            asset = batch[0]
+                            if asset.asset_type in ("text", "email_body"):
+                                logger.info(f"Splitting large text asset at index {i} into smaller chunks")
+                                text_chunks = split_text_asset(asset, max_chars=30000)
+
+                                if len(text_chunks) > 1:
+                                    # Process each text chunk separately
+                                    for chunk_idx, chunk in enumerate(text_chunks):
+                                        logger.info(f"Processing text chunk {chunk_idx + 1}/{len(text_chunks)}")
+                                        chunk_result = await bedrock.extract_witnesses(
+                                            assets=[chunk],
+                                            search_targets=search_targets,
+                                            legal_context=legal_context
+                                        )
+                                        if chunk_result.success:
+                                            all_witnesses.extend(chunk_result.witnesses)
+                                            logger.info(f"Text chunk {chunk_idx + 1} extracted {len(chunk_result.witnesses)} witnesses")
+                                        else:
+                                            logger.warning(f"Text chunk {chunk_idx + 1} failed: {chunk_result.error}")
+
+                                    i += 1
+                                    current_batch_size = initial_batch_size
+                                    continue
+
+                            # Can't split further (image or already small text)
+                            logger.error(f"Asset at index {i} too large even after splitting, skipping")
                             i += 1
                             current_batch_size = initial_batch_size  # Reset for next batch
                             continue
