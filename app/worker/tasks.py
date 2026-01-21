@@ -1556,9 +1556,38 @@ async def _recover_stuck_jobs_async():
         logger.info(f"Found {len(stuck_jobs)} stuck job(s) to recover")
 
         recovered_count = 0
+        finalized_count = 0
         for job in stuck_jobs:
             try:
                 logger.info(f"Recovering job {job.id} (type: {job.job_type}, matter: {job.target_matter_id})")
+
+                # Check if all documents are already processed (chord failed after processing)
+                # This handles the case where all documents were processed but the finalize callback failed
+                if job.target_matter_id:
+                    doc_count_result = await session.execute(
+                        text("""
+                            SELECT
+                                COUNT(*) FILTER (WHERE is_processed = TRUE) as processed,
+                                COUNT(*) as total
+                            FROM documents
+                            WHERE matter_id = :matter_id AND is_soft_deleted = FALSE
+                        """),
+                        {"matter_id": job.target_matter_id}
+                    )
+                    row = doc_count_result.one()
+                    processed_count = row.processed or 0
+                    total_count = row.total or 0
+
+                    # If all (or almost all) documents are processed, just finalize the job
+                    # instead of re-running everything
+                    if total_count > 0 and processed_count >= total_count * 0.95:
+                        logger.info(
+                            f"Job {job.id}: All documents processed ({processed_count}/{total_count}), "
+                            f"auto-finalizing instead of re-running"
+                        )
+                        manual_finalize_job.delay(job.id)
+                        finalized_count += 1
+                        continue
 
                 # Update activity timestamp to prevent other workers from also recovering
                 job.last_activity_at = datetime.utcnow()
@@ -1596,7 +1625,7 @@ async def _recover_stuck_jobs_async():
                 logger.exception(f"Failed to recover job {job.id}: {e}")
                 # Don't mark as failed - let it be retried on next worker restart
 
-        return {"recovered": recovered_count, "total_stuck": len(stuck_jobs)}
+        return {"recovered": recovered_count, "finalized": finalized_count, "total_stuck": len(stuck_jobs)}
 
 
 @celery_app.task(bind=True)
