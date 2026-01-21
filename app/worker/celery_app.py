@@ -45,15 +45,6 @@ celery_app.conf.update(
     # Retry settings
     task_default_retry_delay=60,  # 1 minute
     task_max_retries=3,
-
-    # Beat schedule for automatic job recovery
-    # Runs every 60 seconds to check for and finalize stuck jobs
-    beat_schedule={
-        "auto-recover-stuck-jobs": {
-            "task": "app.worker.tasks.recover_stuck_jobs",
-            "schedule": 60.0,  # Every 60 seconds
-        },
-    },
 )
 
 

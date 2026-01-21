@@ -1527,9 +1527,15 @@ def _map_importance(importance_str: str) -> ImportanceLevel:
 def recover_stuck_jobs(self):
     """
     Recover jobs that are stuck in 'processing' status with no recent activity.
-    Called on worker startup to resume interrupted jobs.
+    Called on worker startup and then reschedules itself every 60 seconds.
     """
-    return run_async(_recover_stuck_jobs_async())
+    result = run_async(_recover_stuck_jobs_async())
+
+    # Schedule next run in 60 seconds (self-perpetuating loop)
+    # This replaces the need for celery beat
+    recover_stuck_jobs.apply_async(countdown=60)
+
+    return result
 
 
 async def _recover_stuck_jobs_async():
