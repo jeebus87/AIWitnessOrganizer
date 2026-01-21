@@ -1541,6 +1541,7 @@ def recover_stuck_jobs(self):
 async def _recover_stuck_jobs_async():
     """Async implementation of stuck job recovery"""
     from datetime import timedelta
+    from sqlalchemy import text
 
     async with get_worker_session() as session:
         # Find jobs that are "processing" but have no activity for > 5 minutes
