@@ -902,48 +902,58 @@ Respond in JSON:
         harm_type = user_context.get("harm_type", "Unknown")
         allegations = user_context.get("allegations", [])
         key_facts = user_context.get("key_facts", [])
+        # Case-specific identifiers for direct reference
+        user_case_number = user_context.get("case_number", "")
+        user_case_name = user_context.get("case_name", "")
+        defendant_name = user_context.get("defendant_name") or defendant_type or "the defendant"
 
-        # Format allegations for prompt
+        # Format allegations for prompt - include more detail
         allegations_text = ""
         if allegations:
-            allegations_text = "\n".join(f"- {a['text'][:200]}" for a in allegations[:3] if isinstance(a, dict) and a.get('text'))
+            allegations_text = "\n".join(f"- {a['text'][:300]}" for a in allegations[:5] if isinstance(a, dict) and a.get('text'))
 
         # Format key facts
         facts_text = ""
         if key_facts:
-            facts_text = "\n".join(f"- {f[:150]}" for f in key_facts[:3])
+            facts_text = "\n".join(f"- {f[:200]}" for f in key_facts[:5])
 
         # Format cases for the prompt with longer snippets (1500 chars)
         cases_text = []
         for i, case in enumerate(cases[:15], 1):
-            case_name = case.get("case_name", "Unknown")[:100]
+            found_case_name = case.get("case_name", "Unknown")[:100]
             court = case.get("court", "Unknown")
-            snippet = case.get("snippet", "")[:1500]  # Increased from 400 to 1500
+            snippet = case.get("snippet", "")[:1500]
             # Clean snippet of HTML
             snippet = re.sub(r'<[^>]+>', '', snippet)
-            cases_text.append(f"""Case {i}: {case_name}
+            cases_text.append(f"""Case {i}: {found_case_name}
 Court: {court}
 Excerpt: {snippet}
 ---""")
 
-        prompt = f"""You are a legal research analyst creating case briefs for an attorney.
+        # Build case identifier for prompt
+        case_identifier = f"{user_case_name}" if user_case_name else f"Case No. {user_case_number}"
+        if user_case_number and user_case_name and user_case_number not in user_case_name:
+            case_identifier = f"{user_case_name} ({user_case_number})"
 
-USER'S CASE (for relevance comparison):
+        prompt = f"""You are a legal research analyst creating case briefs for an attorney handling a specific matter.
+
+THE ATTORNEY'S CURRENT CASE:
+- Case: {case_identifier}
 - Practice Area: {practice_area}
 - Position: PLAINTIFF
-- Defendant Type: {defendant_type}
-- Harm Type: {harm_type}
-- Key Allegations:
-{allegations_text if allegations_text else "Not specified"}
-- Key Factual Patterns:
-{facts_text if facts_text else "Not specified"}
+- Defendant: {defendant_name} (Type: {defendant_type})
+- Harm/Damages Sought: {harm_type}
+- SPECIFIC ALLEGATIONS IN THIS CASE:
+{allegations_text if allegations_text else "Not yet specified in documents"}
+- KEY FACTS FROM WITNESS OBSERVATIONS:
+{facts_text if facts_text else "Not yet extracted"}
 
-CASES TO BRIEF:
+CASES TO BRIEF FOR THIS MATTER:
 {chr(10).join(cases_text)}
 
-For EACH case, provide a proper IRAC analysis:
+For EACH case, provide IRAC analysis that directly relates to the attorney's case above:
 
-ISSUE: State the specific legal question as a question.
+ISSUE: State the specific legal question the court addressed, as a question.
 GOOD: "Whether an employer owes a duty to conduct background checks before hiring for positions with access to vulnerable populations?"
 BAD: "The issue is negligent hiring." (not a question, too vague)
 
@@ -951,38 +961,37 @@ RULE: State the SPECIFIC legal rule, statute, or test the court applied. Include
 GOOD: "Under California Civil Code § 1714 and the doctrine of respondeat superior, employers must exercise reasonable care in hiring, including conducting background checks when the position involves foreseeable risk of harm to third parties."
 BAD: "The rule is that employers must be careful when hiring." (too vague, no citation)
 
-APPLICATION: How did the court apply the rule to THIS case's specific facts? Reference actual parties, facts, and reasoning from the excerpt.
-GOOD: "The court found ABC Corp breached its duty because (1) it hired defendant without any background check despite the position involving patient contact; (2) a standard check would have revealed prior assault convictions; (3) the subsequent assault was foreseeable given defendant's history."
-BAD: "The court applied the rule to the facts." (no specifics)
+APPLICATION: Explain the court's REASONING - WHY did the court rule as it did? What factors were decisive?
+GOOD: "The court reasoned that because (1) the employer knew the position required unsupervised contact with patients, (2) background checks are industry standard and inexpensive, and (3) the prior convictions would have been discoverable, the failure to check was unreasonable. The court emphasized that foreseeability is the key test - the very reason for background checks is to prevent exactly this type of harm."
+BAD: "The court applied the rule to the facts and found liability." (no reasoning explained)
 
 CONCLUSION: The court's actual holding and any damages awarded.
-GOOD: "The court held ABC Corp liable for negligent hiring, affirming the jury verdict of $350,000 in compensatory damages and denying punitive damages."
+GOOD: "The court affirmed summary judgment for plaintiff, finding the employer negligent as a matter of law. The jury verdict of $350,000 compensatory damages was upheld."
 BAD: "The plaintiff won." (no details)
 
-UTILITY: How does this case SPECIFICALLY help with the user's {practice_area} matter involving a {defendant_type} and {harm_type}? Compare to user's facts.
-GOOD: "This case strongly supports the plaintiff's position because it establishes liability for the same conduct alleged here - failure to conduct background checks for positions involving {harm_type}. The {defendant_type} defendant here faces similar exposure."
-BAD: "This case is relevant to the user's case." (no comparison)
+UTILITY: Speak DIRECTLY about how this case helps the attorney's case against {defendant_name}. DO NOT use "if" or conditional language - you know the allegations above.
+GOOD: "This case directly supports the plaintiff's claims against {defendant_name} because it establishes that unions owe a duty of fair representation to members, and breach occurs when the union acts arbitrarily. Here, the plaintiff's allegations that {defendant_name} failed to [specific allegation] mirrors the conduct found actionable in this case."
+BAD: "If the plaintiff is alleging breach of duty, this case may be relevant." (too conditional - we KNOW the allegations)
 
 Respond in JSON:
 {{
   "analyses": [
     {{
       "case_num": 1,
-      "issue": "Whether [specific legal question from THIS case as a question]?",
-      "rule": "[Specific statute/citation, legal test, and elements required]",
-      "application": "[How court applied rule to THIS case's specific facts with party names]",
+      "issue": "Whether [specific legal question from THIS case]?",
+      "rule": "[Specific statute/citation, legal test, and elements]",
+      "application": "[Court's REASONING - why it ruled as it did, what factors mattered]",
       "conclusion": "[Court's holding with damages if mentioned]",
-      "utility": "[How this helps user's specific {practice_area} case against {defendant_type}]"
+      "utility": "[DIRECTLY state how this helps against {defendant_name} based on the specific allegations above]"
     }}
   ]
 }}
 
 CRITICAL REQUIREMENTS:
-- Base analysis on the ACTUAL case excerpt - reference specific facts, parties, holdings
-- The ISSUE must be a question ending with "?"
-- The RULE must include specific legal standards, not vague principles
-- The APPLICATION must reference specific facts from the excerpt
-- The UTILITY must compare to the user's specific case facts"""
+- The APPLICATION must explain the court's REASONING, not just recite facts
+- The UTILITY must speak DIRECTLY about the attorney's case - NO "if the plaintiff is alleging" language
+- Reference the specific allegations listed above when explaining utility
+- You have the case context - use it to make specific, actionable comparisons"""
 
         try:
             config = Config(

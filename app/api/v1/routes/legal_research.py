@@ -352,10 +352,34 @@ async def generate_legal_research(
 
         claims_summary = " | ".join(claims_parts) if claims_parts else f"Matter: {matter.description or matter.display_number}"
 
+        # Extract defendant name from matter description or claims
+        defendant_name = None
+        if matter.description:
+            # Try to extract "v. DEFENDANT" pattern
+            import re
+            match = re.search(r'v\.\s*(.+?)(?:\s*$|\s*-)', matter.description)
+            if match:
+                defendant_name = match.group(1).strip()
+        if not defendant_name:
+            # Try to find defendant in claims
+            for c in claims_data:
+                text = c.get("text", "").lower()
+                if "defendant" in text and "v." not in text:
+                    # Extract potential defendant name after "defendant"
+                    match = re.search(r'defendant\s+([A-Z][^,\.]+)', c.get("text", ""), re.IGNORECASE)
+                    if match:
+                        defendant_name = match.group(1).strip()
+                        break
+
         # Comprehensive user_context for AI analysis
         user_context = {
             "practice_area": practice_area,
             "jurisdiction": jurisdiction,
+            # Case-specific identifiers
+            "case_number": matter.display_number,
+            "case_name": matter.description,
+            "defendant_name": defendant_name,
+            # Extracted characteristics
             "defendant_type": case_facts["defendant_type"],
             "harm_type": case_facts["harm_type"],
             "legal_theories": case_facts["legal_theories"],
