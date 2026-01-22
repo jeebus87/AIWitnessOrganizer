@@ -781,9 +781,9 @@ Court: {court}
 Excerpt: {snippet}
 ---""")
 
-        prompt = f"""You are a legal research assistant. Analyze the relevance of each case to the user's specific matter.
+        prompt = f"""You are a legal research assistant. Analyze the relevance of each case to the attorney's matter. Address them directly as "you/your."
 
-USER'S CASE:
+YOUR CASE:
 - Practice Area: {practice_area}
 - Defendant Type: {defendant_type}
 - Harm Type: {harm_type}
@@ -797,14 +797,15 @@ CASES TO ANALYZE:
 
 For each case, explain in 2-3 sentences:
 1. What SPECIFIC legal principle or holding does this case establish?
-2. How do the facts COMPARE to the user's facts (defendant type: {defendant_type}, harm: {harm_type})?
-3. Is this DIRECTLY relevant (binding on the user's key issue) or TANGENTIALLY relevant (general principles)?
+2. How do the facts COMPARE to YOUR facts (defendant type: {defendant_type}, harm: {harm_type})?
+3. Is this DIRECTLY relevant (binding on your key issue) or TANGENTIALLY relevant (general principles)?
 
 CRITICAL REQUIREMENTS:
+- Address the attorney directly as "you/your" - NEVER say "the user"
 - Be SPECIFIC - reference actual holdings, standards, or tests from each case
-- COMPARE to the user's specific facts (not generic legal concepts)
+- COMPARE to your specific facts (not generic legal concepts)
 - Never say "may be relevant" without explaining HOW and WHY
-- Mention if the defendant type or harm type matches the user's case
+- Mention if the defendant type or harm type matches your case
 
 RELEVANCE SCORING (1-10):
 - 1-3: NOT RELEVANT - Completely different legal issues or facts, wrong area of law
@@ -815,8 +816,8 @@ RELEVANCE SCORING (1-10):
 Respond in JSON:
 {{
   "explanations": [
-    {{"case_num": 1, "score": 8, "explanation": "Your specific 2-3 sentence explanation"}},
-    {{"case_num": 2, "score": 2, "explanation": "Not relevant - this is a criminal case involving..."}}
+    {{"case_num": 1, "score": 8, "explanation": "This case supports your position because..."}},
+    {{"case_num": 2, "score": 2, "explanation": "Not relevant to your case - this is a criminal case involving..."}}
   ]
 }}"""
 
@@ -935,23 +936,23 @@ Excerpt: {snippet}
         if user_case_number and user_case_name and user_case_number not in user_case_name:
             case_identifier = f"{user_case_name} ({user_case_number})"
 
-        prompt = f"""You are a legal research analyst creating case briefs for an attorney handling a specific matter.
+        prompt = f"""You are a legal research analyst creating case briefs for an attorney. Address the attorney directly as "you" and "your case."
 
-THE ATTORNEY'S CURRENT CASE:
+YOUR CURRENT CASE:
 - Case: {case_identifier}
 - Practice Area: {practice_area}
 - Position: PLAINTIFF
 - Defendant: {defendant_name} (Type: {defendant_type})
 - Harm/Damages Sought: {harm_type}
-- SPECIFIC ALLEGATIONS IN THIS CASE:
+- SPECIFIC ALLEGATIONS:
 {allegations_text if allegations_text else "Not yet specified in documents"}
 - KEY FACTS FROM WITNESS OBSERVATIONS:
 {facts_text if facts_text else "Not yet extracted"}
 
-CASES TO BRIEF FOR THIS MATTER:
+CASES TO BRIEF:
 {chr(10).join(cases_text)}
 
-For EACH case, provide IRAC analysis that directly relates to the attorney's case above:
+For EACH case, provide IRAC analysis that directly relates to YOUR case above:
 
 ISSUE: State the specific legal question the court addressed, as a question.
 GOOD: "Whether an employer owes a duty to conduct background checks before hiring for positions with access to vulnerable populations?"
@@ -969,9 +970,9 @@ CONCLUSION: The court's actual holding and any damages awarded.
 GOOD: "The court affirmed summary judgment for plaintiff, finding the employer negligent as a matter of law. The jury verdict of $350,000 compensatory damages was upheld."
 BAD: "The plaintiff won." (no details)
 
-UTILITY: Speak DIRECTLY about how this case helps the attorney's case against {defendant_name}. DO NOT use "if" or conditional language - you know the allegations above.
-GOOD: "This case directly supports the plaintiff's claims against {defendant_name} because it establishes that unions owe a duty of fair representation to members, and breach occurs when the union acts arbitrarily. Here, the plaintiff's allegations that {defendant_name} failed to [specific allegation] mirrors the conduct found actionable in this case."
-BAD: "If the plaintiff is alleging breach of duty, this case may be relevant." (too conditional - we KNOW the allegations)
+UTILITY: Speak DIRECTLY to the attorney about how this case helps YOUR case against {defendant_name}. Use "you" and "your" - NOT "the user" or "the attorney." DO NOT use "if" or conditional language.
+GOOD: "This case directly supports your claims against {defendant_name} because it establishes that unions owe a duty of fair representation to members. Your allegations that {defendant_name} failed to [specific allegation] mirrors the conduct found actionable here."
+BAD: "If the user's plaintiff is alleging breach of duty, this case may be relevant." (too conditional, wrong voice)
 
 Respond in JSON:
 {{
@@ -982,16 +983,16 @@ Respond in JSON:
       "rule": "[Specific statute/citation, legal test, and elements]",
       "application": "[Court's REASONING - why it ruled as it did, what factors mattered]",
       "conclusion": "[Court's holding with damages if mentioned]",
-      "utility": "[DIRECTLY state how this helps against {defendant_name} based on the specific allegations above]"
+      "utility": "[DIRECTLY address the attorney as 'you' - how this helps YOUR case against {defendant_name}]"
     }}
   ]
 }}
 
 CRITICAL REQUIREMENTS:
 - The APPLICATION must explain the court's REASONING, not just recite facts
-- The UTILITY must speak DIRECTLY about the attorney's case - NO "if the plaintiff is alleging" language
-- Reference the specific allegations listed above when explaining utility
-- You have the case context - use it to make specific, actionable comparisons"""
+- The UTILITY must address the attorney directly as "you/your" - NEVER say "the user" or "the attorney"
+- NO conditional "if" language in UTILITY - you know the allegations, speak directly about them
+- Reference the specific allegations listed above when explaining utility"""
 
         try:
             config = Config(
