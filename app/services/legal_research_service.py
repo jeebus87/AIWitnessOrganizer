@@ -8,6 +8,7 @@ Uses AWS Bedrock Claude for AI-powered query generation and relevance analysis.
 import json
 import logging
 import re
+import time
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 
@@ -18,6 +19,10 @@ from botocore.config import Config
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Rate limiting: 10 RPM = 6 seconds between requests (with buffer)
+BEDROCK_MIN_REQUEST_INTERVAL = 7  # seconds between API calls to stay under 10 RPM
+_last_bedrock_call_time = 0.0
 
 
 # Model IDs with GLOBAL inference profiles as primary (different quota pools)
@@ -40,6 +45,7 @@ SONNET_MODELS = [
 def invoke_model_with_fallback(client, body: dict, models: list, logger) -> dict:
     """
     Try to invoke a model, falling back through the chain if quota/throttle errors occur.
+    Includes rate limiting to stay within 10 RPM.
 
     Args:
         client: boto3 bedrock-runtime client
@@ -53,11 +59,21 @@ def invoke_model_with_fallback(client, body: dict, models: list, logger) -> dict
     Raises:
         Exception if all models fail
     """
+    global _last_bedrock_call_time
+
+    # Rate limiting: ensure minimum interval between calls (10 RPM = 6s, using 7s for safety)
+    elapsed = time.time() - _last_bedrock_call_time
+    if elapsed < BEDROCK_MIN_REQUEST_INTERVAL:
+        wait_time = BEDROCK_MIN_REQUEST_INTERVAL - elapsed
+        logger.info(f"Rate limiting: waiting {wait_time:.1f}s before next Bedrock call")
+        time.sleep(wait_time)
+
     last_error = None
 
     for model_id, model_name in models:
         try:
             logger.info(f"Trying model: {model_name} ({model_id})")
+            _last_bedrock_call_time = time.time()  # Update before call
             response = client.invoke_model(
                 modelId=model_id,
                 contentType="application/json",
@@ -69,7 +85,8 @@ def invoke_model_with_fallback(client, body: dict, models: list, logger) -> dict
             return response_body
 
         except client.exceptions.ThrottlingException as e:
-            logger.warning(f"Throttled on {model_name}, trying next model: {e}")
+            logger.warning(f"Throttled on {model_name}, waiting 10s then trying next model: {e}")
+            time.sleep(10)  # Extra wait on throttle
             last_error = e
         except client.exceptions.ServiceQuotaExceededException as e:
             logger.warning(f"Quota exceeded on {model_name}, trying next model: {e}")
@@ -78,7 +95,8 @@ def invoke_model_with_fallback(client, body: dict, models: list, logger) -> dict
             error_str = str(e)
             # Check for quota/throttle related errors in the message
             if "throttl" in error_str.lower() or "quota" in error_str.lower() or "rate" in error_str.lower():
-                logger.warning(f"Rate/quota issue on {model_name}, trying next model: {e}")
+                logger.warning(f"Rate/quota issue on {model_name}, waiting 10s then trying next model: {e}")
+                time.sleep(10)  # Extra wait on rate issues
                 last_error = e
             else:
                 # Non-quota error, re-raise immediately
