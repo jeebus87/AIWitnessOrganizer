@@ -903,6 +903,7 @@ Respond in JSON:
         harm_type = user_context.get("harm_type", "Unknown")
         allegations = user_context.get("allegations", [])
         key_facts = user_context.get("key_facts", [])
+        legal_theories = user_context.get("legal_theories", [])
         # Case-specific identifiers for direct reference
         user_case_number = user_context.get("case_number", "")
         user_case_name = user_context.get("case_name", "")
@@ -917,6 +918,9 @@ Respond in JSON:
         facts_text = ""
         if key_facts:
             facts_text = "\n".join(f"- {f[:200]}" for f in key_facts[:5])
+
+        # Format legal theories
+        theories_text = ", ".join(legal_theories) if legal_theories else "To be determined from allegations"
 
         # Format cases for the prompt with longer snippets (1500 chars)
         cases_text = []
@@ -936,63 +940,96 @@ Excerpt: {snippet}
         if user_case_number and user_case_name and user_case_number not in user_case_name:
             case_identifier = f"{user_case_name} ({user_case_number})"
 
-        prompt = f"""You are a legal research analyst creating case briefs for an attorney. Address the attorney directly as "you" and "your case."
+        prompt = f"""You are creating case briefs for a PRACTICING ATTORNEY, not a law student.
+Your goal is to provide ACTIONABLE legal intelligence they can use in motions and briefs.
+Address the attorney directly as "you."
 
 YOUR CURRENT CASE:
 - Case: {case_identifier}
 - Practice Area: {practice_area}
-- Position: PLAINTIFF
-- Defendant: {defendant_name} (Type: {defendant_type})
-- Harm/Damages Sought: {harm_type}
-- SPECIFIC ALLEGATIONS:
-{allegations_text if allegations_text else "Not yet specified in documents"}
-- KEY FACTS FROM WITNESS OBSERVATIONS:
-{facts_text if facts_text else "Not yet extracted"}
+- Defendant: {defendant_name} ({defendant_type})
+- Harm/Damages: {harm_type}
+- Legal Theories: {theories_text}
+- ALLEGATIONS:
+{allegations_text if allegations_text else "Employment-related claims against union defendant"}
+- KEY FACTS:
+{facts_text if facts_text else "See allegations above"}
 
 CASES TO BRIEF:
 {chr(10).join(cases_text)}
 
-For EACH case, provide IRAC analysis that directly relates to YOUR case above:
+For EACH case, provide IRAC analysis using this EXACT structure:
 
-ISSUE: State the specific legal question the court addressed, as a question.
-GOOD: "Whether an employer owes a duty to conduct background checks before hiring for positions with access to vulnerable populations?"
-BAD: "The issue is negligent hiring." (not a question, too vague)
+===== ISSUE =====
+State the precise legal QUESTION the court answered. Must start with "Whether..."
+Include: (1) the specific legal standard, (2) key determinative facts that made this case unique.
 
-RULE: State the SPECIFIC legal rule, statute, or test the court applied. Include citations if visible.
-GOOD: "Under California Civil Code § 1714 and the doctrine of respondeat superior, employers must exercise reasonable care in hiring, including conducting background checks when the position involves foreseeable risk of harm to third parties."
-BAD: "The rule is that employers must be careful when hiring." (too vague, no citation)
+GOOD: "Whether a union breaches its duty of fair representation under federal labor law when it refuses to arbitrate a member's grievance without conducting any investigation into the merits?"
+BAD: "The issue is duty of fair representation." (Not a question, no facts)
 
-APPLICATION: Explain the court's REASONING - WHY did the court rule as it did? What factors were decisive?
-GOOD: "The court reasoned that because (1) the employer knew the position required unsupervised contact with patients, (2) background checks are industry standard and inexpensive, and (3) the prior convictions would have been discoverable, the failure to check was unreasonable. The court emphasized that foreseeability is the key test - the very reason for background checks is to prevent exactly this type of harm."
-BAD: "The court applied the rule to the facts and found liability." (no reasoning explained)
+===== RULE =====
+State the black-letter law with SPECIFICITY. This is the attorney's ammunition.
+Include: (1) Governing statute or doctrine WITH CITATION, (2) The specific TEST or ELEMENTS (numbered if multi-factor), (3) Key definitions.
 
-CONCLUSION: The court's actual holding and any damages awarded.
-GOOD: "The court affirmed summary judgment for plaintiff, finding the employer negligent as a matter of law. The jury verdict of $350,000 compensatory damages was upheld."
-BAD: "The plaintiff won." (no details)
+GOOD: "Under federal labor law, a union breaches its duty of fair representation when its conduct is 'arbitrary, discriminatory, or in bad faith.' (Vaca v. Sipes, 386 U.S. 171). Conduct is 'arbitrary' when it is: (1) without rational basis, (2) egregiously negligent, or (3) made without proper investigation. The six-month statute of limitations (borrowed from 29 U.S.C. § 160(b)) begins when the member knew or should have known of the breach."
+BAD: "Unions must represent members fairly." (No test, no citation, no elements)
 
-UTILITY: Speak DIRECTLY to the attorney about how this case helps YOUR case against {defendant_name}. Use "you" and "your" - NOT "the user" or "the attorney." DO NOT use "if" or conditional language.
-GOOD: "This case directly supports your claims against {defendant_name} because it establishes that unions owe a duty of fair representation to members. Your allegations that {defendant_name} failed to [specific allegation] mirrors the conduct found actionable here."
-BAD: "If the user's plaintiff is alleging breach of duty, this case may be relevant." (too conditional, wrong voice)
+===== APPLICATION =====
+Explain the court's REASONING - WHY did it rule as it did? This reveals the blueprint for persuasion.
+
+REQUIRED STRUCTURE:
+1. "The court found [outcome] BECAUSE..."
+2. "The court reasoned that [specific logic]..."
+3. "The decisive factors were: (1)..., (2)..., (3)..."
+4. "The court rejected [losing party]'s argument that... BECAUSE..."
+
+Use CAUSAL language: because, since, therefore, the court reasoned that, due to, as a result of.
+Do NOT just list facts - explain WHY each fact mattered legally.
+
+GOOD: "The court found the union breached its duty BECAUSE it refused to arbitrate without any investigation. The court reasoned that the union's total failure to interview witnesses or review documents demonstrated 'arbitrary' disregard for the member's interests under the Vaca standard. The decisive factors were: (1) zero investigation before rejection, (2) the grievance had obvious merit that minimal inquiry would have revealed, (3) the union offered no rational basis for its decision. The court rejected the union's argument that it had discretion to decline grievances BECAUSE discretion does not permit rejection without any factual inquiry."
+BAD: "The union refused to arbitrate. The employee sued. The court ruled for the employee." (No reasoning)
+
+===== CONCLUSION =====
+Direct answer to the Issue. Start with "Yes" or "No" (or "The court held...").
+
+GOOD: "Yes, the court held the union breached its duty of fair representation because refusing to arbitrate without any investigation constitutes arbitrary conduct as a matter of law, and awarded the member $50,000 in damages."
+BAD: "The plaintiff won." (Doesn't answer the legal question)
+
+===== UTILITY =====
+Tell the attorney EXACTLY how to use this case. Use COMMAND language, not conditional language.
+
+REQUIRED STRUCTURE:
+1. **For Your Brief**: "Argue that..." / "Cite this case for the proposition that..."
+2. **Key Quote**: A specific phrase from the case to quote in your motion
+3. **Anticipate Opposition**: How opposing counsel might distinguish this; how to respond
+
+GOOD: "**For Your Brief**: Argue that {defendant_name}'s conduct mirrors the arbitrary behavior found actionable here. Cite this case for the proposition that unions cannot reject grievances without any factual investigation, regardless of their subjective belief.
+**Key Quote**: 'A union's complete failure to investigate before rejecting a grievance is the hallmark of arbitrary conduct.'
+**Anticipate Opposition**: {defendant_name} may argue it had discretion. Respond that this case holds discretion does not permit zero investigation."
+
+BAD: "This case might be useful if you are alleging breach of duty." (Conditional, vague, not actionable)
 
 Respond in JSON:
 {{
   "analyses": [
     {{
       "case_num": 1,
-      "issue": "Whether [specific legal question from THIS case]?",
-      "rule": "[Specific statute/citation, legal test, and elements]",
-      "application": "[Court's REASONING - why it ruled as it did, what factors mattered]",
-      "conclusion": "[Court's holding with damages if mentioned]",
-      "utility": "[DIRECTLY address the attorney as 'you' - how this helps YOUR case against {defendant_name}]"
+      "issue": "Whether [legal standard] when [key facts]?",
+      "rule": "[Statute/doctrine with citation]. [Test with numbered elements]. [Key definitions].",
+      "application": "The court found [X] BECAUSE... The court reasoned that... The decisive factors were: (1)..., (2)..., (3)... The court rejected [party]'s argument BECAUSE...",
+      "conclusion": "Yes/No, the court held [specific holding] because [key rationale], [damages if any].",
+      "utility": "**For Your Brief**: Argue that... Cite for the proposition that... **Key Quote**: '...' **Anticipate Opposition**: ..."
     }}
   ]
 }}
 
 CRITICAL REQUIREMENTS:
-- The APPLICATION must explain the court's REASONING, not just recite facts
-- The UTILITY must address the attorney directly as "you/your" - NEVER say "the user" or "the attorney"
-- NO conditional "if" language in UTILITY - you know the allegations, speak directly about them
-- Reference the specific allegations listed above when explaining utility"""
+1. ISSUE must be a "Whether..." question with legal standard + facts
+2. RULE must have citation + numbered elements/test
+3. APPLICATION must use causal language and explain WHY - not just list facts
+4. CONCLUSION must start Yes/No and answer the Issue directly
+5. UTILITY must use command verbs (Argue, Cite, Use) - NO "if" or "might be useful"
+6. Address attorney as "you" throughout - NEVER "the user" or "the attorney\""""
 
         try:
             config = Config(
