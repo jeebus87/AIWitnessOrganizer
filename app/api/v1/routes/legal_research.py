@@ -18,6 +18,81 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/legal-research", tags=["Legal Research"])
 
 
+def extract_case_characteristics(claims_data: list, witnesses_data: list) -> dict:
+    """
+    Extract defendant type, harm type, and key facts from case data.
+
+    This provides richer context for AI-generated search queries and analysis.
+    """
+    facts = {
+        "defendant_type": None,
+        "harm_type": None,
+        "key_facts": [],
+        "legal_theories": []
+    }
+
+    # Keywords for defendant type detection
+    defendant_keywords = {
+        "employer": ["employer", "employment", "hired", "employee", "workplace", "job", "termination", "fired"],
+        "healthcare_provider": ["hospital", "medical", "physician", "doctor", "nurse", "healthcare", "patient", "clinic"],
+        "manufacturer": ["manufacturer", "product", "defect", "manufacturing", "design", "warning label"],
+        "property_owner": ["property owner", "landlord", "premises", "tenant", "building", "slip and fall"],
+        "government": ["government", "city", "county", "state", "municipal", "police", "officer"],
+        "corporation": ["corporation", "company", "business", "LLC", "Inc", "corporate"]
+    }
+
+    # Keywords for harm type detection
+    harm_keywords = {
+        "bodily_injury": ["injury", "harm", "assault", "battery", "physical", "pain", "suffering", "wounded"],
+        "emotional_distress": ["emotional distress", "mental anguish", "psychological", "trauma", "harassment"],
+        "economic_loss": ["economic loss", "financial", "wages", "income", "lost earnings", "damages"],
+        "wrongful_death": ["wrongful death", "death", "deceased", "fatal", "killed"],
+        "property_damage": ["property damage", "damaged property", "destroyed", "vandalism"]
+    }
+
+    # Legal theory keywords
+    legal_theory_keywords = {
+        "negligent_hiring": ["negligent hiring", "failed to screen", "background check", "negligent retention"],
+        "negligence": ["negligence", "duty of care", "breach of duty", "reasonable care"],
+        "premises_liability": ["premises liability", "dangerous condition", "unsafe", "hazard"],
+        "vicarious_liability": ["vicarious liability", "respondeat superior", "scope of employment"],
+        "intentional_tort": ["intentional", "willful", "deliberate", "assault", "battery"]
+    }
+
+    # Analyze claims
+    for claim in claims_data:
+        text = claim.get("text", "").lower()
+
+        # Detect defendant type
+        if not facts["defendant_type"]:
+            for dtype, keywords in defendant_keywords.items():
+                if any(kw in text for kw in keywords):
+                    facts["defendant_type"] = dtype
+                    break
+
+        # Detect harm type
+        if not facts["harm_type"]:
+            for htype, keywords in harm_keywords.items():
+                if any(kw in text for kw in keywords):
+                    facts["harm_type"] = htype
+                    break
+
+        # Detect legal theories
+        for theory, keywords in legal_theory_keywords.items():
+            if theory not in facts["legal_theories"]:
+                if any(kw in text for kw in keywords):
+                    facts["legal_theories"].append(theory)
+
+    # Extract key facts from witness observations
+    for w in witnesses_data[:5]:
+        observation = w.get("observation")
+        if observation:
+            # Keep first 300 chars of meaningful observations
+            facts["key_facts"].append(observation[:300])
+
+    return facts
+
+
 class CaseLawResultResponse(BaseModel):
     """Response model for a single case law result"""
     id: int
@@ -242,11 +317,70 @@ async def generate_legal_research(
         # Legacy format for fallback
         witness_observations = [w.observation for w in witnesses if w.observation]
 
-        # Try AI-generated queries first
+        # Extract case characteristics for richer context
+        case_facts = extract_case_characteristics(claims_data, witnesses_data)
+
+        # Build comprehensive user_context early so it can be used for query generation
+        allegations = [
+            {
+                "text": c["text"],
+                "confidence": c.get("confidence", 0),
+                "type": c.get("type", "allegation")
+            }
+            for c in claims_data if c.get("type") == "allegation"
+        ]
+        defenses = [c["text"] for c in claims_data if c.get("type") == "defense"]
+
+        # Build witness context for claims_summary
+        witness_context = []
+        for w in witnesses_data[:5]:
+            w_info = f"{w['name']} ({w['role']})"
+            if w.get("relevance_reason"):
+                w_info += f": {w['relevance_reason']}"
+            if w.get("observation"):
+                w_info += f" - Observed: {w['observation']}"
+            witness_context.append(w_info)
+
+        # Build claims summary for display
+        claims_parts = []
+        if allegations:
+            claims_parts.append(f"ALLEGATIONS: {'; '.join(a['text'][:200] for a in allegations[:5])}")
+        if defenses:
+            claims_parts.append(f"DEFENSES: {'; '.join(defenses[:3])}")
+        if witness_context:
+            claims_parts.append(f"KEY WITNESSES: {'; '.join(witness_context)}")
+
+        claims_summary = " | ".join(claims_parts) if claims_parts else f"Matter: {matter.description or matter.display_number}"
+
+        # Comprehensive user_context for AI analysis
+        user_context = {
+            "practice_area": practice_area,
+            "jurisdiction": jurisdiction,
+            "defendant_type": case_facts["defendant_type"],
+            "harm_type": case_facts["harm_type"],
+            "legal_theories": case_facts["legal_theories"],
+            "allegations": allegations[:5],
+            "defenses": defenses[:3],
+            "key_facts": case_facts["key_facts"],
+            "witnesses": [
+                {
+                    "name": w["name"],
+                    "role": w["role"],
+                    "observation": w.get("observation", "")
+                }
+                for w in witnesses_data[:5]
+            ],
+            "claims_summary": claims_summary[:2000]
+        }
+
+        logger.info(f"Built user_context: defendant_type={case_facts['defendant_type']}, harm_type={case_facts['harm_type']}, legal_theories={case_facts['legal_theories']}")
+
+        # Try AI-generated queries first with full user_context
         queries = await legal_service.generate_ai_search_queries(
             practice_area=practice_area,
             claims=claims_data,
             witness_summaries=witnesses_data,
+            user_context=user_context,
             max_queries=5
         )
 
@@ -297,48 +431,19 @@ async def generate_legal_research(
         # Limit to top 15 results
         all_results = all_results[:15]
 
-        # Fetch opinion text for cases with empty snippets
-        logger.info("Fetching opinion text for cases with empty snippets...")
+        # Fetch opinion text for cases with short snippets (need more context for analysis)
+        logger.info("Fetching opinion text for cases with short snippets...")
         for r in all_results:
-            if not r.snippet or len(r.snippet.strip()) < 50:
+            if not r.snippet or len(r.snippet.strip()) < 1000:
                 try:
                     opinion_text = await legal_service.get_opinion_text(r.id)
                     if opinion_text:
-                        r.snippet = opinion_text[:1500]  # Use first 1500 chars
+                        r.snippet = opinion_text[:2000]  # Use first 2000 chars for better analysis
                         logger.info(f"Fetched opinion text for case {r.id}: {len(r.snippet)} chars")
                 except Exception as e:
                     logger.warning(f"Failed to fetch opinion text for {r.id}: {e}")
 
-        # Build rich user context from all parsed information
-        # Separate allegations and defenses
-        allegations = [c["text"] for c in claims_data if c.get("type") == "allegation"]
-        defenses = [c["text"] for c in claims_data if c.get("type") == "defense"]
-
-        # Build witness context with observations
-        witness_context = []
-        for w in witnesses_data[:5]:
-            w_info = f"{w['name']} ({w['role']})"
-            if w.get("relevance_reason"):
-                w_info += f": {w['relevance_reason']}"
-            if w.get("observation"):
-                w_info += f" - Observed: {w['observation']}"
-            witness_context.append(w_info)
-
-        # Build comprehensive claims summary
-        claims_parts = []
-        if allegations:
-            claims_parts.append(f"ALLEGATIONS: {'; '.join(allegations[:5])}")
-        if defenses:
-            claims_parts.append(f"DEFENSES: {'; '.join(defenses[:3])}")
-        if witness_context:
-            claims_parts.append(f"KEY WITNESSES: {'; '.join(witness_context)}")
-
-        claims_summary = " | ".join(claims_parts) if claims_parts else f"Matter: {matter.description or matter.display_number}"
-
-        user_context = {
-            "practice_area": practice_area,
-            "claims_summary": claims_summary[:2000]  # Allow more context, up to 2000 chars
-        }
+        # Prepare cases for AI analysis
         cases_for_analysis = [
             {
                 "id": r.id,

@@ -503,6 +503,7 @@ class LegalResearchService:
         practice_area: str,
         claims: List[Dict[str, Any]],
         witness_summaries: List[Dict[str, Any]],
+        user_context: Optional[Dict[str, Any]] = None,
         max_queries: int = 5
     ) -> List[str]:
         """
@@ -512,20 +513,31 @@ class LegalResearchService:
             practice_area: The legal practice area (e.g., "Personal Injury")
             claims: List of claim dicts with 'type', 'text' keys
             witness_summaries: List of witness dicts with 'name', 'role', 'relevance_reason'
+            user_context: Optional dict with defendant_type, harm_type, key_facts, etc.
             max_queries: Maximum number of queries to generate
 
         Returns:
-            List of search query strings optimized for CourtListener
+            List of search query strings optimized for CourtListener (7-12 words each)
         """
         if not claims and not witness_summaries:
             return []
+
+        user_context = user_context or {}
+
+        # Extract enriched context
+        defendant_type = user_context.get("defendant_type", "Unknown")
+        harm_type = user_context.get("harm_type", "Unknown")
+        legal_theories = user_context.get("legal_theories", [])
+        key_facts = user_context.get("key_facts", [])
+        jurisdiction = user_context.get("jurisdiction", {})
+        state = jurisdiction.get("state", "California") if isinstance(jurisdiction, dict) else "California"
 
         # Format allegations and defenses
         allegations = []
         defenses = []
         for claim in claims:
             claim_type = claim.get("type", "").lower()
-            claim_text = claim.get("text", "")[:200]
+            claim_text = claim.get("text", "")[:300]  # Allow more text for context
             if claim_type == "allegation":
                 allegations.append(f"- {claim_text}")
             elif claim_type == "defense":
@@ -533,35 +545,66 @@ class LegalResearchService:
             else:
                 allegations.append(f"- {claim_text}")  # Default to allegation
 
-        # Format witness info
+        # Format witness info with observations
         witness_info = []
         for w in witness_summaries[:5]:
             name = w.get("name", "Unknown")
             role = w.get("role", "unknown")
-            reason = w.get("relevance_reason", "")[:100]
+            reason = w.get("relevance_reason", "")[:150]
+            observation = w.get("observation", "")[:150]
+            info = f"- {name} ({role})"
             if reason:
-                witness_info.append(f"- {name} ({role}): {reason}")
+                info += f": {reason}"
+            if observation:
+                info += f" | Observed: {observation}"
+            witness_info.append(info)
 
-        # Build prompt
-        prompt = f"""You are a legal research assistant. Generate {max_queries} search queries for CourtListener to find relevant California case law.
+        # Format key facts from observations
+        facts_text = ""
+        if key_facts:
+            facts_text = "\n".join(f"- {fact[:200]}" for fact in key_facts[:3])
 
-Practice Area: {practice_area or "General Litigation"}
+        # Build prompt with richer context for 7-12 word queries
+        prompt = f"""You are a legal research assistant. Generate {max_queries} TARGETED search queries for CourtListener to find relevant case law.
 
-Key Allegations:
+CASE CONTEXT:
+- Practice Area: {practice_area or "General Litigation"}
+- Jurisdiction: {state.upper() if state else "California"}
+- Defendant Type: {defendant_type or "Unknown"}
+- Harm Type: {harm_type or "Unknown"}
+- Legal Theories: {', '.join(legal_theories) if legal_theories else "To be determined from claims"}
+
+PRIMARY ALLEGATIONS (highest priority):
 {chr(10).join(allegations[:5]) if allegations else "None specified"}
 
-Key Defenses:
+KEY DEFENSES:
 {chr(10).join(defenses[:3]) if defenses else "None specified"}
 
-Key Witness Context:
+KEY FACTUAL PATTERNS (from witnesses):
+{facts_text if facts_text else "None specified"}
+
+KEY WITNESSES:
 {chr(10).join(witness_info) if witness_info else "None specified"}
 
-Generate specific legal search queries that will find precedent cases. Focus on:
-- Specific causes of action and legal theories (e.g., "negligent hiring employer liability")
-- Key factual patterns from the case
-- Relevant California legal standards
+REQUIREMENTS:
+1. Each query MUST be 7-12 words - specific enough to find relevant cases
+2. Combine legal theory + fact pattern (e.g., "employer negligent hiring assault customer background check failure")
+3. Include jurisdiction-specific terms where relevant (e.g., "California employer duty care")
+4. Avoid single-concept queries like "negligence" or "negligent hiring" alone - too broad
+5. Focus on the specific defendant type ({defendant_type}) and harm type ({harm_type})
 
-Return ONLY the search queries, one per line. No numbering, bullets, or explanations. Each query should be 3-8 words."""
+EXAMPLES OF GOOD QUERIES:
+- "California employer negligent hiring assault customer background check failure"
+- "hospital vicarious liability nurse intentional tort patient harm"
+- "premises liability dangerous condition slip fall business invitee California"
+- "employer liability employee criminal act scope employment foreseeable"
+
+EXAMPLES OF BAD QUERIES (too short/generic):
+- "negligent hiring" (only 2 words)
+- "employer liability" (too vague)
+- "personal injury" (too broad)
+
+Return ONLY the search queries, one per line. No numbering, bullets, or explanations."""
 
         try:
             # Use Bedrock Claude
@@ -580,8 +623,8 @@ Return ONLY the search queries, one per line. No numbering, bullets, or explanat
 
             body = {
                 "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 500,
-                "temperature": 0.3,
+                "max_tokens": 800,  # More tokens for longer queries
+                "temperature": 0.5,  # Higher temperature for more creative query combinations
                 "messages": [{"role": "user", "content": prompt}]
             }
 
@@ -622,7 +665,7 @@ Return ONLY the search queries, one per line. No numbering, bullets, or explanat
 
         Args:
             cases: List of case dicts with 'id', 'case_name', 'snippet', 'court'
-            user_context: Dict with 'practice_area', 'claims_summary'
+            user_context: Dict with practice_area, defendant_type, harm_type, allegations, key_facts
 
         Returns:
             Dict mapping case_id to relevance explanation string
@@ -631,14 +674,27 @@ Return ONLY the search queries, one per line. No numbering, bullets, or explanat
             return {}
 
         practice_area = user_context.get("practice_area", "General Litigation")
-        claims_summary = user_context.get("claims_summary", "")
+        defendant_type = user_context.get("defendant_type", "Unknown")
+        harm_type = user_context.get("harm_type", "Unknown")
+        allegations = user_context.get("allegations", [])
+        key_facts = user_context.get("key_facts", [])
 
-        # Format cases for the prompt
+        # Format allegations for prompt
+        allegations_text = ""
+        if allegations:
+            allegations_text = "\n".join(f"- {a['text'][:200]}" for a in allegations[:3] if isinstance(a, dict) and a.get('text'))
+
+        # Format key facts
+        facts_text = ""
+        if key_facts:
+            facts_text = "\n".join(f"- {f[:150]}" for f in key_facts[:3])
+
+        # Format cases for the prompt with longer snippets (1000 chars)
         cases_text = []
         for i, case in enumerate(cases[:15], 1):
-            case_name = case.get("case_name", "Unknown")[:80]
+            case_name = case.get("case_name", "Unknown")[:100]
             court = case.get("court", "Unknown")
-            snippet = case.get("snippet", "")[:300]
+            snippet = case.get("snippet", "")[:1000]  # Increased from 300 to 1000
             # Clean snippet of HTML
             snippet = re.sub(r'<[^>]+>', '', snippet)
             cases_text.append(f"""Case {i}: {case_name}
@@ -646,28 +702,38 @@ Court: {court}
 Excerpt: {snippet}
 ---""")
 
-        prompt = f"""You are a legal research assistant. For each case below, write a 1-2 sentence explanation of why it may be relevant to the user's matter. Be SPECIFIC - reference actual legal principles, factual patterns, or procedural issues from each case.
+        prompt = f"""You are a legal research assistant. Analyze the relevance of each case to the user's specific matter.
 
-USER'S MATTER:
+USER'S CASE:
 - Practice Area: {practice_area}
-- Key Claims: {claims_summary[:500] if claims_summary else "Not specified"}
+- Defendant Type: {defendant_type}
+- Harm Type: {harm_type}
+- Key Allegations:
+{allegations_text if allegations_text else "Not specified"}
+- Key Facts:
+{facts_text if facts_text else "Not specified"}
 
 CASES TO ANALYZE:
 {chr(10).join(cases_text)}
 
-For each case, respond in this exact JSON format:
+For each case, explain in 2-3 sentences:
+1. What SPECIFIC legal principle or holding does this case establish?
+2. How do the facts COMPARE to the user's facts (defendant type: {defendant_type}, harm: {harm_type})?
+3. Is this DIRECTLY relevant (binding on the user's key issue) or TANGENTIALLY relevant (general principles)?
+
+CRITICAL REQUIREMENTS:
+- Be SPECIFIC - reference actual holdings, standards, or tests from each case
+- COMPARE to the user's specific facts (not generic legal concepts)
+- Never say "may be relevant" without explaining HOW and WHY
+- Mention if the defendant type or harm type matches the user's case
+
+Respond in JSON:
 {{
   "explanations": [
-    {{"case_num": 1, "explanation": "Your specific explanation here"}},
-    {{"case_num": 2, "explanation": "Your specific explanation here"}}
+    {{"case_num": 1, "explanation": "Your specific 2-3 sentence explanation"}},
+    {{"case_num": 2, "explanation": "Your specific 2-3 sentence explanation"}}
   ]
-}}
-
-Write explanations that:
-- Reference specific legal doctrines or standards from the case
-- Connect the case facts to the user's matter
-- Avoid generic phrases like "may be relevant" without specifics
-- Are 1-2 sentences each"""
+}}"""
 
         try:
             config = Config(
@@ -685,8 +751,8 @@ Write explanations that:
 
             body = {
                 "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 2000,
-                "temperature": 0.2,
+                "max_tokens": 3000,  # More tokens for detailed explanations
+                "temperature": 0.4,  # Higher temperature for more specific, creative connections
                 "messages": [{"role": "user", "content": prompt}]
             }
 
@@ -741,7 +807,7 @@ Write explanations that:
 
         Args:
             cases: List of case dicts with 'id', 'case_name', 'snippet', 'court'
-            user_context: Dict with 'practice_area', 'claims_summary'
+            user_context: Dict with practice_area, defendant_type, harm_type, allegations, key_facts
 
         Returns:
             Dict mapping case_id to dict with 'issue', 'rule', 'application', 'conclusion', 'utility'
@@ -750,14 +816,27 @@ Write explanations that:
             return {}
 
         practice_area = user_context.get("practice_area", "General Litigation")
-        claims_summary = user_context.get("claims_summary", "")
+        defendant_type = user_context.get("defendant_type", "Unknown")
+        harm_type = user_context.get("harm_type", "Unknown")
+        allegations = user_context.get("allegations", [])
+        key_facts = user_context.get("key_facts", [])
 
-        # Format cases for the prompt
+        # Format allegations for prompt
+        allegations_text = ""
+        if allegations:
+            allegations_text = "\n".join(f"- {a['text'][:200]}" for a in allegations[:3] if isinstance(a, dict) and a.get('text'))
+
+        # Format key facts
+        facts_text = ""
+        if key_facts:
+            facts_text = "\n".join(f"- {f[:150]}" for f in key_facts[:3])
+
+        # Format cases for the prompt with longer snippets (1500 chars)
         cases_text = []
         for i, case in enumerate(cases[:15], 1):
-            case_name = case.get("case_name", "Unknown")[:80]
+            case_name = case.get("case_name", "Unknown")[:100]
             court = case.get("court", "Unknown")
-            snippet = case.get("snippet", "")[:400]
+            snippet = case.get("snippet", "")[:1500]  # Increased from 400 to 1500
             # Clean snippet of HTML
             snippet = re.sub(r'<[^>]+>', '', snippet)
             cases_text.append(f"""Case {i}: {case_name}
@@ -765,42 +844,63 @@ Court: {court}
 Excerpt: {snippet}
 ---""")
 
-        prompt = f"""You are a legal research analyst creating case briefs. For each case, write a proper IRAC analysis based on the case excerpt.
+        prompt = f"""You are a legal research analyst creating case briefs for an attorney.
 
-USER'S CASE:
+USER'S CASE (for relevance comparison):
 - Practice Area: {practice_area}
-- Claims: {claims_summary[:800] if claims_summary else "General civil litigation"}
+- Position: PLAINTIFF
+- Defendant Type: {defendant_type}
+- Harm Type: {harm_type}
+- Key Allegations:
+{allegations_text if allegations_text else "Not specified"}
+- Key Factual Patterns:
+{facts_text if facts_text else "Not specified"}
 
 CASES TO BRIEF:
 {chr(10).join(cases_text)}
 
-Write a proper legal IRAC for each case following this format:
+For EACH case, provide a proper IRAC analysis:
 
-ISSUE: State as a specific legal question. Example: "Whether an employer may be held liable for negligent hiring when it fails to conduct background checks on employees who later cause harm?"
+ISSUE: State the specific legal question as a question.
+GOOD: "Whether an employer owes a duty to conduct background checks before hiring for positions with access to vulnerable populations?"
+BAD: "The issue is negligent hiring." (not a question, too vague)
 
-RULE: State the specific legal rule, statute, or test the court applied. Example: "Under California Civil Code § 1714, employers owe a duty of care to third parties when hiring employees, requiring reasonable investigation into an applicant's fitness for the position."
+RULE: State the SPECIFIC legal rule, statute, or test the court applied. Include citations if visible.
+GOOD: "Under California Civil Code § 1714 and the doctrine of respondeat superior, employers must exercise reasonable care in hiring, including conducting background checks when the position involves foreseeable risk of harm to third parties."
+BAD: "The rule is that employers must be careful when hiring." (too vague, no citation)
 
-APPLICATION: Explain how the court applied the rule to the specific facts of THIS case. Reference actual facts from the excerpt. Example: "The court found the employer breached its duty because it hired the defendant without verifying his employment history, despite the position requiring interaction with vulnerable populations."
+APPLICATION: How did the court apply the rule to THIS case's specific facts? Reference actual parties, facts, and reasoning from the excerpt.
+GOOD: "The court found ABC Corp breached its duty because (1) it hired defendant without any background check despite the position involving patient contact; (2) a standard check would have revealed prior assault convictions; (3) the subsequent assault was foreseeable given defendant's history."
+BAD: "The court applied the rule to the facts." (no specifics)
 
-CONCLUSION: State the court's actual holding. Example: "The court held the employer liable for negligent hiring, awarding plaintiff $500,000 in damages."
+CONCLUSION: The court's actual holding and any damages awarded.
+GOOD: "The court held ABC Corp liable for negligent hiring, affirming the jury verdict of $350,000 in compensatory damages and denying punitive damages."
+BAD: "The plaintiff won." (no details)
 
-UTILITY: Explain specifically how this case helps the user's matter. Example: "This case supports plaintiff's negligent hiring claim by establishing that employers in California must conduct background checks for positions involving public contact."
+UTILITY: How does this case SPECIFICALLY help with the user's {practice_area} matter involving a {defendant_type} and {harm_type}? Compare to user's facts.
+GOOD: "This case strongly supports the plaintiff's position because it establishes liability for the same conduct alleged here - failure to conduct background checks for positions involving {harm_type}. The {defendant_type} defendant here faces similar exposure."
+BAD: "This case is relevant to the user's case." (no comparison)
 
 Respond in JSON:
 {{
   "analyses": [
     {{
       "case_num": 1,
-      "issue": "Whether [specific legal question from this case]?",
-      "rule": "[Specific statute, test, or legal standard the court applied]",
-      "application": "[How the court applied the rule to THIS case's facts]",
-      "conclusion": "[The court's actual holding in this case]",
-      "utility": "[How this case specifically helps the user's {practice_area} matter]"
+      "issue": "Whether [specific legal question from THIS case as a question]?",
+      "rule": "[Specific statute/citation, legal test, and elements required]",
+      "application": "[How court applied rule to THIS case's specific facts with party names]",
+      "conclusion": "[Court's holding with damages if mentioned]",
+      "utility": "[How this helps user's specific {practice_area} case against {defendant_type}]"
     }}
   ]
 }}
 
-CRITICAL: Base your analysis on the actual case excerpt provided. If the excerpt discusses specific facts, parties, or holdings, reference them directly."""
+CRITICAL REQUIREMENTS:
+- Base analysis on the ACTUAL case excerpt - reference specific facts, parties, holdings
+- The ISSUE must be a question ending with "?"
+- The RULE must include specific legal standards, not vague principles
+- The APPLICATION must reference specific facts from the excerpt
+- The UTILITY must compare to the user's specific case facts"""
 
         try:
             config = Config(
@@ -818,8 +918,8 @@ CRITICAL: Base your analysis on the actual case excerpt provided. If the excerpt
 
             body = {
                 "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 4000,
-                "temperature": 0.3,
+                "max_tokens": 6000,  # More tokens for detailed IRAC analysis
+                "temperature": 0.4,  # Higher temperature for more specific analysis
                 "messages": [{"role": "user", "content": prompt}]
             }
 
