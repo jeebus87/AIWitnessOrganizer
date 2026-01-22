@@ -5,13 +5,13 @@ import { useState, useEffect } from "react";
 import { ChevronRight, ChevronDown, Folder as FolderIcon, FolderOpen, Loader2, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
@@ -251,16 +251,16 @@ export function FolderSelectionDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle>Select Folders to Process</DialogTitle>
-          <DialogDescription>
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-full sm:max-w-xl flex flex-col">
+        <SheetHeader>
+          <SheetTitle>Select Folders to Process</SheetTitle>
+          <SheetDescription>
             Choose which folders to scan for {matterName}
-          </DialogDescription>
-        </DialogHeader>
+          </SheetDescription>
+        </SheetHeader>
 
-        <div className="flex-1 overflow-hidden flex flex-col gap-4">
+        <div className="flex-1 overflow-hidden flex flex-col gap-4 px-6">
           {/* Selection Mode Tabs */}
           <div className="flex gap-2">
             <Button
@@ -375,15 +375,15 @@ export function FolderSelectionDialog({
           </div>
         </div>
 
-        <DialogFooter className="gap-2">
+        <SheetFooter className="gap-2 flex-row justify-end border-t pt-4">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button onClick={handleConfirm}>
             Start Processing
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
   );
 }
