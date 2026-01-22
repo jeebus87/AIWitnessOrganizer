@@ -51,6 +51,12 @@ class CaseLawResult:
     relevance_score: float = 0.0
     matched_query: Optional[str] = None  # The search query that found this case
     relevance_explanation: Optional[str] = None  # AI-generated explanation of relevance to user's case
+    # IRAC analysis fields
+    irac_issue: Optional[str] = None
+    irac_rule: Optional[str] = None
+    irac_application: Optional[str] = None
+    irac_conclusion: Optional[str] = None
+    case_utility: Optional[str] = None  # How this case helps the user's specific matter
 
 
 class LegalResearchService:
@@ -671,6 +677,139 @@ Write explanations that:
 
         except Exception as e:
             logger.error(f"AI relevance analysis failed: {e}")
+            return {}
+
+    async def analyze_case_irac_batch(
+        self,
+        cases: List[Dict[str, Any]],
+        user_context: Dict[str, Any]
+    ) -> Dict[int, Dict[str, str]]:
+        """
+        Use Claude AI to generate IRAC analysis for multiple cases in one batch call.
+
+        Args:
+            cases: List of case dicts with 'id', 'case_name', 'snippet', 'court'
+            user_context: Dict with 'practice_area', 'claims_summary'
+
+        Returns:
+            Dict mapping case_id to dict with 'issue', 'rule', 'application', 'conclusion', 'utility'
+        """
+        if not cases:
+            return {}
+
+        practice_area = user_context.get("practice_area", "General Litigation")
+        claims_summary = user_context.get("claims_summary", "")
+
+        # Format cases for the prompt
+        cases_text = []
+        for i, case in enumerate(cases[:15], 1):
+            case_name = case.get("case_name", "Unknown")[:80]
+            court = case.get("court", "Unknown")
+            snippet = case.get("snippet", "")[:400]
+            # Clean snippet of HTML
+            snippet = re.sub(r'<[^>]+>', '', snippet)
+            cases_text.append(f"""Case {i}: {case_name}
+Court: {court}
+Excerpt: {snippet}
+---""")
+
+        prompt = f"""You are a legal research analyst. For each case below, provide a structured IRAC analysis tailored to the user's matter.
+
+USER'S MATTER CONTEXT:
+- Practice Area: {practice_area}
+- Key Claims: {claims_summary[:500] if claims_summary else "Not specified"}
+
+CASES TO ANALYZE:
+{chr(10).join(cases_text)}
+
+For each case, provide:
+- ISSUE: The legal question the court addressed (1-2 sentences)
+- RULE: The legal rule or standard the court applied (1-2 sentences)
+- APPLICATION: How the court applied the rule to the facts (1-2 sentences)
+- CONCLUSION: What the court concluded (1 sentence)
+- UTILITY: How this case specifically helps the user's matter (1-2 sentences, reference their claims)
+
+Respond in this exact JSON format:
+{{
+  "analyses": [
+    {{
+      "case_num": 1,
+      "issue": "The court addressed whether...",
+      "rule": "Under California law...",
+      "application": "The court found that...",
+      "conclusion": "The court held...",
+      "utility": "This case supports the user's claim by..."
+    }}
+  ]
+}}
+
+Be specific and reference actual legal principles. Each field should be 1-2 sentences."""
+
+        try:
+            config = Config(
+                region_name=settings.aws_region,
+                retries={"max_attempts": 3, "mode": "adaptive"},
+                read_timeout=180,
+                connect_timeout=30
+            )
+            client = boto3.client(
+                service_name="bedrock-runtime",
+                config=config,
+                aws_access_key_id=settings.aws_access_key_id,
+                aws_secret_access_key=settings.aws_secret_access_key,
+            )
+
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 4000,
+                "temperature": 0.3,
+                "messages": [{"role": "user", "content": prompt}]
+            }
+
+            # Use Sonnet for better reasoning on IRAC analysis
+            response = client.invoke_model(
+                modelId="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps(body)
+            )
+
+            response_body = json.loads(response["body"].read())
+            text_content = response_body.get("content", [{}])[0].get("text", "")
+
+            # Parse JSON response
+            try:
+                # Find JSON in response
+                json_match = re.search(r'\{[\s\S]*\}', text_content)
+                if json_match:
+                    data = json.loads(json_match.group())
+                    analyses = data.get("analyses", [])
+
+                    # Map back to case IDs
+                    result = {}
+                    for analysis in analyses:
+                        case_num = analysis.get("case_num", 0) - 1  # Convert to 0-indexed
+                        if 0 <= case_num < len(cases):
+                            case_id = cases[case_num].get("id")
+                            if case_id:
+                                result[case_id] = {
+                                    "issue": analysis.get("issue", ""),
+                                    "rule": analysis.get("rule", ""),
+                                    "application": analysis.get("application", ""),
+                                    "conclusion": analysis.get("conclusion", ""),
+                                    "utility": analysis.get("utility", "")
+                                }
+
+                    logger.info(f"AI generated IRAC analysis for {len(result)} cases")
+                    return result
+
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse AI IRAC response: {e}")
+
+            return {}
+
+        except Exception as e:
+            logger.error(f"AI IRAC analysis failed: {e}")
             return {}
 
 

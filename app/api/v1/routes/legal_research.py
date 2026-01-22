@@ -98,7 +98,12 @@ async def get_legal_research_for_job(
                 "absolute_url": r.get("absolute_url", ""),
                 "matched_query": r.get("matched_query"),
                 "relevance_score": r.get("relevance_score"),
-                "relevance_explanation": r.get("relevance_explanation")
+                "relevance_explanation": r.get("relevance_explanation"),
+                "irac_issue": r.get("irac_issue"),
+                "irac_rule": r.get("irac_rule"),
+                "irac_application": r.get("irac_application"),
+                "irac_conclusion": r.get("irac_conclusion"),
+                "case_utility": r.get("case_utility")
             })
 
     return {
@@ -164,7 +169,12 @@ async def generate_legal_research(
                 "absolute_url": r.get("absolute_url", ""),
                 "matched_query": r.get("matched_query"),
                 "relevance_score": r.get("relevance_score"),
-                "relevance_explanation": r.get("relevance_explanation")
+                "relevance_explanation": r.get("relevance_explanation"),
+                "irac_issue": r.get("irac_issue"),
+                "irac_rule": r.get("irac_rule"),
+                "irac_application": r.get("irac_application"),
+                "irac_conclusion": r.get("irac_conclusion"),
+                "case_utility": r.get("case_utility")
             })
         return {
             "has_results": True,
@@ -310,6 +320,21 @@ async def generate_legal_research(
         for r in all_results:
             r.relevance_explanation = relevance_explanations.get(r.id)
 
+        # Generate IRAC analysis for all cases (batched)
+        irac_analyses = await legal_service.analyze_case_irac_batch(
+            cases=cases_for_analysis,
+            user_context=user_context
+        )
+
+        # Apply IRAC analysis to results
+        for r in all_results:
+            irac = irac_analyses.get(r.id, {})
+            r.irac_issue = irac.get("issue")
+            r.irac_rule = irac.get("rule")
+            r.irac_application = irac.get("application")
+            r.irac_conclusion = irac.get("conclusion")
+            r.case_utility = irac.get("utility")
+
         # Save results to database
         results_json = [
             {
@@ -323,7 +348,12 @@ async def generate_legal_research(
                 "pdf_url": r.pdf_url,
                 "relevance_score": r.relevance_score,
                 "matched_query": r.matched_query,
-                "relevance_explanation": r.relevance_explanation
+                "relevance_explanation": r.relevance_explanation,
+                "irac_issue": r.irac_issue,
+                "irac_rule": r.irac_rule,
+                "irac_application": r.irac_application,
+                "irac_conclusion": r.irac_conclusion,
+                "case_utility": r.case_utility
             }
             for r in all_results
         ]
@@ -353,7 +383,12 @@ async def generate_legal_research(
                 "absolute_url": r.get("absolute_url", ""),
                 "matched_query": r.get("matched_query"),
                 "relevance_score": r.get("relevance_score"),
-                "relevance_explanation": r.get("relevance_explanation")
+                "relevance_explanation": r.get("relevance_explanation"),
+                "irac_issue": r.get("irac_issue"),
+                "irac_rule": r.get("irac_rule"),
+                "irac_application": r.get("irac_application"),
+                "irac_conclusion": r.get("irac_conclusion"),
+                "case_utility": r.get("case_utility")
             })
 
         return {

@@ -122,7 +122,7 @@ export function LegalResearchDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent position="top" className="max-w-3xl max-h-[70vh] flex flex-col">
+      <DialogContent position="top" className="max-w-6xl max-h-[85vh] flex flex-col">
         {/* Saving overlay */}
         {submitting && (
           <div className="absolute inset-0 bg-background/80 flex items-center justify-center z-50 rounded-lg">
@@ -149,7 +149,7 @@ export function LegalResearchDialog({
           {loading ? (
             <div className="flex flex-col items-center justify-center h-full py-12">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-              <p className="text-sm text-muted-foreground mt-3">Searching for relevant case law...</p>
+              <p className="text-sm text-muted-foreground mt-3">Analyzing case law and generating IRAC breakdowns...</p>
             </div>
           ) : !hasResults ? (
             <div className="flex flex-col items-center justify-center h-full py-12 text-muted-foreground">
@@ -157,7 +157,7 @@ export function LegalResearchDialog({
               <p>No relevant case law found for this job.</p>
             </div>
           ) : (
-            <div className="space-y-3 py-2">
+            <div className="space-y-4 py-2">
               {results.map((result) => (
                 <CaseLawCard
                   key={result.id}
@@ -211,6 +211,8 @@ interface CaseLawCardProps {
 }
 
 function CaseLawCard({ result, isSelected, onToggle }: CaseLawCardProps) {
+  const hasIrac = result.irac_issue || result.irac_rule || result.irac_application || result.irac_conclusion;
+
   return (
     <div
       className={cn(
@@ -221,7 +223,8 @@ function CaseLawCard({ result, isSelected, onToggle }: CaseLawCardProps) {
       )}
       onClick={onToggle}
     >
-      <div className="flex items-start gap-3">
+      {/* Header row with checkbox and case name */}
+      <div className="flex items-start gap-3 mb-3">
         {/* Checkbox */}
         <div
           className={cn(
@@ -234,7 +237,7 @@ function CaseLawCard({ result, isSelected, onToggle }: CaseLawCardProps) {
           {isSelected && <Check className="h-3 w-3" />}
         </div>
 
-        {/* Content */}
+        {/* Case name and citation */}
         <div className="flex-1 min-w-0">
           <h4 className="font-medium text-sm leading-tight">{result.case_name}</h4>
           <p className="text-xs text-muted-foreground mt-1">
@@ -244,14 +247,22 @@ function CaseLawCard({ result, isSelected, onToggle }: CaseLawCardProps) {
             {(result.citation || result.court) && result.date_filed && " | "}
             {result.date_filed}
           </p>
+        </div>
+      </div>
+
+      {/* Two-column layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 ml-8">
+        {/* Left column: Why Relevant, Snippet, Link */}
+        <div className="space-y-3">
           {result.relevance_explanation && (
-            <div className="mt-2 text-xs">
+            <div className="text-xs">
               <span className="font-medium text-primary">Why Relevant: </span>
               <span className="text-muted-foreground">{result.relevance_explanation}</span>
             </div>
           )}
+
           {result.snippet && (
-            <div className="mt-2 p-2 bg-muted/50 rounded text-xs">
+            <div className="p-2 bg-muted/50 rounded text-xs">
               <span className="font-medium text-foreground">Relevant excerpt: </span>
               <span
                 className="text-muted-foreground"
@@ -262,17 +273,62 @@ function CaseLawCard({ result, isSelected, onToggle }: CaseLawCardProps) {
               />
             </div>
           )}
+
           <a
             href={result.absolute_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-2"
+            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
             onClick={(e) => e.stopPropagation()}
           >
             View on CourtListener
             <ExternalLink className="h-3 w-3" />
           </a>
         </div>
+
+        {/* Right column: IRAC Analysis */}
+        {hasIrac && (
+          <div className="space-y-2 border-l pl-4 lg:border-l-0 lg:pl-0 lg:border-t-0 border-t pt-3 lg:pt-0">
+            <h5 className="font-semibold text-xs text-muted-foreground uppercase tracking-wide mb-2">
+              IRAC Analysis
+            </h5>
+
+            {result.irac_issue && (
+              <div className="border-l-4 border-red-500 pl-2">
+                <h6 className="font-semibold text-xs text-red-600 dark:text-red-400 uppercase">Issue</h6>
+                <p className="text-xs text-muted-foreground mt-0.5">{result.irac_issue}</p>
+              </div>
+            )}
+
+            {result.irac_rule && (
+              <div className="border-l-4 border-blue-500 pl-2">
+                <h6 className="font-semibold text-xs text-blue-600 dark:text-blue-400 uppercase">Rule</h6>
+                <p className="text-xs text-muted-foreground mt-0.5">{result.irac_rule}</p>
+              </div>
+            )}
+
+            {result.irac_application && (
+              <div className="border-l-4 border-amber-500 pl-2">
+                <h6 className="font-semibold text-xs text-amber-600 dark:text-amber-400 uppercase">Application</h6>
+                <p className="text-xs text-muted-foreground mt-0.5">{result.irac_application}</p>
+              </div>
+            )}
+
+            {result.irac_conclusion && (
+              <div className="border-l-4 border-green-500 pl-2">
+                <h6 className="font-semibold text-xs text-green-600 dark:text-green-400 uppercase">Conclusion</h6>
+                <p className="text-xs text-muted-foreground mt-0.5">{result.irac_conclusion}</p>
+              </div>
+            )}
+
+            {result.case_utility && (
+              <div className="border-l-4 border-purple-500 pl-2 mt-3 pt-2 border-t border-border">
+                <h6 className="font-semibold text-xs text-purple-600 dark:text-purple-400 uppercase">How This Helps Your Case</h6>
+                <p className="text-xs text-foreground mt-0.5">{result.case_utility}</p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

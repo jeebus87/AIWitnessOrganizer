@@ -697,6 +697,12 @@ export interface CaseLawResult {
   relevance_score: number;
   matched_query: string | null;  // The search query that found this case
   relevance_explanation: string | null;  // AI-generated explanation of relevance to user's case
+  // IRAC analysis fields
+  irac_issue: string | null;
+  irac_rule: string | null;
+  irac_application: string | null;
+  irac_conclusion: string | null;
+  case_utility: string | null;  // How this case helps the user's specific matter
 }
 
 export interface LegalResearchResponse {
