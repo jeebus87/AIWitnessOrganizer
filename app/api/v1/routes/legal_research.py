@@ -297,10 +297,35 @@ async def generate_legal_research(
         # Limit to top 15 results
         all_results = all_results[:15]
 
-        # Analyze relevance for all cases using AI (batched)
+        # Build rich user context from all parsed information
+        # Separate allegations and defenses
+        allegations = [c["text"] for c in claims_data if c.get("type") == "allegation"]
+        defenses = [c["text"] for c in claims_data if c.get("type") == "defense"]
+
+        # Build witness context with observations
+        witness_context = []
+        for w in witnesses_data[:5]:
+            w_info = f"{w['name']} ({w['role']})"
+            if w.get("relevance_reason"):
+                w_info += f": {w['relevance_reason']}"
+            if w.get("observation"):
+                w_info += f" - Observed: {w['observation']}"
+            witness_context.append(w_info)
+
+        # Build comprehensive claims summary
+        claims_parts = []
+        if allegations:
+            claims_parts.append(f"ALLEGATIONS: {'; '.join(allegations[:5])}")
+        if defenses:
+            claims_parts.append(f"DEFENSES: {'; '.join(defenses[:3])}")
+        if witness_context:
+            claims_parts.append(f"KEY WITNESSES: {'; '.join(witness_context)}")
+
+        claims_summary = " | ".join(claims_parts) if claims_parts else f"Matter: {matter.description or matter.display_number}"
+
         user_context = {
             "practice_area": practice_area,
-            "claims_summary": "; ".join([c["text"][:100] for c in claims_data[:3]])
+            "claims_summary": claims_summary[:2000]  # Allow more context, up to 2000 chars
         }
         cases_for_analysis = [
             {
