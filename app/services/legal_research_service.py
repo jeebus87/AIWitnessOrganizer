@@ -587,7 +587,7 @@ Return ONLY the search queries, one per line. No numbering, bullets, or explanat
 
             # Use Haiku for fast, cheap query generation
             response = client.invoke_model(
-                modelId="anthropic.claude-3-5-haiku-20241022-v1:0",
+                modelId="us.anthropic.claude-3-5-haiku-20241022-v1:0",
                 contentType="application/json",
                 accept="application/json",
                 body=json.dumps(body)
@@ -692,7 +692,7 @@ Write explanations that:
 
             # Use Sonnet for better reasoning on relevance analysis
             response = client.invoke_model(
-                modelId="anthropic.claude-sonnet-4-5-20250929-v1:0",
+                modelId="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 contentType="application/json",
                 accept="application/json",
                 body=json.dumps(body)
@@ -825,7 +825,7 @@ CRITICAL: Base your analysis on the actual case excerpt provided. If the excerpt
 
             # Use Sonnet for better reasoning on IRAC analysis
             response = client.invoke_model(
-                modelId="anthropic.claude-sonnet-4-5-20250929-v1:0",
+                modelId="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 contentType="application/json",
                 accept="application/json",
                 body=json.dumps(body)
