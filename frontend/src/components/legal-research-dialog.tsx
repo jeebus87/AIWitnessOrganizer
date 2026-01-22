@@ -29,9 +29,9 @@ function parseMarkdown(text: string): string {
     .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
     // Convert line breaks to <br> for readability
     .replace(/\n/g, '<br />')
-    // Remove em dashes and replace with regular dashes
-    .replace(/—/g, '-')
-    .replace(/–/g, '-');
+    // Replace em dashes and en dashes with comma
+    .replace(/—/g, ', ')
+    .replace(/–/g, ', ');
 }
 
 interface LegalResearchDialogProps {
