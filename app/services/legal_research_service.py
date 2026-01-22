@@ -713,21 +713,27 @@ Court: {court}
 Excerpt: {snippet}
 ---""")
 
-        prompt = f"""You are a legal research analyst. For each case below, provide a structured IRAC analysis tailored to the user's matter.
+        prompt = f"""You are a legal research analyst. For each case below, provide a structured IRAC analysis.
 
 USER'S MATTER CONTEXT:
 - Practice Area: {practice_area}
-- Key Claims: {claims_summary[:500] if claims_summary else "Not specified"}
+- Key Claims: {claims_summary[:500] if claims_summary else "General civil litigation"}
 
 CASES TO ANALYZE:
 {chr(10).join(cases_text)}
 
+IMPORTANT INSTRUCTIONS:
+1. Use the case name, court, and excerpt to infer the legal issues - case names often indicate the type of dispute
+2. NEVER say "cannot be determined" or "insufficient information" - always provide your best analysis
+3. If the excerpt is limited, use the case name and court to infer likely legal issues (e.g., "People v." = criminal, employment terms suggest labor law, etc.)
+4. For UTILITY, explain how this type of case precedent could generally be useful in litigation
+
 For each case, provide:
-- ISSUE: The legal question the court addressed (1-2 sentences)
-- RULE: The legal rule or standard the court applied (1-2 sentences)
-- APPLICATION: How the court applied the rule to the facts (1-2 sentences)
-- CONCLUSION: What the court concluded (1 sentence)
-- UTILITY: How this case specifically helps the user's matter (1-2 sentences, reference their claims)
+- ISSUE: The legal question the court likely addressed based on case context (1-2 sentences)
+- RULE: The applicable legal rule or standard for this type of case (1-2 sentences)
+- APPLICATION: How courts typically apply this rule to similar facts (1-2 sentences)
+- CONCLUSION: The likely outcome or holding pattern for such cases (1 sentence)
+- UTILITY: How this case could support arguments in the user's {practice_area} matter (1-2 sentences)
 
 Respond in this exact JSON format:
 {{
@@ -736,14 +742,14 @@ Respond in this exact JSON format:
       "case_num": 1,
       "issue": "The court addressed whether...",
       "rule": "Under California law...",
-      "application": "The court found that...",
+      "application": "The court analyzed...",
       "conclusion": "The court held...",
-      "utility": "This case supports the user's claim by..."
+      "utility": "This case establishes precedent for..."
     }}
   ]
 }}
 
-Be specific and reference actual legal principles. Each field should be 1-2 sentences."""
+Be specific. Reference actual legal doctrines. Each field should be 1-2 substantive sentences."""
 
         try:
             config = Config(
