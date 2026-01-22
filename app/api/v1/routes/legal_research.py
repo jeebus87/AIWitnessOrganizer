@@ -97,7 +97,8 @@ async def get_legal_research_for_job(
                 "snippet": r.get("snippet", "")[:300],
                 "absolute_url": r.get("absolute_url", ""),
                 "matched_query": r.get("matched_query"),
-                "relevance_score": r.get("relevance_score")
+                "relevance_score": r.get("relevance_score"),
+                "relevance_explanation": r.get("relevance_explanation")
             })
 
     return {
@@ -162,7 +163,8 @@ async def generate_legal_research(
                 "snippet": r.get("snippet", "")[:300],
                 "absolute_url": r.get("absolute_url", ""),
                 "matched_query": r.get("matched_query"),
-                "relevance_score": r.get("relevance_score")
+                "relevance_score": r.get("relevance_score"),
+                "relevance_explanation": r.get("relevance_explanation")
             })
         return {
             "has_results": True,
@@ -188,15 +190,27 @@ async def generate_legal_research(
         # Get legal research service
         legal_service = get_legal_research_service()
         jurisdiction = legal_service.detect_jurisdiction(matter.display_number or "")
+        practice_area = matter.practice_area or "General Litigation"
 
-        # Get case claims
+        # Get case claims with types for richer context
         claims_result = await db.execute(
-            select(CaseClaim).where(CaseClaim.matter_id == job.target_matter_id).limit(10)
+            select(CaseClaim).where(
+                CaseClaim.matter_id == job.target_matter_id
+            ).order_by(CaseClaim.confidence_score.desc().nullslast()).limit(10)
         )
         claims = claims_result.scalars().all()
+        claims_data = [
+            {
+                "type": c.claim_type.value if c.claim_type else "allegation",
+                "text": c.claim_text,
+                "confidence": c.confidence_score
+            }
+            for c in claims
+        ]
+        # Legacy format for fallback
         claim_dicts = [{"claim_text": c.claim_text} for c in claims]
 
-        # Get witness observations
+        # Get witness summaries with roles and relevance reasons
         witness_result = await db.execute(
             select(Witness)
             .join(Document, Witness.document_id == Document.id)
@@ -206,14 +220,34 @@ async def generate_legal_research(
             ).limit(10)
         )
         witnesses = witness_result.scalars().all()
+        witnesses_data = [
+            {
+                "name": w.full_name,
+                "role": w.role.value if w.role else "unknown",
+                "relevance_reason": w.relevance_reason,
+                "observation": w.observation[:200] if w.observation else None
+            }
+            for w in witnesses
+        ]
+        # Legacy format for fallback
         witness_observations = [w.observation for w in witnesses if w.observation]
 
-        # Build search queries
-        queries = legal_service.build_search_queries(
-            claims=claim_dicts,
-            witness_observations=witness_observations,
+        # Try AI-generated queries first
+        queries = await legal_service.generate_ai_search_queries(
+            practice_area=practice_area,
+            claims=claims_data,
+            witness_summaries=witnesses_data,
             max_queries=5
         )
+
+        # Fallback to keyword-based if AI fails
+        if not queries:
+            logger.info("AI query generation returned empty, falling back to keyword-based")
+            queries = legal_service.build_search_queries(
+                claims=claim_dicts,
+                witness_observations=witness_observations,
+                max_queries=5
+            )
 
         if not queries:
             # No queries generated - return empty results
@@ -222,6 +256,8 @@ async def generate_legal_research(
                 "status": None,
                 "message": "No search queries could be generated from case data"
             }
+
+        logger.info(f"Using {len(queries)} queries for legal research: {queries}")
 
         # Search CourtListener
         all_results = []
@@ -248,6 +284,32 @@ async def generate_legal_research(
                 "message": "No relevant case law found"
             }
 
+        # Limit to top 15 results
+        all_results = all_results[:15]
+
+        # Analyze relevance for all cases using AI (batched)
+        user_context = {
+            "practice_area": practice_area,
+            "claims_summary": "; ".join([c["text"][:100] for c in claims_data[:3]])
+        }
+        cases_for_analysis = [
+            {
+                "id": r.id,
+                "case_name": r.case_name,
+                "snippet": r.snippet,
+                "court": r.court
+            }
+            for r in all_results
+        ]
+        relevance_explanations = await legal_service.analyze_case_relevance_batch(
+            cases=cases_for_analysis,
+            user_context=user_context
+        )
+
+        # Apply relevance explanations to results
+        for r in all_results:
+            r.relevance_explanation = relevance_explanations.get(r.id)
+
         # Save results to database
         results_json = [
             {
@@ -260,9 +322,10 @@ async def generate_legal_research(
                 "absolute_url": r.absolute_url,
                 "pdf_url": r.pdf_url,
                 "relevance_score": r.relevance_score,
-                "matched_query": r.matched_query
+                "matched_query": r.matched_query,
+                "relevance_explanation": r.relevance_explanation
             }
-            for r in all_results[:15]  # Limit to top 15
+            for r in all_results
         ]
 
         research_record = LegalResearchResult(
@@ -289,7 +352,8 @@ async def generate_legal_research(
                 "snippet": r.get("snippet", "")[:300],
                 "absolute_url": r.get("absolute_url", ""),
                 "matched_query": r.get("matched_query"),
-                "relevance_score": r.get("relevance_score")
+                "relevance_score": r.get("relevance_score"),
+                "relevance_explanation": r.get("relevance_explanation")
             })
 
         return {

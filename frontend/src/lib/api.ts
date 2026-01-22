@@ -696,6 +696,7 @@ export interface CaseLawResult {
   pdf_url: string | null;
   relevance_score: number;
   matched_query: string | null;  // The search query that found this case
+  relevance_explanation: string | null;  // AI-generated explanation of relevance to user's case
 }
 
 export interface LegalResearchResponse {

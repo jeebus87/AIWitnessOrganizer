@@ -244,10 +244,10 @@ function CaseLawCard({ result, isSelected, onToggle }: CaseLawCardProps) {
             {(result.citation || result.court) && result.date_filed && " | "}
             {result.date_filed}
           </p>
-          {result.matched_query && (
+          {result.relevance_explanation && (
             <div className="mt-2 text-xs">
-              <span className="font-medium text-primary">Matched: </span>
-              <span className="text-muted-foreground italic">&quot;{result.matched_query}&quot;</span>
+              <span className="font-medium text-primary">Why Relevant: </span>
+              <span className="text-muted-foreground">{result.relevance_explanation}</span>
             </div>
           )}
           {result.snippet && (
