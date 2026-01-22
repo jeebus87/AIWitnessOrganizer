@@ -453,16 +453,48 @@ async def generate_legal_research(
             }
             for r in all_results
         ]
-        relevance_explanations = await legal_service.analyze_case_relevance_batch(
+        relevance_results = await legal_service.analyze_case_relevance_batch(
             cases=cases_for_analysis,
             user_context=user_context
         )
 
-        # Apply relevance explanations to results
+        # Apply relevance explanations and scores to results
+        # Filter out cases with low relevance scores (< 5)
+        MIN_RELEVANCE_SCORE = 5
+        filtered_results = []
         for r in all_results:
-            r.relevance_explanation = relevance_explanations.get(r.id)
+            relevance_data = relevance_results.get(r.id, {})
+            r.relevance_explanation = relevance_data.get("explanation") if isinstance(relevance_data, dict) else relevance_data
+            ai_score = relevance_data.get("score", 5) if isinstance(relevance_data, dict) else 5
+            r.relevance_score = float(ai_score)  # Use AI's relevance score
 
-        # Generate IRAC analysis for all cases (batched)
+            if ai_score >= MIN_RELEVANCE_SCORE:
+                filtered_results.append(r)
+            else:
+                logger.info(f"Filtering out case {r.id} ({r.case_name[:50]}...) - relevance score {ai_score} < {MIN_RELEVANCE_SCORE}")
+
+        logger.info(f"Filtered from {len(all_results)} to {len(filtered_results)} cases (removed {len(all_results) - len(filtered_results)} irrelevant)")
+        all_results = filtered_results
+
+        if not all_results:
+            return {
+                "has_results": False,
+                "status": None,
+                "message": "No relevant case law found after filtering"
+            }
+
+        # Update cases_for_analysis with only filtered results
+        cases_for_analysis = [
+            {
+                "id": r.id,
+                "case_name": r.case_name,
+                "snippet": r.snippet,
+                "court": r.court
+            }
+            for r in all_results
+        ]
+
+        # Generate IRAC analysis only for relevant cases (batched)
         irac_analyses = await legal_service.analyze_case_irac_batch(
             cases=cases_for_analysis,
             user_context=user_context

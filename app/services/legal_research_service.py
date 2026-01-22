@@ -738,7 +738,7 @@ Return ONLY the search queries, one per line. No numbering, bullets, or explanat
         self,
         cases: List[Dict[str, Any]],
         user_context: Dict[str, Any]
-    ) -> Dict[int, str]:
+    ) -> Dict[int, Dict[str, Any]]:
         """
         Use Claude AI to analyze relevance of multiple cases in one batch call.
 
@@ -747,7 +747,7 @@ Return ONLY the search queries, one per line. No numbering, bullets, or explanat
             user_context: Dict with practice_area, defendant_type, harm_type, allegations, key_facts
 
         Returns:
-            Dict mapping case_id to relevance explanation string
+            Dict mapping case_id to dict with 'explanation' and 'score' (1-10)
         """
         if not cases:
             return {}
@@ -806,11 +806,19 @@ CRITICAL REQUIREMENTS:
 - Never say "may be relevant" without explaining HOW and WHY
 - Mention if the defendant type or harm type matches the user's case
 
+RELEVANCE SCORING (1-10):
+- 1-3: NOT RELEVANT - Wrong area of law (e.g., criminal case for civil matter), completely different facts
+- 4-5: MARGINALLY RELEVANT - Same general area but different specific issues
+- 6-7: MODERATELY RELEVANT - Similar legal principles, somewhat comparable facts
+- 8-10: HIGHLY RELEVANT - Directly on point, similar facts and legal issues
+
+IMPORTANT: Criminal cases (murder, death penalty, criminal appeals) are NEVER relevant to civil employment/injury matters. Score them 1-2.
+
 Respond in JSON:
 {{
   "explanations": [
-    {{"case_num": 1, "explanation": "Your specific 2-3 sentence explanation"}},
-    {{"case_num": 2, "explanation": "Your specific 2-3 sentence explanation"}}
+    {{"case_num": 1, "score": 8, "explanation": "Your specific 2-3 sentence explanation"}},
+    {{"case_num": 2, "score": 2, "explanation": "Not relevant - this is a criminal case involving..."}}
   ]
 }}"""
 
@@ -847,15 +855,19 @@ Respond in JSON:
                     data = json.loads(json_match.group())
                     explanations = data.get("explanations", [])
 
-                    # Map back to case IDs
+                    # Map back to case IDs with both explanation and score
                     result = {}
                     for exp in explanations:
                         case_num = exp.get("case_num", 0) - 1  # Convert to 0-indexed
                         explanation = exp.get("explanation", "")
+                        score = exp.get("score", 5)  # Default to 5 if no score
                         if 0 <= case_num < len(cases) and explanation:
                             case_id = cases[case_num].get("id")
                             if case_id:
-                                result[case_id] = explanation
+                                result[case_id] = {
+                                    "explanation": explanation,
+                                    "score": score
+                                }
 
                     logger.info(f"AI analyzed relevance for {len(result)} cases")
                     return result
