@@ -428,6 +428,38 @@ async def generate_legal_research(
                 "message": "No relevant case law found"
             }
 
+        # Filter out criminal cases - they're never relevant to civil matters
+        CRIMINAL_KEYWORDS = [
+            "people v.", "state v.", "united states v.", "commonwealth v.",
+            "murder", "manslaughter", "homicide", "death penalty", "capital case",
+            "criminal appeal", "penal code", "defendant convicted",
+            "guilty", "sentence", "imprisonment", "incarceration",
+            "prosecution", "prosecutor", "district attorney",
+            "felony", "misdemeanor", "probation", "parole"
+        ]
+
+        def is_criminal_case(case) -> bool:
+            """Check if a case appears to be criminal based on name and snippet."""
+            text = f"{case.case_name} {case.snippet or ''}".lower()
+            # Check for criminal case naming patterns
+            if text.startswith("people v") or text.startswith("state v") or text.startswith("united states v"):
+                return True
+            # Check for criminal keywords (need 2+ matches to be sure)
+            matches = sum(1 for kw in CRIMINAL_KEYWORDS if kw in text)
+            return matches >= 2
+
+        original_count = len(all_results)
+        all_results = [r for r in all_results if not is_criminal_case(r)]
+        if original_count != len(all_results):
+            logger.info(f"Filtered out {original_count - len(all_results)} criminal cases")
+
+        if not all_results:
+            return {
+                "has_results": False,
+                "status": None,
+                "message": "No relevant civil case law found (criminal cases filtered)"
+            }
+
         # Limit to top 15 results
         all_results = all_results[:15]
 

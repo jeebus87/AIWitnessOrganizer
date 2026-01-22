@@ -807,12 +807,10 @@ CRITICAL REQUIREMENTS:
 - Mention if the defendant type or harm type matches the user's case
 
 RELEVANCE SCORING (1-10):
-- 1-3: NOT RELEVANT - Wrong area of law (e.g., criminal case for civil matter), completely different facts
+- 1-3: NOT RELEVANT - Completely different legal issues or facts, wrong area of law
 - 4-5: MARGINALLY RELEVANT - Same general area but different specific issues
 - 6-7: MODERATELY RELEVANT - Similar legal principles, somewhat comparable facts
 - 8-10: HIGHLY RELEVANT - Directly on point, similar facts and legal issues
-
-IMPORTANT: Criminal cases (murder, death penalty, criminal appeals) are NEVER relevant to civil employment/injury matters. Score them 1-2.
 
 Respond in JSON:
 {{
