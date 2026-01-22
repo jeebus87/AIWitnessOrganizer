@@ -587,7 +587,7 @@ Return ONLY the search queries, one per line. No numbering, bullets, or explanat
 
             # Use Haiku for fast, cheap query generation
             response = client.invoke_model(
-                modelId="us.anthropic.claude-3-5-haiku-20241022-v1:0",
+                modelId="anthropic.claude-3-5-haiku-20241022-v1:0",
                 contentType="application/json",
                 accept="application/json",
                 body=json.dumps(body)
