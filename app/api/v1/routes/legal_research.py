@@ -515,7 +515,11 @@ async def generate_legal_research(
                 "message": "No relevant case law found after filtering"
             }
 
-        # Update cases_for_analysis with only filtered results
+        # Sort by relevance score descending, limit to top 10 for IRAC analysis
+        all_results.sort(key=lambda x: x.relevance_score, reverse=True)
+        cases_for_irac = all_results[:10]  # Limit to top 10 to avoid JSON truncation
+
+        # Update cases_for_analysis with only top results
         cases_for_analysis = [
             {
                 "id": r.id,
@@ -523,10 +527,10 @@ async def generate_legal_research(
                 "snippet": r.snippet,
                 "court": r.court
             }
-            for r in all_results
+            for r in cases_for_irac
         ]
 
-        # Generate IRAC analysis only for relevant cases (batched)
+        # Generate IRAC analysis only for top relevant cases (batched)
         irac_analyses = await legal_service.analyze_case_irac_batch(
             cases=cases_for_analysis,
             user_context=user_context

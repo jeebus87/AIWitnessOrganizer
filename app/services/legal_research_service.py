@@ -1000,7 +1000,7 @@ CRITICAL REQUIREMENTS:
 
             body = {
                 "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 6000,  # More tokens for detailed IRAC analysis
+                "max_tokens": 8000,  # More tokens for detailed IRAC analysis
                 "temperature": 0.4,  # Higher temperature for more specific analysis
                 "messages": [{"role": "user", "content": prompt}]
             }
@@ -1009,16 +1009,44 @@ CRITICAL REQUIREMENTS:
             response_body = invoke_model_with_fallback(client, body, SONNET_MODELS, logger)
             text_content = response_body.get("content", [{}])[0].get("text", "")
 
-            # Parse JSON response
+            # Parse JSON response with repair attempts
+            result = {}
             try:
                 # Find JSON in response
                 json_match = re.search(r'\{[\s\S]*\}', text_content)
                 if json_match:
-                    data = json.loads(json_match.group())
+                    json_str = json_match.group()
+                    try:
+                        data = json.loads(json_str)
+                    except json.JSONDecodeError:
+                        # Try to repair common JSON issues
+                        # Fix trailing commas before ] or }
+                        json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
+                        # Fix missing commas between objects
+                        json_str = re.sub(r'}\s*{', '},{', json_str)
+                        # Try again
+                        try:
+                            data = json.loads(json_str)
+                        except json.JSONDecodeError as e2:
+                            logger.warning(f"JSON repair failed: {e2}")
+                            # Last resort: try to extract individual analyses with regex
+                            data = {"analyses": []}
+                            pattern = r'"case_num"\s*:\s*(\d+)[^}]*"issue"\s*:\s*"([^"]*)"[^}]*"rule"\s*:\s*"([^"]*)"[^}]*"application"\s*:\s*"([^"]*)"[^}]*"conclusion"\s*:\s*"([^"]*)"[^}]*"utility"\s*:\s*"([^"]*)"'
+                            for match in re.finditer(pattern, text_content, re.DOTALL):
+                                data["analyses"].append({
+                                    "case_num": int(match.group(1)),
+                                    "issue": match.group(2),
+                                    "rule": match.group(3),
+                                    "application": match.group(4),
+                                    "conclusion": match.group(5),
+                                    "utility": match.group(6)
+                                })
+                            if data["analyses"]:
+                                logger.info(f"Extracted {len(data['analyses'])} IRAC analyses via regex fallback")
+
                     analyses = data.get("analyses", [])
 
                     # Map back to case IDs
-                    result = {}
                     for analysis in analyses:
                         case_num = analysis.get("case_num", 0) - 1  # Convert to 0-indexed
                         if 0 <= case_num < len(cases):
@@ -1033,7 +1061,6 @@ CRITICAL REQUIREMENTS:
                                 }
 
                     logger.info(f"AI generated IRAC analysis for {len(result)} cases")
-                    return result
 
             except json.JSONDecodeError as e:
                 logger.warning(f"Failed to parse AI IRAC response: {e}")
