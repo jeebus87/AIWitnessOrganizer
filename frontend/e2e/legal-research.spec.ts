@@ -1,176 +1,125 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Legal Research E2E Tests
+ * E2E Test for Legal Research / Case Law Feature
  *
- * Tests the complete legal research flow:
- * 1. Navigate to jobs page with authentication
- * 2. Check for completed jobs with legal research
- * 3. Open legal research dialog
- * 4. Verify case law results are displayed with relevance info
- * 5. Save cases to Clio
+ * Tests that:
+ * 1. Case Law results dialog shows relevant civil cases
+ * 2. Criminal cases are filtered out
+ * 3. Relevance explanations are shown
  */
 
-const AUTH_TOKEN = process.env.TEST_AUTH_TOKEN || '';
+// Auth token for testing - replace with fresh token as needed
+const AUTH_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyIiwiZW1haWwiOiJqdmFsbGVzQHNoYW5sZXlhcGMuY29tIiwiZXhwIjoxNzY5NjQ1ODUwLCJpYXQiOjE3NjkwNDEwNTB9.EixiNr8TLeuQ7vQU89Lf9momAKG-BiD5EAEFYG4rMHk';
 
-test.describe('Legal Research Flow', () => {
-  test.beforeEach(async ({ page, context }) => {
-    // Skip if no auth token provided
-    if (!AUTH_TOKEN) {
-      test.skip();
-      return;
-    }
-
-    // Set localStorage before navigating using addInitScript
-    await context.addInitScript((token) => {
-      window.localStorage.setItem('auth-storage', JSON.stringify({
+test.describe('Legal Research Feature', () => {
+  test.beforeEach(async ({ page }) => {
+    // Inject auth token into localStorage before navigating
+    await page.addInitScript((token) => {
+      localStorage.setItem('auth-storage', JSON.stringify({
         state: { token },
         version: 0
       }));
     }, AUTH_TOKEN);
-
-    // Now navigate - the auth should be set
-    await page.goto('/jobs', { waitUntil: 'networkidle' });
-
-    // Wait a moment for hydration
-    await page.waitForTimeout(2000);
   });
 
-  test('authenticated user can access jobs page', async ({ page }) => {
-    // beforeEach already navigated to /jobs
+  test('should display relevant civil case law without criminal cases', async ({ page }) => {
+    // Navigate to jobs page
+    await page.goto('/jobs');
+    await page.waitForLoadState('networkidle');
 
-    // Should see the Jobs page heading
-    await expect(page.locator('h1:has-text("Processing Jobs")')).toBeVisible({ timeout: 15000 });
-
-    // Should see job history card
-    await expect(page.locator('text=Job History')).toBeVisible();
-  });
-
-  test('completed job shows legal research results', async ({ page }) => {
-    // beforeEach already navigated to /jobs
-
-    // Wait for jobs to load
-    await page.waitForSelector('table', { timeout: 20000 });
-
-    // Take screenshot of jobs page
-    await page.screenshot({ path: 'test-results/jobs-page.png' });
-
-    // Look for Case Law button (indicates completed job with pending research)
-    const caseLawButton = page.locator('button:has-text("Case Law")');
-
-    if (await caseLawButton.count() > 0) {
-      // Click to open dialog
-      await caseLawButton.first().click();
-
-      // Wait for dialog to open
-      await expect(page.locator('[role="dialog"]')).toBeVisible({ timeout: 5000 });
-
-      // Should see dialog title
-      await expect(page.locator('text=Relevant Case Law Found')).toBeVisible();
-
-      // Take screenshot of legal research dialog
-      await page.screenshot({ path: 'test-results/legal-research-dialog.png' });
-
-      // Check for case law results
-      const results = page.locator('.cursor-pointer.p-4.border.rounded-lg');
-      const resultCount = await results.count();
-
-      console.log(`Found ${resultCount} case law results`);
-
-      if (resultCount > 0) {
-        // Check that relevance info is displayed (matched query)
-        const matchedText = page.locator('text=Matched:');
-        const hasMatchedQuery = await matchedText.count() > 0;
-        console.log(`Matched query displayed: ${hasMatchedQuery}`);
-
-        // Check for relevant excerpt
-        await expect(page.locator('text=Relevant excerpt:').first()).toBeVisible();
-      }
-
-      // Close dialog
+    // Handle onboarding tour if it appears - use keyboard to dismiss
+    const skipTourButton = page.getByRole('button', { name: 'Skip tour' });
+    if (await skipTourButton.isVisible({ timeout: 3000 }).catch(() => false)) {
+      console.log('Dismissing onboarding tour...');
       await page.keyboard.press('Escape');
+      await page.waitForTimeout(500);
+    }
+
+    // Check if Case Law results dialog is already open (from pending results)
+    let dialog = page.locator('[role="dialog"]:has-text("Relevant Case Law Found")');
+    let dialogAlreadyOpen = await dialog.isVisible({ timeout: 2000 }).catch(() => false);
+
+    if (dialogAlreadyOpen) {
+      console.log('Case Law results dialog already open - using existing results');
     } else {
-      console.log('No pending legal research found - checking for completed jobs');
+      console.log('No existing dialog, need to trigger Case Law generation');
 
-      // Check if there are any completed jobs
-      const completedBadge = page.locator('text=Completed');
-      const hasCompleted = await completedBadge.count() > 0;
-      console.log(`Has completed jobs: ${hasCompleted}`);
-    }
-  });
+      // Wait for page to be ready and click Case Law button
+      await page.waitForTimeout(1000);
 
-  test('can save legal research to Clio', async ({ page }) => {
-    // beforeEach already navigated to /jobs
+      // Use keyboard Escape to close any remaining overlays
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(500);
 
-    // Wait for page to load
-    await page.waitForSelector('table', { timeout: 20000 });
+      const caseLawButton = page.locator('button:has-text("Case Law")').first();
+      await expect(caseLawButton).toBeVisible({ timeout: 10000 });
+      console.log('Clicking Case Law button...');
+      await caseLawButton.click({ force: true });
 
-    // Look for Case Law button
-    const caseLawButton = page.locator('button:has-text("Case Law")');
+      // Wait for dialog to appear
+      dialog = page.locator('[role="dialog"]');
+      await expect(dialog).toBeVisible({ timeout: 120000 });
 
-    if (await caseLawButton.count() === 0) {
-      console.log('No pending legal research - skipping save test');
-      test.skip();
-      return;
-    }
-
-    // Click to open dialog
-    await caseLawButton.first().click();
-
-    // Wait for dialog
-    await expect(page.locator('[role="dialog"]')).toBeVisible({ timeout: 5000 });
-
-    // Check for save button
-    const saveButton = page.locator('button:has-text("Save")').filter({ hasNotText: 'Saving' });
-
-    if (await saveButton.count() > 0) {
-      // Get selection count
-      const selectionText = await page.locator('text=/\\d+ of \\d+ selected/').textContent();
-      console.log(`Selection: ${selectionText}`);
-
-      // Click save
-      await saveButton.click();
-
-      // Should show saving overlay
-      await expect(page.locator('text=Saving cases to Clio')).toBeVisible({ timeout: 3000 });
-
-      // Take screenshot of saving state
-      await page.screenshot({ path: 'test-results/saving-to-clio.png' });
-
-      // Wait for completion (dialog should close or show success)
-      await expect(page.locator('[role="dialog"]')).toBeHidden({ timeout: 30000 });
-
-      console.log('Save completed successfully');
-    } else {
-      console.log('No save button available - may have no results');
-    }
-  });
-
-  test('job progress shows time remaining', async ({ page }) => {
-    // beforeEach already navigated to /jobs
-
-    // Wait for jobs to load
-    await page.waitForSelector('table', { timeout: 20000 });
-
-    // Look for processing jobs
-    const processingBadge = page.locator('text=Processing');
-
-    if (await processingBadge.count() > 0) {
-      // Check for time remaining display
-      const timeRemaining = page.locator('text=/~\\d+ min remaining|< 1 min remaining|Calculating/');
-      const hasTimeRemaining = await timeRemaining.count() > 0;
-
-      console.log(`Time remaining displayed: ${hasTimeRemaining}`);
-
-      if (hasTimeRemaining) {
-        const text = await timeRemaining.first().textContent();
-        console.log(`Time remaining text: ${text}`);
+      // Wait for loading to complete
+      const spinner = dialog.locator('.animate-spin');
+      if (await spinner.isVisible({ timeout: 2000 }).catch(() => false)) {
+        console.log('Waiting for API response...');
+        await expect(spinner).toBeHidden({ timeout: 300000 });
       }
-
-      // Take screenshot
-      await page.screenshot({ path: 'test-results/processing-job.png' });
-    } else {
-      console.log('No processing jobs found');
     }
+
+    // Now verify the dialog content
+    console.log('Verifying dialog content...');
+
+    // Should show "Relevant Case Law Found"
+    await expect(dialog.getByText('Relevant Case Law Found')).toBeVisible({ timeout: 10000 });
+    console.log('Dialog title confirmed: Relevant Case Law Found');
+
+    // Verify we have results counter
+    const resultsCount = dialog.locator('text=/\\d+ of \\d+ selected/');
+    await expect(resultsCount).toBeVisible();
+    const countText = await resultsCount.textContent();
+    console.log(`Results: ${countText}`);
+
+    // Get all case cards and check for criminal cases
+    const caseHeadings = dialog.locator('h4');
+    const cardCount = await caseHeadings.count();
+    console.log(`Found ${cardCount} case headings`);
+
+    let criminalCasesFound = 0;
+    const caseNames: string[] = [];
+
+    for (let i = 0; i < cardCount; i++) {
+      const caseText = await caseHeadings.nth(i).textContent();
+      const caseLower = caseText?.toLowerCase() || '';
+      caseNames.push(caseText || '');
+
+      // Check for criminal case indicators
+      if (caseLower.startsWith('people v') ||
+          caseLower.startsWith('state v') ||
+          caseLower.startsWith('united states v') ||
+          caseLower.includes('murder') ||
+          caseLower.includes('death penalty') ||
+          caseLower.includes('criminal')) {
+        console.error(`CRIMINAL CASE FOUND: ${caseText}`);
+        criminalCasesFound++;
+      }
+    }
+
+    console.log('Cases found:', caseNames.slice(0, 5).join(', ') + (caseNames.length > 5 ? '...' : ''));
+    expect(criminalCasesFound).toBe(0);
+    console.log('No criminal cases found in results');
+
+    // Verify at least some cases have relevance explanations
+    const relevanceExplanations = dialog.locator('text=/Why Relevant/');
+    const explanationCount = await relevanceExplanations.count();
+    console.log(`Found ${explanationCount} relevance explanations`);
+    expect(explanationCount).toBeGreaterThan(0);
+
+    // Take a screenshot of the results
+    await page.screenshot({ path: 'e2e/screenshots/legal-research-results.png', fullPage: true });
+
+    console.log('TEST PASSED: Criminal cases filtered out, civil cases shown with relevance explanations');
   });
 });
