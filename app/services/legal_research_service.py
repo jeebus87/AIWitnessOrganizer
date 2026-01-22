@@ -1065,7 +1065,7 @@ CRITICAL REQUIREMENTS:
             except json.JSONDecodeError as e:
                 logger.warning(f"Failed to parse AI IRAC response: {e}")
 
-            return {}
+            return result  # Return the parsed IRAC analyses
 
         except Exception as e:
             logger.error(f"AI IRAC analysis failed: {e}")
