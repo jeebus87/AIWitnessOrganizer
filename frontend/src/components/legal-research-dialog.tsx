@@ -15,6 +15,25 @@ import { cn } from "@/lib/utils";
 import { api, CaseLawResult, LegalResearchResponse } from "@/lib/api";
 import { toast } from "sonner";
 
+/**
+ * Parse simple markdown formatting to HTML.
+ * Supports: **bold**, *italic*, and line breaks for sections.
+ */
+function parseMarkdown(text: string): string {
+  if (!text) return "";
+
+  return text
+    // Convert **text** to bold
+    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold text-foreground">$1</strong>')
+    // Convert *text* to italic (but not inside bold)
+    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
+    // Convert line breaks to <br> for readability
+    .replace(/\n/g, '<br />')
+    // Remove em dashes and replace with regular dashes
+    .replace(/—/g, '-')
+    .replace(/–/g, '-');
+}
+
 interface LegalResearchDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -324,7 +343,10 @@ function CaseLawCard({ result, isSelected, onToggle }: CaseLawCardProps) {
             {result.case_utility && (
               <div className="border-l-4 border-purple-500 pl-2 mt-3 pt-2 border-t border-border">
                 <h6 className="font-semibold text-xs text-purple-600 dark:text-purple-400 uppercase">How This Helps Your Case</h6>
-                <p className="text-xs text-foreground mt-0.5">{result.case_utility}</p>
+                <div
+                  className="text-xs text-foreground mt-0.5 space-y-1"
+                  dangerouslySetInnerHTML={{ __html: parseMarkdown(result.case_utility) }}
+                />
               </div>
             )}
           </div>

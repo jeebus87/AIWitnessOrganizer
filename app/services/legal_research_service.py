@@ -1029,7 +1029,8 @@ CRITICAL REQUIREMENTS:
 3. APPLICATION must use causal language and explain WHY - not just list facts
 4. CONCLUSION must start Yes/No and answer the Issue directly
 5. UTILITY must use command verbs (Argue, Cite, Use) - NO "if" or "might be useful"
-6. Address attorney as "you" throughout - NEVER "the user" or "the attorney\""""
+6. Address attorney as "you" throughout - NEVER "the user" or "the attorney"
+7. Use regular dashes (-) NOT em dashes or en dashes. Write "client - not" instead of "client—not\""""
 
         try:
             config = Config(
