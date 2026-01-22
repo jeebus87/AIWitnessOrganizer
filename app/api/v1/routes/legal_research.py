@@ -297,6 +297,18 @@ async def generate_legal_research(
         # Limit to top 15 results
         all_results = all_results[:15]
 
+        # Fetch opinion text for cases with empty snippets
+        logger.info("Fetching opinion text for cases with empty snippets...")
+        for r in all_results:
+            if not r.snippet or len(r.snippet.strip()) < 50:
+                try:
+                    opinion_text = await legal_service.get_opinion_text(r.id)
+                    if opinion_text:
+                        r.snippet = opinion_text[:1500]  # Use first 1500 chars
+                        logger.info(f"Fetched opinion text for case {r.id}: {len(r.snippet)} chars")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch opinion text for {r.id}: {e}")
+
         # Build rich user context from all parsed information
         # Separate allegations and defenses
         allegations = [c["text"] for c in claims_data if c.get("type") == "allegation"]

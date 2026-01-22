@@ -251,6 +251,58 @@ class LegalResearchService:
             logger.error(f"Error fetching opinion {opinion_id}: {e}")
             return None
 
+    async def get_opinion_text(self, cluster_id: int) -> Optional[str]:
+        """
+        Fetch the actual opinion text for a case cluster.
+
+        Args:
+            cluster_id: The CourtListener cluster ID (from search results)
+
+        Returns:
+            Opinion text (first 3000 chars) or None
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Get cluster details which includes opinions
+                response = await client.get(
+                    f"{self.BASE_URL}/clusters/{cluster_id}/",
+                    headers=self.headers
+                )
+                if response.status_code != 200:
+                    return None
+
+                cluster = response.json()
+
+                # Get the first opinion's text
+                opinions = cluster.get("sub_opinions", [])
+                if not opinions:
+                    return None
+
+                # Fetch the actual opinion
+                opinion_url = opinions[0] if isinstance(opinions[0], str) else opinions[0].get("resource_uri")
+                if opinion_url:
+                    op_response = await client.get(
+                        opinion_url if opinion_url.startswith("http") else f"https://www.courtlistener.com{opinion_url}",
+                        headers=self.headers
+                    )
+                    if op_response.status_code == 200:
+                        op_data = op_response.json()
+                        # Try plain_text first, then html_with_citations, then html
+                        text = op_data.get("plain_text") or ""
+                        if not text:
+                            html = op_data.get("html_with_citations") or op_data.get("html") or ""
+                            # Strip HTML tags
+                            text = re.sub(r'<[^>]+>', ' ', html)
+                            text = re.sub(r'\s+', ' ', text).strip()
+
+                        if text:
+                            return text[:3000]  # First 3000 chars
+
+                return None
+        except Exception as e:
+            logger.error(f"Error fetching opinion text for cluster {cluster_id}: {e}")
+            return None
+
     async def download_opinion_pdf(self, opinion_id: int) -> Optional[bytes]:
         """
         Download opinion as PDF if available.
@@ -713,43 +765,42 @@ Court: {court}
 Excerpt: {snippet}
 ---""")
 
-        prompt = f"""You are a legal research analyst. For each case below, provide a structured IRAC analysis.
+        prompt = f"""You are a legal research analyst creating case briefs. For each case, write a proper IRAC analysis based on the case excerpt.
 
-USER'S MATTER CONTEXT:
+USER'S CASE:
 - Practice Area: {practice_area}
-- Key Claims: {claims_summary[:500] if claims_summary else "General civil litigation"}
+- Claims: {claims_summary[:800] if claims_summary else "General civil litigation"}
 
-CASES TO ANALYZE:
+CASES TO BRIEF:
 {chr(10).join(cases_text)}
 
-IMPORTANT INSTRUCTIONS:
-1. Use the case name, court, and excerpt to infer the legal issues - case names often indicate the type of dispute
-2. NEVER say "cannot be determined" or "insufficient information" - always provide your best analysis
-3. If the excerpt is limited, use the case name and court to infer likely legal issues (e.g., "People v." = criminal, employment terms suggest labor law, etc.)
-4. For UTILITY, explain how this type of case precedent could generally be useful in litigation
+Write a proper legal IRAC for each case following this format:
 
-For each case, provide:
-- ISSUE: The legal question the court likely addressed based on case context (1-2 sentences)
-- RULE: The applicable legal rule or standard for this type of case (1-2 sentences)
-- APPLICATION: How courts typically apply this rule to similar facts (1-2 sentences)
-- CONCLUSION: The likely outcome or holding pattern for such cases (1 sentence)
-- UTILITY: How this case could support arguments in the user's {practice_area} matter (1-2 sentences)
+ISSUE: State as a specific legal question. Example: "Whether an employer may be held liable for negligent hiring when it fails to conduct background checks on employees who later cause harm?"
 
-Respond in this exact JSON format:
+RULE: State the specific legal rule, statute, or test the court applied. Example: "Under California Civil Code § 1714, employers owe a duty of care to third parties when hiring employees, requiring reasonable investigation into an applicant's fitness for the position."
+
+APPLICATION: Explain how the court applied the rule to the specific facts of THIS case. Reference actual facts from the excerpt. Example: "The court found the employer breached its duty because it hired the defendant without verifying his employment history, despite the position requiring interaction with vulnerable populations."
+
+CONCLUSION: State the court's actual holding. Example: "The court held the employer liable for negligent hiring, awarding plaintiff $500,000 in damages."
+
+UTILITY: Explain specifically how this case helps the user's matter. Example: "This case supports plaintiff's negligent hiring claim by establishing that employers in California must conduct background checks for positions involving public contact."
+
+Respond in JSON:
 {{
   "analyses": [
     {{
       "case_num": 1,
-      "issue": "The court addressed whether...",
-      "rule": "Under California law...",
-      "application": "The court analyzed...",
-      "conclusion": "The court held...",
-      "utility": "This case establishes precedent for..."
+      "issue": "Whether [specific legal question from this case]?",
+      "rule": "[Specific statute, test, or legal standard the court applied]",
+      "application": "[How the court applied the rule to THIS case's facts]",
+      "conclusion": "[The court's actual holding in this case]",
+      "utility": "[How this case specifically helps the user's {practice_area} matter]"
     }}
   ]
 }}
 
-Be specific. Reference actual legal doctrines. Each field should be 1-2 substantive sentences."""
+CRITICAL: Base your analysis on the actual case excerpt provided. If the excerpt discusses specific facts, parties, or holdings, reference them directly."""
 
         try:
             config = Config(
