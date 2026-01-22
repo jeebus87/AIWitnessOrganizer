@@ -20,6 +20,74 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+# Model IDs with GLOBAL inference profiles as primary (different quota pools)
+# Global profiles may have different/better quotas than US regional
+HAIKU_MODELS = [
+    ("global.anthropic.claude-haiku-4-5-20251001-v1:0", "Global Haiku 4.5"),
+    ("us.anthropic.claude-haiku-4-5-20251001-v1:0", "US Haiku 4.5"),
+    ("global.anthropic.claude-3-5-haiku-20241022-v1:0", "Global Haiku 3.5"),
+    ("us.anthropic.claude-3-5-haiku-20241022-v1:0", "US Haiku 3.5"),
+]
+
+SONNET_MODELS = [
+    ("global.anthropic.claude-sonnet-4-5-20250929-v1:0", "Global Sonnet 4.5"),
+    ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", "US Sonnet 4.5"),
+    ("global.anthropic.claude-sonnet-4-20250514-v1:0", "Global Sonnet 4"),
+    ("us.anthropic.claude-sonnet-4-20250514-v1:0", "US Sonnet 4"),
+]
+
+
+def invoke_model_with_fallback(client, body: dict, models: list, logger) -> dict:
+    """
+    Try to invoke a model, falling back through the chain if quota/throttle errors occur.
+
+    Args:
+        client: boto3 bedrock-runtime client
+        body: The request body (will be JSON serialized)
+        models: List of (model_id, name) tuples to try in order
+        logger: Logger instance
+
+    Returns:
+        Response body dict
+
+    Raises:
+        Exception if all models fail
+    """
+    last_error = None
+
+    for model_id, model_name in models:
+        try:
+            logger.info(f"Trying model: {model_name} ({model_id})")
+            response = client.invoke_model(
+                modelId=model_id,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps(body)
+            )
+            response_body = json.loads(response["body"].read())
+            logger.info(f"Successfully used model: {model_name}")
+            return response_body
+
+        except client.exceptions.ThrottlingException as e:
+            logger.warning(f"Throttled on {model_name}, trying next model: {e}")
+            last_error = e
+        except client.exceptions.ServiceQuotaExceededException as e:
+            logger.warning(f"Quota exceeded on {model_name}, trying next model: {e}")
+            last_error = e
+        except Exception as e:
+            error_str = str(e)
+            # Check for quota/throttle related errors in the message
+            if "throttl" in error_str.lower() or "quota" in error_str.lower() or "rate" in error_str.lower():
+                logger.warning(f"Rate/quota issue on {model_name}, trying next model: {e}")
+                last_error = e
+            else:
+                # Non-quota error, re-raise immediately
+                raise
+
+    # All models failed
+    raise last_error or Exception("All models in fallback chain failed")
+
+
 # Jurisdiction patterns for detecting court from case numbers
 JURISDICTION_PATTERNS = {
     "LASC": {"state": "cal", "court_type": "state"},
@@ -628,15 +696,8 @@ Return ONLY the search queries, one per line. No numbering, bullets, or explanat
                 "messages": [{"role": "user", "content": prompt}]
             }
 
-            # Use Haiku for fast, cheap query generation
-            response = client.invoke_model(
-                modelId="us.anthropic.claude-3-5-haiku-20241022-v1:0",
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps(body)
-            )
-
-            response_body = json.loads(response["body"].read())
+            # Use Haiku for fast, cheap query generation (with global fallback)
+            response_body = invoke_model_with_fallback(client, body, HAIKU_MODELS, logger)
             text_content = response_body.get("content", [{}])[0].get("text", "")
 
             # Parse queries (one per line)
@@ -756,15 +817,8 @@ Respond in JSON:
                 "messages": [{"role": "user", "content": prompt}]
             }
 
-            # Use Sonnet for better reasoning on relevance analysis
-            response = client.invoke_model(
-                modelId="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps(body)
-            )
-
-            response_body = json.loads(response["body"].read())
+            # Use Sonnet for better reasoning on relevance analysis (with global fallback)
+            response_body = invoke_model_with_fallback(client, body, SONNET_MODELS, logger)
             text_content = response_body.get("content", [{}])[0].get("text", "")
 
             # Parse JSON response
@@ -923,15 +977,8 @@ CRITICAL REQUIREMENTS:
                 "messages": [{"role": "user", "content": prompt}]
             }
 
-            # Use Sonnet for better reasoning on IRAC analysis
-            response = client.invoke_model(
-                modelId="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps(body)
-            )
-
-            response_body = json.loads(response["body"].read())
+            # Use Sonnet for better reasoning on IRAC analysis (with global fallback)
+            response_body = invoke_model_with_fallback(client, body, SONNET_MODELS, logger)
             text_content = response_body.get("content", [{}])[0].get("text", "")
 
             # Parse JSON response
