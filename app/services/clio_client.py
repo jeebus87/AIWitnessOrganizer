@@ -6,18 +6,21 @@ from typing import Optional, Dict, Any, AsyncIterator, List
 from urllib.parse import urlencode, urlparse, parse_qs, urlunsplit
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, wait_fixed
+import logging
+
+logger = logging.getLogger(__name__)
 
 from app.core.config import settings
 from app.core.security import encrypt_token, decrypt_token
 
 
 class RateLimiter:
-    """Token bucket rate limiter for Clio API (50 requests/minute)"""
+    """Token bucket rate limiter for Clio API (50 requests/minute, but we stay at 30 to be safe)"""
 
-    def __init__(self, capacity: int = 50, refill_rate: float = 50 / 60):
+    def __init__(self, capacity: int = 30, refill_rate: float = 30 / 60):
         self.capacity = float(capacity)
-        self.refill_rate = float(refill_rate)  # tokens per second
+        self.refill_rate = float(refill_rate)  # tokens per second (0.5 = 1 request per 2 seconds)
         self.tokens = float(capacity)
         self.last_refill = time.time()
         self._lock = asyncio.Lock()
@@ -149,8 +152,11 @@ class ClioClient:
 
     @retry(
         retry=retry_if_exception_type(ClioRateLimitError),
-        stop=stop_after_attempt(10),
-        wait=wait_exponential(multiplier=1, min=2, max=120),
+        stop=stop_after_attempt(15),  # More attempts for busy periods
+        wait=wait_exponential(multiplier=2, min=5, max=180),  # Longer waits: 5s to 3min
+        before_sleep=lambda retry_state: logger.warning(
+            f"Clio rate limited, waiting {retry_state.next_action.sleep:.1f}s before retry {retry_state.attempt_number}/15"
+        )
     )
     async def _request(
         self,
@@ -174,9 +180,12 @@ class ClioClient:
             **kwargs
         )
 
-        # Handle rate limiting
+        # Handle rate limiting - wait the time Clio tells us
         if response.status_code == 429:
             retry_after = int(response.headers.get("X-RateLimit-Reset", 60))
+            logger.warning(f"Clio returned 429 rate limit, retry_after={retry_after}s")
+            # Sleep for the retry_after duration before raising (tenacity will add more wait)
+            await asyncio.sleep(min(retry_after, 30))  # Cap at 30s, tenacity handles the rest
             raise ClioRateLimitError(retry_after)
 
         # Handle auth errors

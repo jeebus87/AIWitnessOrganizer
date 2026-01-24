@@ -356,6 +356,13 @@ async def get_matter_folders(
 
     except Exception as e:
         logger.error(f"Failed to get folders: {e}")
+        error_str = str(e).lower()
+        # Provide user-friendly error messages
+        if "ratelimit" in error_str or "rate limit" in error_str or "429" in error_str:
+            raise HTTPException(
+                status_code=429,
+                detail="Clio API rate limit reached. Please wait a minute and try again."
+            )
         raise HTTPException(status_code=500, detail=f"Failed to get folders: {str(e)}")
 
 
