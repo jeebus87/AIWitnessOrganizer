@@ -241,7 +241,7 @@ export default function TermsOfServicePage() {
       <section id="dispute-resolution" className="mb-12">
         <h2 className="text-2xl font-bold mb-4">12. Dispute Resolution</h2>
         <p className="mb-4">
-          Before formal proceedings, contact us at support@juridionlaw.com for informal resolution.
+          Before formal proceedings, contact us at support@juridionllc.com for informal resolution.
           Unresolved disputes go to binding arbitration.
         </p>
         <p>
@@ -254,7 +254,7 @@ export default function TermsOfServicePage() {
         <h2 className="text-2xl font-bold mb-4">13. Contact Information</h2>
         <div className="bg-muted/50 rounded-lg p-6">
           <p><strong>Juridion LLC</strong></p>
-          <p>Email: support@juridionlaw.com</p>
+          <p>Email: support@juridionllc.com</p>
           <p>Subject Line: &quot;Terms Inquiry - AI Witness Organizer&quot;</p>
         </div>
       </section>

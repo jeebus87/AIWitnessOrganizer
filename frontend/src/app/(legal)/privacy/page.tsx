@@ -48,7 +48,7 @@ export default function PrivacyPolicyPage() {
         <p>
           <strong>Company Information:</strong><br />
           Juridion LLC<br />
-          Email: support@juridionlaw.com
+          Email: support@juridionllc.com
         </p>
       </section>
 
@@ -188,7 +188,7 @@ export default function PrivacyPolicyPage() {
           <li><strong>Withdraw Consent:</strong> Disconnect your Clio account</li>
         </ul>
         <p>
-          To exercise these rights, contact us at support@juridionlaw.com.
+          To exercise these rights, contact us at support@juridionllc.com.
         </p>
       </section>
 
@@ -215,7 +215,7 @@ export default function PrivacyPolicyPage() {
         <h2 className="text-2xl font-bold mb-4">10. Contact Us</h2>
         <div className="bg-muted/50 rounded-lg p-6">
           <p><strong>Juridion LLC</strong></p>
-          <p>Email: support@juridionlaw.com</p>
+          <p>Email: support@juridionllc.com</p>
           <p>Subject Line: &quot;Privacy Inquiry - AI Witness Organizer&quot;</p>
         </div>
       </section>

@@ -20,7 +20,7 @@ export function Footer() {
                         <Link href="/privacy" className="hover:text-foreground transition-colors">
                             Privacy
                         </Link>
-                        <Link href="mailto:support@juridionlaw.com" className="hover:text-foreground transition-colors">
+                        <Link href="mailto:support@juridionllc.com" className="hover:text-foreground transition-colors">
                             Contact
                         </Link>
                     </div>
