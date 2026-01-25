@@ -182,3 +182,25 @@ async def startup_message():
         environment=settings.environment,
         debug=settings.debug
     )
+
+
+@app.on_event("startup")
+async def run_migrations():
+    """Run inline migrations for shared schema additions."""
+    from sqlalchemy import text
+    from app.db.session import async_engine
+
+    async with async_engine.begin() as conn:
+        # =================================================================
+        # Add firm_document_id to witnesses (for cross-app traceability)
+        # =================================================================
+        try:
+            await conn.execute(text(
+                'ALTER TABLE witnesses ADD COLUMN IF NOT EXISTS firm_document_id INTEGER REFERENCES firm_documents(id) ON DELETE SET NULL'
+            ))
+            await conn.execute(text(
+                'CREATE INDEX IF NOT EXISTS ix_witnesses_firm_document_id ON witnesses(firm_document_id)'
+            ))
+            logger.info("Migration: Added firm_document_id column to witnesses table")
+        except Exception as e:
+            logger.warning(f"Migration note: {e}")  # Column may already exist

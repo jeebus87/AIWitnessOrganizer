@@ -14,10 +14,11 @@ from app.worker.db import get_worker_session
 from app.core.config import settings
 from app.core.security import decrypt_token
 from app.db.models import (
-    User, ClioIntegration, Matter, Document, Witness,
+    User, ClioIntegration, Matter, Document, Witness, FirmDocument,
     ProcessingJob, JobStatus, WitnessRole, ImportanceLevel, RelevanceLevel,
     SyncStatus, CaseClaim, ClaimType, WitnessClaimLink, LegalResearchResult, LegalResearchStatus
 )
+from app.services.shared_document_service import SharedDocumentService
 from app.services.clio_client import ClioClient
 from app.services.document_processor import DocumentProcessor
 from app.services.bedrock_client import BedrockClient
@@ -458,6 +459,26 @@ async def _process_single_document_async(
                     "message": "Document unchanged, skipped re-processing"
                 }
 
+            # === SHARED FIRM DOCUMENT CACHE ===
+            # Check if AIDiscoveryDrafter has already parsed this document
+            # Get user's organization_id for FirmDocument lookup
+            user_result = await session.execute(
+                select(User).where(User.id == matter.user_id)
+            )
+            user = user_result.scalar_one_or_none()
+            organization_id = user.organization_id if user else None
+            firm_document_id = None  # Track for witness linking
+            cached_text = None
+
+            if organization_id and document.clio_document_id:
+                firm_doc = await SharedDocumentService.get_firm_document_for_witness_extraction(
+                    session, organization_id, document.clio_document_id, content_hash=file_hash
+                )
+                if firm_doc and firm_doc.extracted_text:
+                    logger.info(f"Using cached text from FirmDocument {firm_doc.id} for document {document_id}")
+                    cached_text = firm_doc.extracted_text
+                    firm_document_id = firm_doc.id
+
             # === DEBUG MODE: Skip Bedrock processing ===
             DEBUG_MODE = False  # Set to True to skip AI processing for debugging
 
@@ -634,95 +655,132 @@ async def _process_single_document_async(
                     output_tokens=0
                 )
 
-            # Use chunked processing for larger PDFs (> 5MB)
-            # This catches documents that would otherwise exceed token limits
-            should_use_chunked = is_pdf and len(content) > 5 * 1024 * 1024
+            # === SHARED DOCUMENT CACHE: Use cached text if available ===
+            # If AIDiscoveryDrafter has already parsed this document, use that text
+            if cached_text:
+                logger.info(f"Using cached text from FirmDocument ({len(cached_text)} chars)")
+                from app.services.document_processor import ProcessedAsset
 
-            all_witnesses = []
-
-            if should_use_chunked:
-                logger.info(f"PDF detected ({len(content)} bytes), using chunked processing")
-
-                # Process PDF in smaller chunks (15 pages) to avoid token limits
-                chunk_num = 0
-                async for chunk_assets in processor.process_pdf_chunked(
-                    content=content,
-                    filename=document.filename,
-                    chunk_size=15  # Reduced from 30 to 15 pages
-                ):
-                    chunk_num += 1
-                    logger.info(f"Processing chunk {chunk_num} with {len(chunk_assets)} pages")
-
-                    # Use adaptive processing for each chunk
-                    chunk_result = await process_with_adaptive_chunks(
-                        chunk_assets,
-                        initial_batch_size=len(chunk_assets)  # Try full chunk first
+                # Create text assets from cached text (split if needed)
+                cached_assets = []
+                max_chars = 25000
+                for i in range(0, len(cached_text), max_chars):
+                    chunk_text = cached_text[i:i + max_chars]
+                    cached_asset = ProcessedAsset(
+                        asset_type="text",
+                        content=chunk_text.encode('utf-8'),
+                        media_type="text/plain",
+                        filename=f"{document.filename}_cached_chunk_{i // max_chars + 1}",
+                        original_filename=document.filename,
+                        context="Cached from FirmDocument",
+                        page_number=None
                     )
+                    cached_assets.append(cached_asset)
 
-                    if chunk_result.success:
-                        all_witnesses.extend(chunk_result.witnesses)
-                        logger.info(f"Chunk {chunk_num}: found {len(chunk_result.witnesses)} witnesses")
-                    else:
-                        logger.warning(f"Chunk {chunk_num} extraction failed: {chunk_result.error}")
+                logger.info(f"Created {len(cached_assets)} text assets from cached content")
 
-                    # Clear chunk memory
-                    del chunk_assets
-                    gc.collect()
-
-                logger.info(f"Chunked processing complete: {len(all_witnesses)} total witnesses found")
-
-                extraction_result = ExtractionResult(
-                    success=True,
-                    witnesses=all_witnesses
+                # Process with adaptive chunking
+                extraction_result = await process_with_adaptive_chunks(
+                    cached_assets,
+                    initial_batch_size=min(10, len(cached_assets))
                 )
+
+                # Skip to witness verification (cached_text path)
+                all_witnesses = extraction_result.witnesses if extraction_result.success else []
+                logger.info(f"Cached text extraction complete: {len(all_witnesses)} witnesses found")
+
             else:
-                # Standard processing for smaller documents
-                proc_result = await processor.process(
-                    content=content,
-                    filename=document.filename
-                )
+                # === STANDARD DOCUMENT PROCESSING ===
 
-                if not proc_result.success:
-                    document.processing_error = proc_result.error
-                    await session.commit()
-                    return {"success": False, "error": proc_result.error}
+                # Use chunked processing for larger PDFs (> 5MB)
+                # This catches documents that would otherwise exceed token limits
+                should_use_chunked = is_pdf and len(content) > 5 * 1024 * 1024
 
-                # Pre-split any large text/email assets before attempting extraction
-                # This prevents "Input is too long" errors on large emails
-                presplit_assets = []
-                for asset in proc_result.assets:
-                    if asset.asset_type in ("text", "email_body"):
-                        chunks = split_text_asset(asset, max_chars=25000)
-                        presplit_assets.extend(chunks)
-                    else:
-                        presplit_assets.append(asset)
+                all_witnesses = []
 
-                if len(presplit_assets) != len(proc_result.assets):
-                    logger.info(f"Pre-split assets: {len(proc_result.assets)} -> {len(presplit_assets)}")
-                    proc_result.assets = presplit_assets
+                if should_use_chunked:
+                    logger.info(f"PDF detected ({len(content)} bytes), using chunked processing")
 
-                # Try extraction - if "too long" error, fall back to adaptive chunking
-                extraction_result = await bedrock.extract_witnesses(
-                    assets=proc_result.assets,
-                    search_targets=search_targets,
-                    legal_context=legal_context
-                )
+                    # Process PDF in smaller chunks (15 pages) to avoid token limits
+                    chunk_num = 0
+                    async for chunk_assets in processor.process_pdf_chunked(
+                        content=content,
+                        filename=document.filename,
+                        chunk_size=15  # Reduced from 30 to 15 pages
+                    ):
+                        chunk_num += 1
+                        logger.info(f"Processing chunk {chunk_num} with {len(chunk_assets)} pages")
 
-                # Handle "Input is too long" error with adaptive processing
-                if not extraction_result.success and extraction_result.error and "too long" in extraction_result.error.lower():
-                    logger.warning(
-                        f"Document {document.filename} too large for single request, "
-                        f"falling back to adaptive chunked processing"
+                        # Use adaptive processing for each chunk
+                        chunk_result = await process_with_adaptive_chunks(
+                            chunk_assets,
+                            initial_batch_size=len(chunk_assets)  # Try full chunk first
+                        )
+
+                        if chunk_result.success:
+                            all_witnesses.extend(chunk_result.witnesses)
+                            logger.info(f"Chunk {chunk_num}: found {len(chunk_result.witnesses)} witnesses")
+                        else:
+                            logger.warning(f"Chunk {chunk_num} extraction failed: {chunk_result.error}")
+
+                        # Clear chunk memory
+                        del chunk_assets
+                        gc.collect()
+
+                    logger.info(f"Chunked processing complete: {len(all_witnesses)} total witnesses found")
+
+                    extraction_result = ExtractionResult(
+                        success=True,
+                        witnesses=all_witnesses
                     )
-                    extraction_result = await process_with_adaptive_chunks(
-                        proc_result.assets,
-                        initial_batch_size=10  # Start with batches of 10 pages
+                else:
+                    # Standard processing for smaller documents
+                    proc_result = await processor.process(
+                        content=content,
+                        filename=document.filename
                     )
 
-                if not extraction_result.success:
-                    document.processing_error = extraction_result.error
-                    await session.commit()
-                    return {"success": False, "error": extraction_result.error}
+                    if not proc_result.success:
+                        document.processing_error = proc_result.error
+                        await session.commit()
+                        return {"success": False, "error": proc_result.error}
+
+                    # Pre-split any large text/email assets before attempting extraction
+                    # This prevents "Input is too long" errors on large emails
+                    presplit_assets = []
+                    for asset in proc_result.assets:
+                        if asset.asset_type in ("text", "email_body"):
+                            chunks = split_text_asset(asset, max_chars=25000)
+                            presplit_assets.extend(chunks)
+                        else:
+                            presplit_assets.append(asset)
+
+                    if len(presplit_assets) != len(proc_result.assets):
+                        logger.info(f"Pre-split assets: {len(proc_result.assets)} -> {len(presplit_assets)}")
+                        proc_result.assets = presplit_assets
+
+                    # Try extraction - if "too long" error, fall back to adaptive chunking
+                    extraction_result = await bedrock.extract_witnesses(
+                        assets=proc_result.assets,
+                        search_targets=search_targets,
+                        legal_context=legal_context
+                    )
+
+                    # Handle "Input is too long" error with adaptive processing
+                    if not extraction_result.success and extraction_result.error and "too long" in extraction_result.error.lower():
+                        logger.warning(
+                            f"Document {document.filename} too large for single request, "
+                            f"falling back to adaptive chunked processing"
+                        )
+                        extraction_result = await process_with_adaptive_chunks(
+                            proc_result.assets,
+                            initial_batch_size=10  # Start with batches of 10 pages
+                        )
+
+                    if not extraction_result.success:
+                        document.processing_error = extraction_result.error
+                        await session.commit()
+                        return {"success": False, "error": extraction_result.error}
 
             # Run verification pass to improve accuracy
             verified_witnesses = await bedrock.verify_witnesses(
@@ -789,9 +847,11 @@ async def _process_single_document_async(
                     )
                     witnesses_excluded += 1
                 else:
-                    # Update witness with job_id
+                    # Update witness with job_id and firm_document_id
                     if result.witness_record:
                         result.witness_record.job_id = job_id
+                        if firm_document_id:
+                            result.witness_record.firm_document_id = firm_document_id
 
                         # Save claim links if present
                         claim_links = getattr(w_data, 'claim_links', [])

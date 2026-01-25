@@ -274,6 +274,55 @@ class CanonicalWitness(Base):
     source_witnesses = relationship("Witness", back_populates="canonical_witness")
 
 
+class FirmDocument(Base):
+    """
+    Shared firm-level document store (created by AIDiscoveryDrafter).
+
+    This table is the canonical source of parsed document text shared across apps.
+    AIWitnessFinder reads from this table to avoid re-parsing documents.
+    """
+    __tablename__ = "firm_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+
+    # Clio references
+    clio_document_id = Column(String(255), nullable=False, index=True)
+    clio_matter_id = Column(String(255), nullable=True, index=True)
+    clio_folder_path = Column(String(1000), nullable=True)
+
+    # File metadata
+    file_name = Column(String(500), nullable=False)
+    file_size = Column(Integer, nullable=True)
+    content_type = Column(String(100), nullable=True)
+    content_hash = Column(String(64), nullable=False)  # SHA256 of content
+
+    # Parsed content
+    extracted_text = Column(Text, nullable=True)
+    extraction_method = Column(String(255), nullable=True)  # pdf, pdf_hybrid, docx, ocr, etc.
+    page_count = Column(Integer, nullable=True)
+
+    # Hybrid PDF processing metadata
+    pages_with_text = Column(Integer, nullable=True)  # Pages extracted with text
+    pages_with_ocr = Column(Integer, nullable=True)  # Pages processed with OCR
+
+    # AI analysis (optional)
+    document_summary = Column(Text, nullable=True)
+    document_type = Column(String(100), nullable=True)
+
+    # Timestamps from Clio
+    clio_created_at = Column(DateTime, nullable=True)
+    clio_updated_at = Column(DateTime, nullable=True)
+
+    # Our timestamps
+    parsed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    organization = relationship("Organization")
+
+
 class Witness(Base):
     """Extracted witness information"""
     __tablename__ = "witnesses"
@@ -282,6 +331,9 @@ class Witness(Base):
     document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
     job_id = Column(Integer, ForeignKey("processing_jobs.id", ondelete="SET NULL"), nullable=True, index=True)
     canonical_witness_id = Column(Integer, ForeignKey("canonical_witnesses.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    # Link to shared FirmDocument (for cross-app traceability)
+    firm_document_id = Column(Integer, ForeignKey("firm_documents.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Core witness info
     full_name = Column(String(255), nullable=False, index=True)
@@ -315,6 +367,7 @@ class Witness(Base):
     job = relationship("ProcessingJob", back_populates="witnesses")
     canonical_witness = relationship("CanonicalWitness", back_populates="source_witnesses")
     claim_links = relationship("WitnessClaimLink", back_populates="witness", cascade="all, delete-orphan")
+    firm_document = relationship("FirmDocument")
 
 
 class ProcessingJob(Base):
