@@ -92,7 +92,12 @@ function AuthCallbackContent() {
           </div>
           <div className="flex items-start gap-3 p-4 rounded-lg border mb-6">
             <Checkbox id="consent" checked={consentChecked} onCheckedChange={(c) => setConsentChecked(c === true)} />
-            <label htmlFor="consent" className="text-sm cursor-pointer">I understand AI extracts info that should be verified.</label>
+            <label htmlFor="consent" className="text-sm cursor-pointer">
+              I have read and agree to the{" "}
+              <a href="/privacy" target="_blank" className="text-blue-500 hover:underline">Privacy Policy</a>{" "}
+              and{" "}
+              <a href="/terms" target="_blank" className="text-blue-500 hover:underline">Terms of Service</a>.
+            </label>
           </div>
           <div className="flex gap-3">
             <Button variant="outline" className="flex-1" onClick={() => router.replace("/login")}>Cancel</Button>

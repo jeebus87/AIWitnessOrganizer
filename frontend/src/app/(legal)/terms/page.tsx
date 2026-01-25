@@ -33,6 +33,7 @@ export default function TermsOfServicePage() {
           <li><a href="#governing-law" className="hover:text-foreground">Governing Law</a></li>
           <li><a href="#dispute-resolution" className="hover:text-foreground">Dispute Resolution</a></li>
           <li><a href="#contact" className="hover:text-foreground">Contact Information</a></li>
+          <li><a href="#severability" className="hover:text-foreground">Severability</a></li>
         </ol>
       </nav>
 
@@ -242,7 +243,9 @@ export default function TermsOfServicePage() {
         <h2 className="text-2xl font-bold mb-4">12. Dispute Resolution</h2>
         <p className="mb-4">
           Before formal proceedings, contact us at support@juridionllc.com for informal resolution.
-          Unresolved disputes go to binding arbitration.
+          If informal resolution is unsuccessful, any dispute arising from these Terms shall be resolved
+          by binding arbitration administered by the American Arbitration Association in accordance with
+          its Commercial Arbitration Rules. The arbitration shall be conducted in California.
         </p>
         <p>
           You waive class action rights.
@@ -257,6 +260,19 @@ export default function TermsOfServicePage() {
           <p>Email: support@juridionllc.com</p>
           <p>Subject Line: &quot;Terms Inquiry - AI Witness Organizer&quot;</p>
         </div>
+      </section>
+
+      {/* Section 14: Severability */}
+      <section id="severability" className="mb-12">
+        <h2 className="text-2xl font-bold mb-4">14. Severability</h2>
+        <p>
+          If any provision of these Terms is held to be invalid, illegal, or unenforceable by a court
+          of competent jurisdiction, such provision shall be modified to the minimum extent necessary
+          to make it valid, legal, and enforceable while preserving the original intent, or if such
+          modification is not possible, such provision shall be severed from these Terms. The invalidity,
+          illegality, or unenforceability of any provision shall not affect the validity, legality, or
+          enforceability of any other provision of these Terms, which shall remain in full force and effect.
+        </p>
       </section>
 
       {/* Entire Agreement */}
