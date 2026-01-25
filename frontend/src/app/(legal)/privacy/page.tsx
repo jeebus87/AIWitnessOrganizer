@@ -123,7 +123,7 @@ export default function PrivacyPolicyPage() {
         <ul className="list-disc list-inside mb-6 space-y-2">
           <li>Encryption at rest using AES-256</li>
           <li>Encryption in transit using TLS 1.3</li>
-          <li>Private network connections for AI processing</li>
+          <li>AI processing through AWS Bedrock, which does not retain or train on customer data</li>
           <li>Regular security audits</li>
           <li>Role-based access controls</li>
         </ul>
