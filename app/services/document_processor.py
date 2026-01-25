@@ -331,6 +331,10 @@ class DocumentProcessor:
 
         import gc
 
+        # Memory protection limits
+        MAX_IMAGE_PAGES_PER_BATCH = 15  # gc.collect() every N image pages
+        MAX_TOTAL_IMAGE_PAGES = 100  # Max image pages to prevent OOM
+
         logger.info(f"Hybrid PDF processing started: {filename} ({len(content)} bytes)")
 
         assets = []
@@ -371,6 +375,16 @@ class DocumentProcessor:
                     logger.debug(f"Page {human_page_num}: text-based ({len(text)} chars, density={text_density:.4f})")
                 else:
                     # Scanned page: convert to image for vision processing
+                    # Memory protection: limit total image pages to prevent OOM
+                    if image_pages >= MAX_TOTAL_IMAGE_PAGES:
+                        logger.warning(f"Page {human_page_num}: skipped (max {MAX_TOTAL_IMAGE_PAGES} image pages reached)")
+                        continue
+
+                    # Batch gc.collect() to prevent memory accumulation
+                    if image_pages > 0 and image_pages % MAX_IMAGE_PAGES_PER_BATCH == 0:
+                        logger.info(f"Image batch {image_pages // MAX_IMAGE_PAGES_PER_BATCH} complete, running gc.collect()")
+                        gc.collect()
+
                     # Use PyMuPDF's get_pixmap which is faster than pdf2image
                     pix = page.get_pixmap(dpi=100)
 
