@@ -2,6 +2,8 @@
 import logging
 import os
 import io
+import gc
+import asyncio
 import tempfile
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
@@ -60,6 +62,13 @@ class DocumentProcessor:
     MAX_IMAGE_DIMENSION = 1920  # Under 2000px limit for multi-image requests
     SUPPORTED_IMAGE_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
     SUPPORTED_DOC_FORMATS = {".pdf", ".msg", ".eml", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".rtf", ".txt", ".html", ".htm", ".csv"}
+
+    # Parallel OCR settings for large PDFs (shared with AIDiscoveryDrafter)
+    PARALLEL_OCR_THRESHOLD_MB = 3  # Enable parallel OCR for files > 3MB
+    PARALLEL_OCR_THRESHOLD_PAGES = 15  # Or files with > 15 pages
+    PARALLEL_OCR_CONCURRENCY = 8  # Max concurrent page OCR tasks
+    TEXT_DENSITY_THRESHOLD = 0.001  # Min text chars per page area
+    MIN_TEXT_LENGTH = 100  # Min chars to consider page text-based
 
     def __init__(self, temp_dir: Optional[str] = None):
         self.temp_dir = temp_dir or tempfile.gettempdir()
@@ -301,6 +310,94 @@ class DocumentProcessor:
 
         return assets
 
+
+    async def _process_pages_parallel(
+        self,
+        doc,  # fitz.Document
+        pages_to_process: List[int],
+        filename: str,
+        context: str,
+        image_dpi: int,
+    ) -> List[ProcessedAsset]:
+        """
+        Process multiple PDF pages in parallel for large documents.
+        
+        This method is shared conceptually with AIDiscoveryDrafter's parallel OCR.
+        Both apps use the same thresholds and concurrency settings.
+        
+        Args:
+            doc: PyMuPDF document object
+            pages_to_process: List of page indices to process as images
+            filename: Original filename
+            context: Additional context
+            image_dpi: DPI for image rendering
+            
+        Returns:
+            List of ProcessedAssets (images) for the processed pages
+        """
+        assets: List[ProcessedAsset] = []
+        
+        async def process_single_page(page_idx: int) -> Optional[ProcessedAsset]:
+            """Process a single page and return asset."""
+            pix = None
+            img_bytes = None
+            processed_bytes = None
+            try:
+                page = doc[page_idx]
+                human_page_num = page_idx + 1
+                
+                pix = page.get_pixmap(dpi=image_dpi)
+                img_bytes = pix.tobytes("jpeg")
+                
+                # Resize/compress if needed
+                processed_bytes, media_type = self._resize_and_compress_image(img_bytes)
+                
+                return ProcessedAsset(
+                    asset_type="image",
+                    content=processed_bytes,
+                    media_type=media_type,
+                    filename=f"{filename}_page_{human_page_num}.jpg",
+                    original_filename=filename,
+                    context=context,
+                    page_number=human_page_num
+                )
+            except Exception as e:
+                logger.warning(f"Failed to process page {page_idx + 1}: {e}")
+                return None
+            finally:
+                if pix is not None:
+                    del pix
+                if img_bytes is not None:
+                    del img_bytes
+        
+        # Process in batches of PARALLEL_OCR_CONCURRENCY
+        concurrency = self.PARALLEL_OCR_CONCURRENCY
+        for batch_start in range(0, len(pages_to_process), concurrency):
+            batch = pages_to_process[batch_start:batch_start + concurrency]
+            
+            # Run batch in parallel
+            batch_results = await asyncio.gather(
+                *[process_single_page(idx) for idx in batch],
+                return_exceptions=True
+            )
+            
+            # Collect successful results
+            for result in batch_results:
+                if isinstance(result, ProcessedAsset):
+                    assets.append(result)
+                elif isinstance(result, Exception):
+                    logger.warning(f"Parallel page processing exception: {result}")
+            
+            # Progress logging
+            completed = batch_start + len(batch)
+            if completed % 20 == 0 or completed == len(pages_to_process):
+                logger.info(f"Parallel processing progress: {completed}/{len(pages_to_process)} pages")
+            
+            # Memory cleanup between batches
+            gc.collect()
+        
+        return assets
+
     async def _process_pdf_hybrid(
         self,
         content: bytes,
@@ -348,6 +445,67 @@ class DocumentProcessor:
             if file_size > 5_000_000:
                 logger.info(f"Large file detected ({file_size} bytes), using reduced DPI ({image_dpi})")
 
+            # Check if parallel processing should be used (shared thresholds with AIDiscoveryDrafter)
+            use_parallel = (
+                file_size > self.PARALLEL_OCR_THRESHOLD_MB * 1_000_000 or
+                total_pages > self.PARALLEL_OCR_THRESHOLD_PAGES
+            )
+
+            if use_parallel:
+                logger.info(
+                    f"Using PARALLEL processing for {total_pages} pages, "
+                    f"{file_size / 1_000_000:.1f}MB (thresholds: {self.PARALLEL_OCR_THRESHOLD_MB}MB or {self.PARALLEL_OCR_THRESHOLD_PAGES} pages)"
+                )
+                
+                # Phase 1: Classify all pages (fast, no image processing)
+                text_assets: List[ProcessedAsset] = []
+                pages_needing_images: List[int] = []
+                
+                for page_num in range(total_pages):
+                    page = doc[page_num]
+                    human_page_num = page_num + 1
+                    text = page.get_text("text").strip()
+                    rect = page.rect
+                    page_area = rect.width * rect.height if rect.width > 0 else 1
+                    text_density = len(text) / page_area
+                    
+                    is_text_based = len(text) >= min_text_length and text_density >= text_density_threshold
+                    
+                    if is_text_based:
+                        text_assets.append(ProcessedAsset(
+                            asset_type="text",
+                            content=text.encode("utf-8"),
+                            media_type="text/plain",
+                            filename=f"{filename}_page_{human_page_num}.txt",
+                            original_filename=filename,
+                            context=context,
+                            page_number=human_page_num
+                        ))
+                    else:
+                        pages_needing_images.append(page_num)
+                
+                logger.info(f"Page classification: {len(text_assets)} text, {len(pages_needing_images)} need images")
+                
+                # Phase 2: Process image pages in parallel
+                image_assets = await self._process_pages_parallel(
+                    doc, pages_needing_images, filename, context, image_dpi
+                )
+                
+                # Phase 3: Combine and sort by page number
+                all_assets = text_assets + image_assets
+                all_assets.sort(key=lambda a: a.page_number or 0)
+                
+                doc.close()
+                gc.collect()
+                
+                logger.info(
+                    f"Hybrid PDF (parallel) complete: {filename} - "
+                    f"{total_pages} pages ({len(text_assets)} text, {len(image_assets)} image)"
+                )
+                
+                return all_assets
+
+            # Sequential processing for smaller files (existing logic)
             for page_num in range(total_pages):
                 page = doc[page_num]
                 human_page_num = page_num + 1  # 1-indexed for display
