@@ -331,11 +331,11 @@ class DocumentProcessor:
 
         import gc
 
-        # Memory protection limits
-        MAX_IMAGE_PAGES_PER_BATCH = 15  # gc.collect() every N image pages
-        MAX_TOTAL_IMAGE_PAGES = 100  # Max image pages to prevent OOM
+        file_size = len(content)
+        logger.info(f"Hybrid PDF processing started: {filename} ({file_size} bytes)")
 
-        logger.info(f"Hybrid PDF processing started: {filename} ({len(content)} bytes)")
+        # Use lower DPI for very large files to reduce memory per page
+        image_dpi = 72 if file_size > 5_000_000 else 100
 
         assets = []
         text_pages = 0
@@ -344,6 +344,9 @@ class DocumentProcessor:
         try:
             doc = fitz.open(stream=content, filetype="pdf")
             total_pages = len(doc)
+
+            if file_size > 5_000_000:
+                logger.info(f"Large file detected ({file_size} bytes), using reduced DPI ({image_dpi})")
 
             for page_num in range(total_pages):
                 page = doc[page_num]
@@ -375,42 +378,48 @@ class DocumentProcessor:
                     logger.debug(f"Page {human_page_num}: text-based ({len(text)} chars, density={text_density:.4f})")
                 else:
                     # Scanned page: convert to image for vision processing
-                    # Memory protection: limit total image pages to prevent OOM
-                    if image_pages >= MAX_TOTAL_IMAGE_PAGES:
-                        logger.warning(f"Page {human_page_num}: skipped (max {MAX_TOTAL_IMAGE_PAGES} image pages reached)")
-                        continue
+                    # Process ALL pages - no limits
+                    pix = None
+                    img_bytes = None
+                    processed_bytes = None
 
-                    # Batch gc.collect() to prevent memory accumulation
-                    if image_pages > 0 and image_pages % MAX_IMAGE_PAGES_PER_BATCH == 0:
-                        logger.info(f"Image batch {image_pages // MAX_IMAGE_PAGES_PER_BATCH} complete, running gc.collect()")
+                    try:
+                        pix = page.get_pixmap(dpi=image_dpi)
+                        img_bytes = pix.tobytes("jpeg")
+
+                        # Resize/compress if needed
+                        processed_bytes, media_type = self._resize_and_compress_image(img_bytes)
+
+                        assets.append(ProcessedAsset(
+                            asset_type="image",
+                            content=processed_bytes,
+                            media_type=media_type,
+                            filename=f"{filename}_page_{human_page_num}.jpg",
+                            original_filename=filename,
+                            context=context,
+                            page_number=human_page_num
+                        ))
+                        image_pages += 1
+                        logger.debug(f"Page {human_page_num}: scanned/image ({len(text)} chars, density={text_density:.4f})")
+
+                    finally:
+                        # AGGRESSIVE cleanup after EVERY image page
+                        if pix is not None:
+                            del pix
+                        if img_bytes is not None:
+                            del img_bytes
+                        # Note: processed_bytes is now in the asset, don't delete
                         gc.collect()
 
-                    # Use PyMuPDF's get_pixmap which is faster than pdf2image
-                    pix = page.get_pixmap(dpi=100)
+                # Clear page reference
+                del page
 
-                    # Convert to JPEG bytes
-                    img_bytes = pix.tobytes("jpeg")
-
-                    # Resize/compress if needed
-                    processed_bytes, media_type = self._resize_and_compress_image(img_bytes)
-
-                    assets.append(ProcessedAsset(
-                        asset_type="image",
-                        content=processed_bytes,
-                        media_type=media_type,
-                        filename=f"{filename}_page_{human_page_num}.jpg",
-                        original_filename=filename,
-                        context=context,
-                        page_number=human_page_num
-                    ))
-                    image_pages += 1
-                    logger.debug(f"Page {human_page_num}: scanned/image ({len(text)} chars, density={text_density:.4f})")
-
-                # Garbage collection every few pages
-                if human_page_num % 10 == 0:
-                    gc.collect()
+                # Log progress every 25 pages
+                if human_page_num % 25 == 0:
+                    logger.info(f"Progress: {human_page_num}/{total_pages} pages ({text_pages} text, {image_pages} image)")
 
             doc.close()
+            del doc
 
         except Exception as e:
             logger.error(f"Hybrid PDF processing failed for {filename}: {e}")
