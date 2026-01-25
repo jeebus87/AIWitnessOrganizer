@@ -14,21 +14,21 @@ export function Footer() {
                     </div>
 
                     <div className="flex gap-8 text-sm text-muted-foreground">
-                        <Link href="#" className="hover:text-foreground transition-colors">
+                        <Link href="/terms" className="hover:text-foreground transition-colors">
                             Terms
                         </Link>
-                        <Link href="#" className="hover:text-foreground transition-colors">
+                        <Link href="/privacy" className="hover:text-foreground transition-colors">
                             Privacy
                         </Link>
-                        <Link href="#" className="hover:text-foreground transition-colors">
+                        <Link href="mailto:support@juridionlaw.com" className="hover:text-foreground transition-colors">
                             Contact
                         </Link>
                     </div>
 
                     <div className="flex flex-col sm:flex-row gap-2 text-sm text-muted-foreground">
-                        <p>© {new Date().getFullYear()} Juridionlaw LLC. All rights reserved.</p>
+                        <p>© {new Date().getFullYear()} Juridion LLC. All rights reserved.</p>
                         <p className="hidden sm:block">•</p>
-                        <p>A product by <span className="font-medium">Juridionlaw LLC</span></p>
+                        <p>A product by <span className="font-medium">Juridion LLC</span></p>
                     </div>
                 </div>
             </div>
