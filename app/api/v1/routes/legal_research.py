@@ -9,9 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.session import get_db
-from app.db.models import User, LegalResearchResult, LegalResearchStatus, ProcessingJob, JobStatus, Matter, Witness, CaseClaim, Document, RelevanceLevel
+from app.db.models import User, LegalResearchResult, LegalResearchStatus, ProcessingJob, JobStatus, Matter, Witness, CaseClaim, Document, RelevanceLevel, BatchJob, BatchJobType
 from app.api.deps import get_current_user
 from app.services.legal_research_service import get_legal_research_service
+from app.services.batch_inference_service import get_batch_inference_service
 
 logger = logging.getLogger(__name__)
 
@@ -499,77 +500,8 @@ async def generate_legal_research(
                 except Exception as e:
                     logger.warning(f"Failed to fetch opinion text for {r.id}: {e}")
 
-        # Prepare cases for AI analysis
-        cases_for_analysis = [
-            {
-                "id": r.id,
-                "case_name": r.case_name,
-                "snippet": r.snippet,
-                "court": r.court
-            }
-            for r in all_results
-        ]
-        relevance_results = await legal_service.analyze_case_relevance_batch(
-            cases=cases_for_analysis,
-            user_context=user_context
-        )
-
-        # Apply relevance explanations and scores to results
-        # Filter out cases with low relevance scores (< 5)
-        MIN_RELEVANCE_SCORE = 5
-        filtered_results = []
-        for r in all_results:
-            relevance_data = relevance_results.get(r.id, {})
-            r.relevance_explanation = relevance_data.get("explanation") if isinstance(relevance_data, dict) else relevance_data
-            ai_score = relevance_data.get("score", 5) if isinstance(relevance_data, dict) else 5
-            r.relevance_score = float(ai_score)  # Use AI's relevance score
-
-            if ai_score >= MIN_RELEVANCE_SCORE:
-                filtered_results.append(r)
-            else:
-                logger.info(f"Filtering out case {r.id} ({r.case_name[:50]}...) - relevance score {ai_score} < {MIN_RELEVANCE_SCORE}")
-
-        logger.info(f"Filtered from {len(all_results)} to {len(filtered_results)} cases (removed {len(all_results) - len(filtered_results)} irrelevant)")
-        all_results = filtered_results
-
-        if not all_results:
-            return {
-                "has_results": False,
-                "status": None,
-                "message": "No relevant case law found after filtering"
-            }
-
-        # Sort by relevance score descending, limit to top 10 for IRAC analysis
-        all_results.sort(key=lambda x: x.relevance_score, reverse=True)
-        cases_for_irac = all_results[:10]  # Limit to top 10 to avoid JSON truncation
-
-        # Update cases_for_analysis with only top results
-        cases_for_analysis = [
-            {
-                "id": r.id,
-                "case_name": r.case_name,
-                "snippet": r.snippet,
-                "court": r.court
-            }
-            for r in cases_for_irac
-        ]
-
-        # Generate IRAC analysis only for top relevant cases (batched)
-        irac_analyses = await legal_service.analyze_case_irac_batch(
-            cases=cases_for_analysis,
-            user_context=user_context
-        )
-
-        # Apply IRAC analysis to results
-        for r in all_results:
-            irac = irac_analyses.get(r.id, {})
-            r.irac_issue = irac.get("issue")
-            r.irac_rule = irac.get("rule")
-            r.irac_application = irac.get("application")
-            r.irac_conclusion = irac.get("conclusion")
-            r.case_utility = irac.get("utility")
-
-        # Save results to database
+        # Save preliminary results (without AI analysis) to database
+        # AI analysis will be added by background batch job
         results_json = [
             {
                 "id": r.id,
@@ -582,21 +514,23 @@ async def generate_legal_research(
                 "pdf_url": r.pdf_url,
                 "relevance_score": r.relevance_score,
                 "matched_query": r.matched_query,
-                "relevance_explanation": r.relevance_explanation,
-                "irac_issue": r.irac_issue,
-                "irac_rule": r.irac_rule,
-                "irac_application": r.irac_application,
-                "irac_conclusion": r.irac_conclusion,
-                "case_utility": r.case_utility
+                # AI fields will be populated by batch job
+                "relevance_explanation": None,
+                "irac_issue": None,
+                "irac_rule": None,
+                "irac_application": None,
+                "irac_conclusion": None,
+                "case_utility": None
             }
             for r in all_results
         ]
 
+        # Save research record with PENDING status (batch will update to READY)
         research_record = LegalResearchResult(
             job_id=job_id,
             user_id=current_user.id,
             matter_id=job.target_matter_id,
-            status=LegalResearchStatus.READY,
+            status=LegalResearchStatus.PENDING,
             results=results_json,
             selected_ids=[]
         )
@@ -604,36 +538,64 @@ async def generate_legal_research(
         await db.commit()
         await db.refresh(research_record)
 
-        # Format and return
-        formatted_results = []
-        for r in results_json:
-            formatted_results.append({
-                "id": r.get("id", 0),
-                "case_name": r.get("case_name", "Unknown"),
-                "citation": r.get("citation"),
-                "court": r.get("court", "Unknown"),
-                "date_filed": r.get("date_filed"),
-                "snippet": r.get("snippet", "")[:300],
-                "absolute_url": r.get("absolute_url", ""),
-                "matched_query": r.get("matched_query"),
-                "relevance_score": r.get("relevance_score"),
-                "relevance_explanation": r.get("relevance_explanation"),
-                "irac_issue": r.get("irac_issue"),
-                "irac_rule": r.get("irac_rule"),
-                "irac_application": r.get("irac_application"),
-                "irac_conclusion": r.get("irac_conclusion"),
-                "case_utility": r.get("case_utility")
-            })
+        # Submit batch job for AI analysis (relevance + IRAC)
+        try:
+            batch_job = await legal_service.submit_legal_research_batch(
+                db=db,
+                user_id=current_user.id,
+                processing_job_id=job_id,
+                cases=all_results,
+                user_context=user_context,
+            )
+            logger.info(f"Submitted batch job {batch_job.id} for legal research analysis")
 
-        return {
-            "has_results": True,
-            "id": research_record.id,
-            "job_id": job_id,
-            "status": "ready",
-            "results": formatted_results,
-            "selected_ids": [],
-            "created_at": research_record.created_at.isoformat() if research_record.created_at else None
-        }
+            # Return immediately - results will be available when batch completes
+            return {
+                "has_results": False,
+                "status": "processing",
+                "message": "Legal research analysis in progress. You'll be notified when complete.",
+                "batch_job_id": batch_job.id,
+                "case_count": len(all_results),
+                "research_id": research_record.id
+            }
+
+        except Exception as batch_error:
+            logger.error(f"Failed to submit batch job: {batch_error}")
+            # If batch submission fails, fall back to returning preliminary results
+            # Update status to READY so user can see something
+            research_record.status = LegalResearchStatus.READY
+            await db.commit()
+
+            formatted_results = []
+            for r in results_json:
+                formatted_results.append({
+                    "id": r.get("id", 0),
+                    "case_name": r.get("case_name", "Unknown"),
+                    "citation": r.get("citation"),
+                    "court": r.get("court", "Unknown"),
+                    "date_filed": r.get("date_filed"),
+                    "snippet": r.get("snippet", "")[:300],
+                    "absolute_url": r.get("absolute_url", ""),
+                    "matched_query": r.get("matched_query"),
+                    "relevance_score": r.get("relevance_score"),
+                    "relevance_explanation": None,
+                    "irac_issue": None,
+                    "irac_rule": None,
+                    "irac_application": None,
+                    "irac_conclusion": None,
+                    "case_utility": None
+                })
+
+            return {
+                "has_results": True,
+                "id": research_record.id,
+                "job_id": job_id,
+                "status": "ready",
+                "results": formatted_results,
+                "selected_ids": [],
+                "created_at": research_record.created_at.isoformat() if research_record.created_at else None,
+                "warning": "AI analysis unavailable - showing basic results"
+            }
 
     except HTTPException:
         raise

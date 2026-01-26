@@ -360,6 +360,32 @@ class ApiClient {
   async getPendingLegalResearch(token: string) {
     return this.request<PendingLegalResearchResponse>("/api/v1/legal-research/pending", { token });
   }
+
+  // Batch Jobs
+  async getPendingBatchJobs(token: string) {
+    return this.request<BatchJobListResponse>("/api/v1/batch/pending", { token });
+  }
+
+  async getBatchJobStatus(jobId: number, token: string) {
+    return this.request<BatchJobResponse>(`/api/v1/batch/${jobId}`, { token });
+  }
+
+  async markBatchJobNotified(jobId: number, token: string) {
+    return this.request<{ success: boolean; message: string }>(`/api/v1/batch/${jobId}/notified`, {
+      method: "POST",
+      token,
+    });
+  }
+
+  async listBatchJobs(token: string, params?: { status?: string; job_type?: string; limit?: number; offset?: number }) {
+    const searchParams = new URLSearchParams();
+    if (params?.status) searchParams.set('status', params.status);
+    if (params?.job_type) searchParams.set('job_type', params.job_type);
+    if (params?.limit) searchParams.set('limit', params.limit.toString());
+    if (params?.offset) searchParams.set('offset', params.offset.toString());
+    const query = searchParams.toString();
+    return this.request<BatchJobListResponse>(`/api/v1/batch${query ? '?' + query : ''}`, { token });
+  }
 }
 
 // Types
@@ -709,10 +735,15 @@ export interface LegalResearchResponse {
   has_results: boolean;
   id?: number;
   job_id?: number;
-  status?: string;
+  status?: string;  // "ready" | "processing" | "pending"
   results?: CaseLawResult[];
   selected_ids?: number[];
   created_at?: string;
+  message?: string;  // For processing status messages
+  batch_job_id?: number;  // When processing in background
+  case_count?: number;  // Number of cases being analyzed
+  research_id?: number;  // ID of the research record
+  warning?: string;  // For partial results
 }
 
 export interface PendingLegalResearchItem {
@@ -726,6 +757,27 @@ export interface PendingLegalResearchItem {
 export interface PendingLegalResearchResponse {
   pending_count: number;
   items: PendingLegalResearchItem[];
+}
+
+// Batch Job types
+export type BatchJobType = "witness_extraction" | "legal_research";
+
+export interface BatchJobResponse {
+  id: number;
+  job_type: BatchJobType;
+  status: string;
+  processing_job_id: number | null;
+  total_records: number;
+  processed_records: number;
+  submitted_at: string;
+  completed_at: string | null;
+  error_message: string | null;
+  user_notified: boolean;
+}
+
+export interface BatchJobListResponse {
+  jobs: BatchJobResponse[];
+  total: number;
 }
 
 export const api = new ApiClient(API_BASE_URL);

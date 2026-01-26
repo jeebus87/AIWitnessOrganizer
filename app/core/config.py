@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     bedrock_model_id: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 
+    # AWS Bedrock Batch Inference
+    batch_s3_bucket: str = "aiwitnessfinder-batch"
+    batch_s3_input_prefix: str = "batch-input/"
+    batch_s3_output_prefix: str = "batch-output/"
+    bedrock_batch_role_arn: Optional[str] = None  # IAM role for Bedrock batch jobs
+
     # Firebase
     firebase_project_id: Optional[str] = None
     firebase_private_key_id: Optional[str] = None

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar";
 import { HelpChatbot } from "@/components/help-chatbot";
 import { SyncOverlay } from "@/components/sync-overlay";
+import { BatchNotificationPoller } from "@/components/batch-notification-poller";
 import { DemoModal, useDemoModal } from "@/components/onboarding/demo-modal";
 import { useAuthStore } from "@/store/auth";
 
@@ -43,6 +44,9 @@ export default function AuthenticatedLayout({
         onOpenChange={setShowDemo}
         onComplete={markComplete}
       />
+
+      {/* Background batch job notifications */}
+      <BatchNotificationPoller />
 
       <SyncOverlay />
       <div className="flex h-screen">

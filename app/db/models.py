@@ -654,3 +654,79 @@ class LegalResearchResult(Base):
     job = relationship("ProcessingJob")
     matter = relationship("Matter")
     user = relationship("User")
+
+
+class BatchJobType(str, PyEnum):
+    """Types of batch inference jobs"""
+    WITNESS_EXTRACTION = "witness_extraction"
+    LEGAL_RESEARCH = "legal_research"
+
+
+class BatchJobStatus(str, PyEnum):
+    """Status of a batch inference job (matches AWS Bedrock statuses)"""
+    SUBMITTED = "Submitted"
+    VALIDATING = "Validating"
+    SCHEDULED = "Scheduled"
+    IN_PROGRESS = "InProgress"
+    COMPLETED = "Completed"
+    FAILED = "Failed"
+    STOPPING = "Stopping"
+    STOPPED = "Stopped"
+    PARTIALLY_COMPLETED = "PartiallyCompleted"
+    EXPIRED = "Expired"
+
+
+class BatchJob(Base):
+    """
+    Tracks AWS Bedrock batch inference jobs for background processing.
+
+    Batch inference allows processing multiple AI requests in a single job,
+    with separate quotas from on-demand inference (no daily token limits)
+    and 50% cost savings.
+    """
+    __tablename__ = "batch_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    processing_job_id = Column(Integer, ForeignKey("processing_jobs.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    # AWS Batch Job identifiers
+    aws_job_arn = Column(String(500), nullable=False, unique=True)
+    aws_job_name = Column(String(255), nullable=True)
+
+    # S3 locations
+    input_s3_uri = Column(String(500), nullable=False)
+    output_s3_uri = Column(String(500), nullable=True)
+
+    # Job type and status
+    job_type = Column(
+        Enum(BatchJobType, values_callable=lambda obj: [e.value for e in obj]),
+        nullable=False
+    )
+    status = Column(String(50), default="Submitted", nullable=False)
+
+    # Record tracking
+    total_records = Column(Integer, default=0, nullable=False)
+    processed_records = Column(Integer, default=0, nullable=False)
+    failed_records = Column(Integer, default=0, nullable=False)
+
+    # Token usage (populated on completion)
+    input_tokens = Column(Integer, default=0, nullable=False)
+    output_tokens = Column(Integer, default=0, nullable=False)
+
+    # Results (stored when complete for quick retrieval)
+    results_json = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    # Notification tracking
+    user_notified = Column(Boolean, default=False, nullable=False)
+
+    # Timing
+    submitted_at = Column(DateTime, server_default=func.now(), nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    user = relationship("User")
+    processing_job = relationship("ProcessingJob")

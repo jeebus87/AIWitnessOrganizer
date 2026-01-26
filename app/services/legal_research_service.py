@@ -1120,6 +1120,354 @@ CRITICAL REQUIREMENTS:
             return {}
 
 
+    async def submit_legal_research_batch(
+        self,
+        db,  # AsyncSession
+        user_id: int,
+        processing_job_id: int,
+        cases: List[CaseLawResult],
+        user_context: Dict[str, Any],
+    ):
+        """
+        Submit legal research (relevance + IRAC analysis) as a batch job.
+
+        This replaces the synchronous analyze_case_relevance_batch and
+        analyze_case_irac_batch calls with a background batch job.
+
+        Args:
+            db: Database session
+            user_id: User ID for tracking
+            processing_job_id: Processing job ID
+            cases: List of CaseLawResult from CourtListener search
+            user_context: Context dict for analysis
+
+        Returns:
+            BatchJob record
+        """
+        from app.db.models import BatchJob, BatchJobType
+        from app.services.batch_inference_service import get_batch_inference_service
+
+        if not cases:
+            raise ValueError("No cases to analyze")
+
+        batch_service = get_batch_inference_service()
+        records = []
+
+        # Build context for prompts
+        practice_area = user_context.get("practice_area", "General Litigation")
+        defendant_type = user_context.get("defendant_type", "Unknown")
+        harm_type = user_context.get("harm_type", "Unknown")
+        allegations = user_context.get("allegations", [])
+        key_facts = user_context.get("key_facts", [])
+        legal_theories = user_context.get("legal_theories", [])
+        case_number = user_context.get("case_number", "")
+        case_name = user_context.get("case_name", "")
+        defendant_name = user_context.get("defendant_name") or defendant_type
+
+        # Format context text
+        allegations_text = "\n".join(
+            f"- {a['text'][:300]}" for a in allegations[:5]
+            if isinstance(a, dict) and a.get('text')
+        ) if allegations else "Not specified"
+
+        facts_text = "\n".join(
+            f"- {f[:200]}" for f in key_facts[:5]
+        ) if key_facts else "Not specified"
+
+        case_identifier = f"{case_name}" if case_name else f"Case No. {case_number}"
+        if case_number and case_name and case_number not in case_name:
+            case_identifier = f"{case_name} ({case_number})"
+
+        # Create batch records for each case (both relevance and IRAC)
+        for case in cases[:15]:
+            case_dict = {
+                "id": case.id,
+                "case_name": case.case_name,
+                "court": case.court,
+                "snippet": case.snippet[:1500],
+            }
+
+            # Relevance analysis record
+            relevance_prompt = self._build_relevance_prompt(
+                [case_dict], practice_area, defendant_type, harm_type,
+                allegations_text, facts_text
+            )
+            records.append(batch_service.create_batch_record(
+                record_id=f"relevance-{processing_job_id}-{case.id}",
+                system_prompt="You are a legal research assistant analyzing case relevance.",
+                user_message=relevance_prompt,
+                max_tokens=1000,
+                temperature=0.4,
+            ))
+
+            # IRAC analysis record
+            irac_prompt = self._build_irac_prompt(
+                [case_dict], practice_area, defendant_type, defendant_name,
+                harm_type, allegations_text, facts_text, legal_theories,
+                case_identifier
+            )
+            records.append(batch_service.create_batch_record(
+                record_id=f"irac-{processing_job_id}-{case.id}",
+                system_prompt="You are creating case briefs for a practicing attorney.",
+                user_message=irac_prompt,
+                max_tokens=2000,
+                temperature=0.4,
+            ))
+
+        # Generate job identifiers
+        job_name = batch_service.generate_job_name("legal-research", processing_job_id)
+        input_key = batch_service.generate_input_key("legal-research", processing_job_id)
+        output_uri = batch_service.generate_output_uri("legal-research", processing_job_id)
+
+        # Create JSONL and upload
+        jsonl_content = batch_service.create_jsonl_content(records)
+        input_s3_uri = batch_service.upload_to_s3(jsonl_content, input_key)
+
+        # Submit batch job
+        result = batch_service.submit_batch_job(
+            input_s3_uri=input_s3_uri,
+            output_s3_uri=output_uri,
+            job_name=job_name,
+        )
+
+        # Create BatchJob record
+        batch_job = BatchJob(
+            user_id=user_id,
+            processing_job_id=processing_job_id,
+            aws_job_arn=result["job_arn"],
+            job_type=BatchJobType.LEGAL_RESEARCH,
+            status="Submitted",
+            input_s3_uri=result["input_uri"],
+            output_s3_uri=result["output_uri"],
+            total_records=len(records),
+        )
+
+        db.add(batch_job)
+        await db.commit()
+        await db.refresh(batch_job)
+
+        logger.info(f"Legal research batch job submitted: {batch_job.aws_job_arn}")
+        return batch_job
+
+    def _build_relevance_prompt(
+        self,
+        cases: List[Dict],
+        practice_area: str,
+        defendant_type: str,
+        harm_type: str,
+        allegations_text: str,
+        facts_text: str,
+    ) -> str:
+        """Build the relevance analysis prompt for a single case."""
+        case = cases[0]
+        case_name = case.get("case_name", "Unknown")[:100]
+        court = case.get("court", "Unknown")
+        snippet = re.sub(r'<[^>]+>', '', case.get("snippet", "")[:1500])
+
+        return f"""Analyze the relevance of this case to the attorney's matter.
+
+YOUR CASE:
+- Practice Area: {practice_area}
+- Defendant Type: {defendant_type}
+- Harm Type: {harm_type}
+- Key Allegations:
+{allegations_text}
+- Key Facts:
+{facts_text}
+
+CASE TO ANALYZE:
+Case: {case_name}
+Court: {court}
+Excerpt: {snippet}
+
+Explain in 2-3 sentences:
+1. What SPECIFIC legal principle does this case establish?
+2. How do the facts COMPARE to YOUR facts?
+3. Is this DIRECTLY relevant or TANGENTIALLY relevant?
+
+RELEVANCE SCORING (1-10):
+- 1-3: NOT RELEVANT
+- 4-5: MARGINALLY RELEVANT
+- 6-7: MODERATELY RELEVANT
+- 8-10: HIGHLY RELEVANT
+
+Respond in JSON:
+{{"score": 8, "explanation": "This case supports your position because..."}}"""
+
+    def _build_irac_prompt(
+        self,
+        cases: List[Dict],
+        practice_area: str,
+        defendant_type: str,
+        defendant_name: str,
+        harm_type: str,
+        allegations_text: str,
+        facts_text: str,
+        legal_theories: List[str],
+        case_identifier: str,
+    ) -> str:
+        """Build the IRAC analysis prompt for a single case."""
+        case = cases[0]
+        case_name = case.get("case_name", "Unknown")[:100]
+        court = case.get("court", "Unknown")
+        snippet = re.sub(r'<[^>]+>', '', case.get("snippet", "")[:1500])
+        theories_text = ", ".join(legal_theories) if legal_theories else "To be determined"
+
+        return f"""Create a case brief for this case.
+
+YOUR CURRENT CASE:
+- Case: {case_identifier}
+- Practice Area: {practice_area}
+- Defendant: {defendant_name} ({defendant_type})
+- Harm/Damages: {harm_type}
+- Legal Theories: {theories_text}
+- ALLEGATIONS:
+{allegations_text}
+- KEY FACTS:
+{facts_text}
+
+CASE TO BRIEF:
+Case: {case_name}
+Court: {court}
+Excerpt: {snippet}
+
+Provide IRAC analysis:
+- ISSUE: "Whether..." question with legal standard + facts
+- RULE: Citation + numbered elements/test
+- APPLICATION: Explain WHY using causal language
+- CONCLUSION: Yes/No answer to the Issue
+- UTILITY: How to use this case (command verbs: Argue, Cite, Use)
+
+Respond in JSON:
+{{"issue": "...", "rule": "...", "application": "...", "conclusion": "...", "utility": "..."}}"""
+
+    async def process_completed_batch(
+        self,
+        db,  # AsyncSession
+        batch_job,  # BatchJob
+    ) -> int:
+        """
+        Process completed legal research batch results.
+
+        Updates the LegalResearchResult JSON with AI analysis and changes
+        status from PENDING to READY.
+
+        Args:
+            db: Database session
+            batch_job: Completed BatchJob with results_json
+
+        Returns:
+            Number of cases updated
+        """
+        from app.db.models import LegalResearchResult, LegalResearchStatus
+        from sqlalchemy import select
+
+        if not batch_job.results_json:
+            logger.warning(f"No results in batch job {batch_job.id}")
+            return 0
+
+        results = batch_job.results_json
+        case_data = {}  # Aggregate relevance + IRAC per case
+
+        # Parse results and group by case ID
+        for record_id, result in results.items():
+            if result.get("error"):
+                logger.warning(f"Error in record {record_id}: {result.get('error_message')}")
+                continue
+
+            content = result.get("content", "")
+            if not content:
+                continue
+
+            # Parse record_id: "relevance-{job_id}-{case_id}" or "irac-{job_id}-{case_id}"
+            parts = record_id.split("-")
+            if len(parts) < 3:
+                continue
+
+            record_type = parts[0]
+            try:
+                case_id = int(parts[-1])
+            except ValueError:
+                continue
+
+            if case_id not in case_data:
+                case_data[case_id] = {}
+
+            # Parse JSON from content
+            try:
+                json_match = re.search(r'\{[\s\S]*\}', content)
+                if json_match:
+                    data = json.loads(json_match.group())
+
+                    if record_type == "relevance":
+                        case_data[case_id]["relevance_score"] = data.get("score", 5)
+                        case_data[case_id]["relevance_explanation"] = data.get("explanation", "")
+                    elif record_type == "irac":
+                        case_data[case_id]["irac_issue"] = data.get("issue", "")
+                        case_data[case_id]["irac_rule"] = data.get("rule", "")
+                        case_data[case_id]["irac_application"] = data.get("application", "")
+                        case_data[case_id]["irac_conclusion"] = data.get("conclusion", "")
+                        case_data[case_id]["case_utility"] = data.get("utility", "")
+
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(f"Failed to parse {record_type} for case {case_id}: {e}")
+
+        if not case_data:
+            logger.warning(f"No valid case data parsed from batch job {batch_job.id}")
+            return 0
+
+        # Find the LegalResearchResult for this processing job
+        stmt = select(LegalResearchResult).where(
+            LegalResearchResult.job_id == batch_job.processing_job_id,
+            LegalResearchResult.status == LegalResearchStatus.PENDING
+        ).order_by(LegalResearchResult.created_at.desc()).limit(1)
+
+        result_obj = await db.execute(stmt)
+        legal_result = result_obj.scalar_one_or_none()
+
+        if not legal_result:
+            logger.warning(f"No pending LegalResearchResult found for job {batch_job.processing_job_id}")
+            return 0
+
+        # Update the JSON results with AI analysis
+        updated_results = []
+        updated_count = 0
+        MIN_RELEVANCE_SCORE = 5
+
+        for case_result in legal_result.results or []:
+            case_id = case_result.get("id")
+            ai_data = case_data.get(case_id, {})
+
+            if ai_data:
+                # Apply AI analysis
+                case_result["relevance_score"] = ai_data.get("relevance_score", case_result.get("relevance_score", 5))
+                case_result["relevance_explanation"] = ai_data.get("relevance_explanation")
+                case_result["irac_issue"] = ai_data.get("irac_issue")
+                case_result["irac_rule"] = ai_data.get("irac_rule")
+                case_result["irac_application"] = ai_data.get("irac_application")
+                case_result["irac_conclusion"] = ai_data.get("irac_conclusion")
+                case_result["case_utility"] = ai_data.get("case_utility")
+                updated_count += 1
+
+            # Filter by relevance score
+            score = case_result.get("relevance_score", 5)
+            if score >= MIN_RELEVANCE_SCORE:
+                updated_results.append(case_result)
+            else:
+                logger.info(f"Filtering case {case_id} with score {score} < {MIN_RELEVANCE_SCORE}")
+
+        # Sort by relevance score descending
+        updated_results.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
+
+        # Update the record
+        legal_result.results = updated_results
+        legal_result.status = LegalResearchStatus.READY
+
+        await db.commit()
+        logger.info(f"Updated LegalResearchResult {legal_result.id} with {updated_count} AI analyses, {len(updated_results)} cases after filtering")
+        return updated_count
+
+
 # Singleton instance
 _legal_research_service: Optional[LegalResearchService] = None
 

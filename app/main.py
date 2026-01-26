@@ -10,7 +10,7 @@ import structlog
 
 from app.core.config import settings
 from app.db.session import init_db, close_db
-from app.api.v1.routes import auth, witnesses, jobs, matters, billing, relevancy, webhooks, test_e2e, legal_research
+from app.api.v1.routes import auth, witnesses, jobs, matters, billing, relevancy, webhooks, test_e2e, legal_research, batch
 
 
 # Configure structured logging
@@ -170,6 +170,7 @@ app.include_router(relevancy.router, prefix="/api/v1")
 app.include_router(webhooks.router, prefix="/api/v1")
 app.include_router(test_e2e.router, prefix="/api/v1")
 app.include_router(legal_research.router, prefix="/api/v1")
+app.include_router(batch.router, prefix="/api/v1")
 
 
 # Startup message

@@ -61,11 +61,23 @@ export function LegalResearchDialog({
       // Use generate endpoint - returns existing results or creates new ones
       api.generateLegalResearch(jobId, token)
         .then((data) => {
+          // Check if analysis is still processing in background
+          if (data.status === "processing") {
+            toast.info(data.message || "Legal research analysis in progress. You'll be notified when complete.");
+            onOpenChange(false);  // Close dialog immediately
+            return;
+          }
+
           setResearchData(data);
           // Pre-select top 5 results
           if (data.results && data.results.length > 0) {
             const topIds = data.results.slice(0, 5).map(r => r.id);
             setSelectedIds(new Set(topIds));
+          }
+
+          // Show warning if AI analysis was unavailable
+          if (data.warning) {
+            toast.warning(data.warning);
           }
         })
         .catch((err) => {
@@ -86,7 +98,7 @@ export function LegalResearchDialog({
           setLoading(false);
         });
     }
-  }, [open, jobId, token]);
+  }, [open, jobId, token, onOpenChange]);
 
   // Reset state when dialog closes
   useEffect(() => {
