@@ -382,85 +382,7 @@ async def _process_single_document_async(
             return {"success": False, "error": "Clio integration not found"}
 
         try:
-            # Decrypt tokens
-            access_token = decrypt_token(clio_integration.access_token_encrypted)
-            refresh_token = decrypt_token(clio_integration.refresh_token_encrypted)
-
-            # Download document from Clio
-            async with ClioClient(
-                access_token=access_token,
-                refresh_token=refresh_token,
-                token_expires_at=clio_integration.token_expires_at,
-                region=clio_integration.clio_region
-            ) as clio:
-                # Refresh document info if filename is unknown
-                if document.filename == "unknown" or not document.filename:
-                    logger.info(f"Refreshing document info from Clio for document {document.id}")
-                    doc_info = await clio.get_document(int(document.clio_document_id))
-                    if doc_info.get("name"):
-                        document.filename = doc_info["name"]
-                        document.file_type = doc_info.get("content_type", "").split("/")[-1] if doc_info.get("content_type") else None
-                        await session.commit()
-                        logger.info(f"Updated document filename to: {document.filename}")
-
-                content = await clio.download_document(int(document.clio_document_id))
-
-            # === WORK PRODUCT FILTER ===
-            # Check if document is attorney work product before processing
-            content_preview = content[:2048].decode('utf-8', errors='ignore') if content else ""
-            if _is_work_product(document.filename or "", content_preview):
-                logger.info(f"Document {document_id} is attorney work product, skipping witness extraction")
-                document.is_processed = True
-                document.processing_error = "Skipped: Attorney work product"
-                await session.commit()
-
-                # Update job progress
-                if job_id:
-                    from sqlalchemy import text
-                    await session.execute(
-                        text("UPDATE processing_jobs SET processed_documents = LEAST(processed_documents + 1, total_documents), last_activity_at = NOW() WHERE id = :job_id"),
-                        {"job_id": job_id}
-                    )
-                    await session.commit()
-
-                return {
-                    "success": True,
-                    "document_id": document_id,
-                    "witnesses_found": 0,
-                    "tokens_used": 0,
-                    "skipped": True,
-                    "reason": "Attorney work product"
-                }
-
-            # === CONTENT HASH CACHING ===
-            # Calculate file hash upfront for caching
-            processor = DocumentProcessor()
-            file_hash = processor.get_file_hash(content)
-
-            # Check if document is unchanged and already processed (skip re-processing)
-            if document.content_hash == file_hash and document.is_processed:
-                logger.info(f"Document {document_id} unchanged (hash match), skipping re-processing")
-
-                # Still update job progress
-                if job_id:
-                    from sqlalchemy import text
-                    await session.execute(
-                        text("UPDATE processing_jobs SET processed_documents = LEAST(processed_documents + 1, total_documents), last_activity_at = NOW() WHERE id = :job_id"),
-                        {"job_id": job_id}
-                    )
-                    await session.commit()
-
-                return {
-                    "success": True,
-                    "document_id": document_id,
-                    "witnesses_found": 0,
-                    "tokens_used": 0,
-                    "cached": True,
-                    "message": "Document unchanged, skipped re-processing"
-                }
-
-            # === SHARED FIRM DOCUMENT CACHE ===
-            # Check if AIDiscoveryDrafter has already parsed this document
+            # === EARLY CACHE CHECK (before downloading) ===
             # Get user's organization_id for FirmDocument lookup
             user_result = await session.execute(
                 select(User).where(User.id == matter.user_id)
@@ -469,15 +391,108 @@ async def _process_single_document_async(
             organization_id = user.organization_id if user else None
             firm_document_id = None  # Track for witness linking
             cached_text = None
+            content = None
+            file_hash = None
 
+            # Check if AIDiscoveryDrafter has already parsed this document BEFORE downloading
             if organization_id and document.clio_document_id:
-                firm_doc = await SharedDocumentService.get_firm_document_for_witness_extraction(
-                    session, organization_id, document.clio_document_id, content_hash=file_hash
+                firm_doc = await SharedDocumentService.get_by_clio_document_id(
+                    session, organization_id, document.clio_document_id
                 )
                 if firm_doc and firm_doc.extracted_text:
-                    logger.info(f"Using cached text from FirmDocument {firm_doc.id} for document {document_id}")
+                    logger.info(f"CACHE HIT: Using cached text from FirmDocument {firm_doc.id} for document {document_id} (skipping Clio download)")
                     cached_text = firm_doc.extracted_text
                     firm_document_id = firm_doc.id
+                    file_hash = firm_doc.content_hash  # Use cached hash
+
+            # Decrypt tokens (needed for filename refresh even if using cache)
+            access_token = decrypt_token(clio_integration.access_token_encrypted)
+            refresh_token = decrypt_token(clio_integration.refresh_token_encrypted)
+
+            # Only download from Clio if no cached text available
+            if not cached_text:
+                async with ClioClient(
+                    access_token=access_token,
+                    refresh_token=refresh_token,
+                    token_expires_at=clio_integration.token_expires_at,
+                    region=clio_integration.clio_region
+                ) as clio:
+                    # Refresh document info if filename is unknown
+                    if document.filename == "unknown" or not document.filename:
+                        logger.info(f"Refreshing document info from Clio for document {document.id}")
+                        doc_info = await clio.get_document(int(document.clio_document_id))
+                        if doc_info.get("name"):
+                            document.filename = doc_info["name"]
+                            document.file_type = doc_info.get("content_type", "").split("/")[-1] if doc_info.get("content_type") else None
+                            await session.commit()
+                            logger.info(f"Updated document filename to: {document.filename}")
+
+                    content = await clio.download_document(int(document.clio_document_id))
+
+                # === WORK PRODUCT FILTER ===
+                # Check if document is attorney work product before processing
+                content_preview = content[:2048].decode('utf-8', errors='ignore') if content else ""
+                if _is_work_product(document.filename or "", content_preview):
+                    logger.info(f"Document {document_id} is attorney work product, skipping witness extraction")
+                    document.is_processed = True
+                    document.processing_error = "Skipped: Attorney work product"
+                    await session.commit()
+
+                    # Update job progress
+                    if job_id:
+                        from sqlalchemy import text
+                        await session.execute(
+                            text("UPDATE processing_jobs SET processed_documents = LEAST(processed_documents + 1, total_documents), last_activity_at = NOW() WHERE id = :job_id"),
+                            {"job_id": job_id}
+                        )
+                        await session.commit()
+
+                    return {
+                        "success": True,
+                        "document_id": document_id,
+                        "witnesses_found": 0,
+                        "tokens_used": 0,
+                        "skipped": True,
+                        "reason": "Attorney work product"
+                    }
+
+                # === CONTENT HASH CACHING ===
+                # Calculate file hash upfront for caching
+                processor = DocumentProcessor()
+                file_hash = processor.get_file_hash(content)
+
+                # Check if document is unchanged and already processed (skip re-processing)
+                if document.content_hash == file_hash and document.is_processed:
+                    logger.info(f"Document {document_id} unchanged (hash match), skipping re-processing")
+
+                    # Still update job progress
+                    if job_id:
+                        from sqlalchemy import text
+                        await session.execute(
+                            text("UPDATE processing_jobs SET processed_documents = LEAST(processed_documents + 1, total_documents), last_activity_at = NOW() WHERE id = :job_id"),
+                            {"job_id": job_id}
+                        )
+                        await session.commit()
+
+                    return {
+                        "success": True,
+                        "document_id": document_id,
+                        "witnesses_found": 0,
+                        "tokens_used": 0,
+                        "cached": True,
+                        "message": "Document unchanged, skipped re-processing"
+                    }
+
+                # === SHARED FIRM DOCUMENT CACHE (content-hash based fallback) ===
+                # Check if we can find cached text by content hash (different clio_doc_id but same content)
+                if organization_id and not cached_text:
+                    firm_doc = await SharedDocumentService.get_by_content_hash(
+                        session, organization_id, file_hash
+                    )
+                    if firm_doc and firm_doc.extracted_text:
+                        logger.info(f"CACHE HIT (hash match): Using cached text from FirmDocument {firm_doc.id} for document {document_id}")
+                        cached_text = firm_doc.extracted_text
+                        firm_document_id = firm_doc.id
 
             # === DEBUG MODE: Skip Bedrock processing ===
             DEBUG_MODE = False  # Set to True to skip AI processing for debugging
@@ -491,7 +506,8 @@ async def _process_single_document_async(
             logger.info(f"  Filename: {document.filename}")
             logger.info(f"  File type: {document.file_type}")
             logger.info(f"  File size (from Clio): {document.file_size}")
-            logger.info(f"  Downloaded content size: {len(content)} bytes")
+            logger.info(f"  Downloaded content size: {len(content) if content else 0} bytes")
+            logger.info(f"  Using cached text: {cached_text is not None}")
             logger.info(f"  Content hash: {file_hash}")
             logger.info(f"  Previous hash: {document.content_hash}")
             logger.info(f"  Matter ID: {document.matter_id}")
@@ -528,7 +544,8 @@ async def _process_single_document_async(
 
             # Check if this is a PDF
             is_pdf = (
-                document.filename.lower().endswith('.pdf') or content[:4] == b'%PDF'
+                document.filename.lower().endswith('.pdf') or
+                (content and content[:4] == b'%PDF')
             )
 
             # Helper function to split large text assets into smaller chunks
