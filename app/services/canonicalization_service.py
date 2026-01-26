@@ -1371,43 +1371,65 @@ class CanonicalizationService:
 
         stats = {"total_witnesses": len(witnesses), "canonical_created": 0, "canonical_merged": 0}
 
-        # Re-process each witness
+        # Re-process each witness - find or create canonical, but don't create new witness records
         for witness in witnesses:
-            witness_input = WitnessInput(
-                full_name=witness.full_name,
-                role=witness.role.value if witness.role else "other",
-                importance=witness.importance.value if witness.importance else "medium",
-                observation=witness.observation,
-                source_page=witness.source_page,
-                email=witness.email,
-                phone=witness.phone,
-                address=witness.address,
-                confidence_score=witness.confidence_score,
-                relevance=witness.relevance.value if witness.relevance else None,
-                relevance_reason=witness.relevance_reason
-            )
-
-            result = await self.create_or_update_canonical(
+            # Try to find existing canonical witness
+            canonical, match_type, confidence = await self.find_canonical_witness(
                 db=db,
                 matter_id=matter_id,
-                witness_input=witness_input,
-                document_id=witness.document_id,
-                filename=witness.document.filename if witness.document else "Unknown",
-                exclude_case_attorneys=False,  # Don't re-filter during recanonicalization
-                firm_email_domain=None
+                name=witness.full_name,
+                role=witness.role.value if witness.role else None,
+                observation=witness.observation,
+                use_embeddings=False,  # Skip embeddings for speed
+                use_ai_verification=False  # Skip AI verification for speed
             )
 
-            # Skip excluded witnesses (shouldn't happen in recanonicalization)
-            if result.is_excluded or not result.canonical_witness:
-                continue
-
-            # Update the existing witness record with canonical link
-            witness.canonical_witness_id = result.canonical_witness.id
-
-            if result.is_new_canonical:
-                stats["canonical_created"] += 1
-            else:
+            if canonical:
+                # Merge into existing canonical
+                canonical = await self._merge_into_canonical(
+                    db=db,
+                    canonical=canonical,
+                    witness_input=WitnessInput(
+                        full_name=witness.full_name,
+                        role=witness.role.value if witness.role else "other",
+                        importance=witness.importance.value if witness.importance else "medium",
+                        observation=witness.observation,
+                        source_page=witness.source_page,
+                        email=witness.email,
+                        phone=witness.phone,
+                        address=witness.address,
+                        confidence_score=witness.confidence_score,
+                        relevance=witness.relevance.value if witness.relevance else None,
+                        relevance_reason=witness.relevance_reason
+                    ),
+                    document_id=witness.document_id,
+                    filename=witness.document.filename if witness.document else "Unknown"
+                )
+                witness.canonical_witness_id = canonical.id
                 stats["canonical_merged"] += 1
+            else:
+                # Create new canonical witness
+                canonical = await self._create_canonical(
+                    db=db,
+                    matter_id=matter_id,
+                    witness_input=WitnessInput(
+                        full_name=witness.full_name,
+                        role=witness.role.value if witness.role else "other",
+                        importance=witness.importance.value if witness.importance else "medium",
+                        observation=witness.observation,
+                        source_page=witness.source_page,
+                        email=witness.email,
+                        phone=witness.phone,
+                        address=witness.address,
+                        confidence_score=witness.confidence_score,
+                        relevance=witness.relevance.value if witness.relevance else None,
+                        relevance_reason=witness.relevance_reason
+                    ),
+                    document_id=witness.document_id,
+                    filename=witness.document.filename if witness.document else "Unknown"
+                )
+                witness.canonical_witness_id = canonical.id
+                stats["canonical_created"] += 1
 
         await db.commit()
 
