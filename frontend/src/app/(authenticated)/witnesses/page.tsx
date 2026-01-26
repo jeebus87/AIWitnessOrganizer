@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import useSWR from "swr";
-import { Search, Download, FileSpreadsheet, FileText, Filter, Users, Layers, FileStack } from "lucide-react";
+import useSWR, { mutate } from "swr";
+import { Search, Download, FileSpreadsheet, FileText, Filter, Users, Layers, FileStack, Loader2, GitMerge } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -38,7 +39,14 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useAuthStore } from "@/store/auth";
-import { api, WitnessFilters, WitnessRole, ImportanceLevel, WitnessListResponse, CanonicalWitnessListResponse, CanonicalWitness } from "@/lib/api";
+import { api, WitnessFilters, WitnessRole, ImportanceLevel, WitnessListResponse, CanonicalWitnessListResponse, CanonicalWitness, Matter, MatterListResponse } from "@/lib/api";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 const roleColors: Record<WitnessRole, string> = {
   plaintiff: "bg-blue-500",
@@ -75,19 +83,28 @@ export default function WitnessesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filters, setFilters] = useState<WitnessFilters>({});
   const [viewMode, setViewMode] = useState<ViewMode>("canonical");
+  const [selectedMatterId, setSelectedMatterId] = useState<number | undefined>();
+  const [isRecanonicaliizing, setIsRecanonicaliizing] = useState(false);
+
+  // Fetch matters for the dropdown
+  const { data: mattersResponse } = useSWR<MatterListResponse>(
+    token ? ["matters", token] : null,
+    () => api.getMatters(token!, { pageSize: 100 })
+  );
 
   // Fetch raw witnesses
   const { data: witnessesResponse, isLoading: isLoadingRaw } = useSWR<WitnessListResponse>(
-    token && viewMode === "raw" ? ["witnesses", token, filters] : null,
-    () => api.getWitnesses(token!, filters)
+    token && viewMode === "raw" ? ["witnesses", token, filters, selectedMatterId] : null,
+    () => api.getWitnesses(token!, { ...filters, matter_id: selectedMatterId })
   );
 
   // Fetch canonical witnesses
-  const { data: canonicalResponse, isLoading: isLoadingCanonical } = useSWR<CanonicalWitnessListResponse>(
-    token && viewMode === "canonical" ? ["canonical-witnesses", token, filters] : null,
+  const { data: canonicalResponse, isLoading: isLoadingCanonical, mutate: mutateCanonical } = useSWR<CanonicalWitnessListResponse>(
+    token && viewMode === "canonical" ? ["canonical-witnesses", token, filters, selectedMatterId] : null,
     () => api.getCanonicalWitnesses(token!, {
       search: filters.search,
       role: filters.role,
+      matter_id: selectedMatterId,
     })
   );
 
@@ -122,6 +139,30 @@ export default function WitnessesPage() {
     setSearchQuery("");
   };
 
+  const handleMatterChange = (value: string) => {
+    setSelectedMatterId(value === "all" ? undefined : parseInt(value));
+  };
+
+  const handleRecanonicalize = async () => {
+    if (!selectedMatterId || !token) {
+      toast.error("Please select a matter first");
+      return;
+    }
+
+    setIsRecanonicaliizing(true);
+    try {
+      const result = await api.recanonicalize(selectedMatterId, token);
+      toast.success(result.message);
+      // Refresh the witness list
+      mutateCanonical();
+    } catch (err) {
+      console.error("Recanonicalization failed:", err);
+      toast.error("Failed to merge duplicates. Please try again.");
+    } finally {
+      setIsRecanonicaliizing(false);
+    }
+  };
+
   const totalCount = viewMode === "canonical"
     ? canonicalResponse?.total || 0
     : witnessesResponse?.total || 0;
@@ -137,7 +178,50 @@ export default function WitnessesPage() {
               : "All extracted witnesses from processed documents"}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {/* Matter filter */}
+          <Select
+            value={selectedMatterId?.toString() || "all"}
+            onValueChange={handleMatterChange}
+          >
+            <SelectTrigger className="w-[200px]">
+              <SelectValue placeholder="All Matters" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Matters</SelectItem>
+              {mattersResponse?.matters?.map((matter) => (
+                <SelectItem key={matter.id} value={matter.id.toString()}>
+                  {matter.display_number || matter.description}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Merge Duplicates button - only in canonical view with matter selected */}
+          {viewMode === "canonical" && selectedMatterId && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    onClick={handleRecanonicalize}
+                    disabled={isRecanonicaliizing}
+                  >
+                    {isRecanonicaliizing ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <GitMerge className="mr-2 h-4 w-4" />
+                    )}
+                    Merge Duplicates
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Re-run deduplication to merge witnesses with similar names</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline">

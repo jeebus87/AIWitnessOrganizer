@@ -348,6 +348,59 @@ async def clear_witnesses(
         return {"success": True, "witnesses_deleted": 0, "documents_reset": 0, "message": "No witnesses found"}
 
 
+@router.post("/recanonicalize/{matter_id}")
+async def recanonicalize_witnesses(
+    matter_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Re-run witness canonicalization for a matter.
+
+    This re-processes all witnesses using improved matching algorithms to
+    merge duplicates that weren't caught before. Useful after algorithm updates.
+
+    Args:
+        matter_id: The matter ID to recanonicalize
+
+    Returns:
+        Statistics about the recanonicalization operation
+    """
+    # Verify matter belongs to user
+    result = await db.execute(
+        select(Matter).where(
+            Matter.id == matter_id,
+            Matter.user_id == current_user.id
+        )
+    )
+    matter = result.scalar_one_or_none()
+    if not matter:
+        raise HTTPException(status_code=404, detail="Matter not found")
+
+    # Import and run canonicalization service
+    from app.services.canonicalization_service import CanonicalizationService
+
+    service = CanonicalizationService()
+    stats = await service.recanonicalize_matter(db, matter_id)
+
+    logger.info(
+        f"Recanonicalized matter {matter_id} for user {current_user.id}: "
+        f"{stats['total_witnesses']} witnesses -> {stats['canonical_created']} canonical "
+        f"(merged {stats['canonical_merged']})"
+    )
+
+    return {
+        "success": True,
+        "matter_id": matter_id,
+        "matter_name": matter.description,
+        **stats,
+        "message": (
+            f"Merged {stats['total_witnesses']} witness mentions into "
+            f"{stats['canonical_created']} unique witnesses"
+        )
+    }
+
+
 async def _get_firm_name(db: AsyncSession, user: User) -> Optional[str]:
     """Get firm name from Clio for the user"""
     try:

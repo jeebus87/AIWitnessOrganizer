@@ -168,6 +168,13 @@ class ApiClient {
     return this.request<CanonicalWitnessListResponse>(`/api/v1/witnesses/canonical${query ? '?' + query : ''}`, { token });
   }
 
+  async recanonicalize(matterId: number, token: string) {
+    return this.request<RecanonicalizationResult>(`/api/v1/witnesses/recanonicalize/${matterId}`, {
+      method: "POST",
+      token,
+    });
+  }
+
   // Jobs
   async getJobs(token: string, archived: boolean = false) {
     const params = new URLSearchParams();
@@ -589,6 +596,16 @@ export interface CanonicalWitnessFilters {
   relevance?: string;
   role?: string;
   search?: string;
+}
+
+export interface RecanonicalizationResult {
+  success: boolean;
+  matter_id: number;
+  matter_name: string;
+  total_witnesses: number;
+  canonical_created: number;
+  canonical_merged: number;
+  message: string;
 }
 
 export interface JobListResponse {

@@ -39,6 +39,100 @@ FUZZY_MATCH_THRESHOLD = 0.85  # 85% similarity for fuzzy matching
 FUZZY_UNCERTAIN_THRESHOLD = 0.70  # Below 85% but above 70% = use AI to verify
 EMBEDDING_MATCH_THRESHOLD = 0.92  # 92% cosine similarity for embedding matching
 EMBEDDING_UNCERTAIN_THRESHOLD = 0.85  # Below 92% but above 85% = use AI to verify
+TOKEN_SUBSET_CONFIDENCE = 0.95  # Confidence when name is token subset of another
+LASTNAME_PRIORITY_CONFIDENCE = 0.90  # Confidence for last-name-first matching
+
+# Common nickname mappings for name matching
+NICKNAME_MAP = {
+    "mike": ["michael", "mike"],
+    "michael": ["michael", "mike"],
+    "bob": ["robert", "bob", "bobby", "rob"],
+    "robert": ["robert", "bob", "bobby", "rob"],
+    "bobby": ["robert", "bob", "bobby", "rob"],
+    "rob": ["robert", "bob", "bobby", "rob"],
+    "bill": ["william", "bill", "billy", "will"],
+    "william": ["william", "bill", "billy", "will"],
+    "billy": ["william", "bill", "billy", "will"],
+    "will": ["william", "bill", "billy", "will"],
+    "jim": ["james", "jim", "jimmy"],
+    "james": ["james", "jim", "jimmy"],
+    "jimmy": ["james", "jim", "jimmy"],
+    "joe": ["joseph", "joe", "joey"],
+    "joseph": ["joseph", "joe", "joey"],
+    "joey": ["joseph", "joe", "joey"],
+    "tom": ["thomas", "tom", "tommy"],
+    "thomas": ["thomas", "tom", "tommy"],
+    "tommy": ["thomas", "tom", "tommy"],
+    "dick": ["richard", "dick", "rick", "ricky", "rich"],
+    "richard": ["richard", "dick", "rick", "ricky", "rich"],
+    "rick": ["richard", "dick", "rick", "ricky", "rich"],
+    "ricky": ["richard", "dick", "rick", "ricky", "rich"],
+    "dan": ["daniel", "dan", "danny"],
+    "daniel": ["daniel", "dan", "danny"],
+    "danny": ["daniel", "dan", "danny"],
+    "ed": ["edward", "ed", "eddie", "ted", "teddy"],
+    "edward": ["edward", "ed", "eddie", "ted", "teddy"],
+    "eddie": ["edward", "ed", "eddie", "ted", "teddy"],
+    "ted": ["edward", "ed", "eddie", "ted", "teddy", "theodore"],
+    "theodore": ["theodore", "ted", "teddy", "theo"],
+    "jack": ["john", "jack", "johnny"],
+    "john": ["john", "jack", "johnny"],
+    "johnny": ["john", "jack", "johnny"],
+    "kate": ["katherine", "kate", "kathy", "cathy", "katie"],
+    "katherine": ["katherine", "kate", "kathy", "cathy", "katie"],
+    "kathy": ["katherine", "kate", "kathy", "cathy", "katie"],
+    "katie": ["katherine", "kate", "kathy", "cathy", "katie"],
+    "liz": ["elizabeth", "liz", "lizzy", "beth", "betty", "eliza"],
+    "elizabeth": ["elizabeth", "liz", "lizzy", "beth", "betty", "eliza"],
+    "beth": ["elizabeth", "liz", "lizzy", "beth", "betty", "eliza"],
+    "betty": ["elizabeth", "liz", "lizzy", "beth", "betty", "eliza"],
+    "sue": ["susan", "sue", "susie", "suzanne"],
+    "susan": ["susan", "sue", "susie", "suzanne"],
+    "susie": ["susan", "sue", "susie", "suzanne"],
+    "tony": ["anthony", "tony"],
+    "anthony": ["anthony", "tony"],
+    "chris": ["christopher", "chris", "christine", "christina"],
+    "christopher": ["christopher", "chris"],
+    "christine": ["christine", "chris", "christy"],
+    "matt": ["matthew", "matt"],
+    "matthew": ["matthew", "matt"],
+    "dave": ["david", "dave", "davey"],
+    "david": ["david", "dave", "davey"],
+    "steve": ["steven", "stephen", "steve"],
+    "steven": ["steven", "stephen", "steve"],
+    "stephen": ["steven", "stephen", "steve"],
+    "alex": ["alexander", "alexandra", "alex"],
+    "alexander": ["alexander", "alex"],
+    "alexandra": ["alexandra", "alex"],
+    "nick": ["nicholas", "nick", "nicky"],
+    "nicholas": ["nicholas", "nick", "nicky"],
+    "sam": ["samuel", "samantha", "sam", "sammy"],
+    "samuel": ["samuel", "sam", "sammy"],
+    "samantha": ["samantha", "sam"],
+    "jen": ["jennifer", "jen", "jenny"],
+    "jennifer": ["jennifer", "jen", "jenny"],
+    "jenny": ["jennifer", "jen", "jenny"],
+    "meg": ["margaret", "meg", "maggie", "peggy"],
+    "margaret": ["margaret", "meg", "maggie", "peggy"],
+    "maggie": ["margaret", "meg", "maggie", "peggy"],
+    "peggy": ["margaret", "meg", "maggie", "peggy"],
+    "pat": ["patrick", "patricia", "pat", "patty"],
+    "patrick": ["patrick", "pat"],
+    "patricia": ["patricia", "pat", "patty", "trish"],
+    "ben": ["benjamin", "ben", "benny"],
+    "benjamin": ["benjamin", "ben", "benny"],
+    "charlie": ["charles", "charlie", "chuck"],
+    "charles": ["charles", "charlie", "chuck"],
+    "chuck": ["charles", "charlie", "chuck"],
+    "fred": ["frederick", "fred", "freddy"],
+    "frederick": ["frederick", "fred", "freddy"],
+    "greg": ["gregory", "greg"],
+    "gregory": ["gregory", "greg"],
+    "larry": ["lawrence", "larry"],
+    "lawrence": ["lawrence", "larry"],
+    "vince": ["vincent", "vince", "vinny"],
+    "vincent": ["vincent", "vince", "vinny"],
+}
 
 # AI verification prompt for ambiguous matches
 AI_VERIFICATION_PROMPT = """You are a legal document analyst helping to deduplicate witness lists.
@@ -392,6 +486,110 @@ class CanonicalizationService:
             }
 
     # =========================================================================
+    # Enhanced Name Matching (Token/Nickname/LastName Priority)
+    # =========================================================================
+
+    def token_subset_match(self, name1: str, name2: str) -> Tuple[bool, float]:
+        """
+        Check if one name is a token subset of another (handles middle name variations).
+
+        Examples:
+        - "John Carroll" is subset of "John Mike Carroll" -> True, 0.95
+        - "Mike Carroll" tokens overlap with "John Mike Carroll" -> check further
+
+        Returns:
+            Tuple of (is_match: bool, confidence: float)
+        """
+        norm1 = self.normalize_name(name1)
+        norm2 = self.normalize_name(name2)
+
+        tokens1 = set(norm1.split())
+        tokens2 = set(norm2.split())
+
+        # Need at least 2 tokens (first + last name) for meaningful comparison
+        if len(tokens1) < 2 or len(tokens2) < 2:
+            return False, 0.0
+
+        # If all tokens of shorter name exist in longer name
+        shorter, longer = (tokens1, tokens2) if len(tokens1) <= len(tokens2) else (tokens2, tokens1)
+
+        if shorter.issubset(longer):
+            # High confidence - all tokens match
+            return True, TOKEN_SUBSET_CONFIDENCE
+
+        return False, 0.0
+
+    def names_could_be_nicknames(self, name1: str, name2: str) -> bool:
+        """
+        Check if two first names could be nickname variations.
+
+        Args:
+            name1: First name to check
+            name2: Second name to check
+
+        Returns:
+            True if names could be nickname variants of each other
+        """
+        name1_lower = name1.lower().strip()
+        name2_lower = name2.lower().strip()
+
+        # Direct match
+        if name1_lower == name2_lower:
+            return True
+
+        # Check nickname mapping
+        variants1 = set(NICKNAME_MAP.get(name1_lower, [name1_lower]))
+        variants2 = set(NICKNAME_MAP.get(name2_lower, [name2_lower]))
+
+        return bool(variants1 & variants2)
+
+    def last_name_priority_match(self, name1: str, name2: str) -> Tuple[bool, float]:
+        """
+        If last names match exactly, check for first/middle name overlap or nickname match.
+
+        Handles cases like:
+        - "John Carroll" vs "John Mike Carroll" (John overlaps)
+        - "Mike Carroll" vs "John Mike Carroll" (Mike overlaps as middle name)
+        - "Mike Carroll" vs "Michael Carroll" (nickname match)
+
+        Returns:
+            Tuple of (is_match: bool, confidence: float)
+        """
+        norm1 = self.normalize_name(name1)
+        norm2 = self.normalize_name(name2)
+
+        parts1 = self.extract_name_parts(norm1)
+        parts2 = self.extract_name_parts(norm2)
+
+        # Last names must match exactly
+        if parts1["last"] != parts2["last"] or not parts1["last"]:
+            return False, 0.0
+
+        # Collect all first/middle name tokens for each name
+        first1_tokens = set(parts1["first"].split() + parts1["middle"].split())
+        first2_tokens = set(parts2["first"].split() + parts2["middle"].split())
+
+        # Remove empty strings
+        first1_tokens.discard("")
+        first2_tokens.discard("")
+
+        # Direct token overlap (e.g., "John" in both)
+        if first1_tokens & first2_tokens:
+            return True, LASTNAME_PRIORITY_CONFIDENCE
+
+        # Check nickname matches between first names
+        for token1 in first1_tokens:
+            for token2 in first2_tokens:
+                if self.names_could_be_nicknames(token1, token2):
+                    logger.info(
+                        f"Nickname match: '{token1}' <-> '{token2}' in "
+                        f"'{name1}' vs '{name2}'"
+                    )
+                    return True, LASTNAME_PRIORITY_CONFIDENCE
+
+        return False, 0.0
+
+    # =========================================================================
     # Fuzzy Matching
     # =========================================================================
 
@@ -657,15 +855,18 @@ class CanonicalizationService:
         """
         Find a matching canonical witness for the given name.
 
-        Uses a 4-tier matching approach:
+        Uses a 6-tier matching approach:
         1. Exact match (normalized names)
-        2. Fuzzy match (Jaro-Winkler + Levenshtein)
-        3. Embedding match (semantic similarity)
-        4. AI verification (for uncertain cases)
+        2. Token subset match (e.g., "John Carroll" subset of "John Mike Carroll")
+        3. Last-name priority match (same last name + first/middle name overlap or nickname)
+        4. Fuzzy match (Jaro-Winkler + Levenshtein)
+        5. Embedding match (semantic similarity)
+        6. AI verification (for uncertain cases)
 
         Returns:
             Tuple of (canonical_witness or None, match_type, confidence)
-            match_type: "exact", "fuzzy", "embedding", "ai_verified", or "none"
+            match_type: "exact", "token_subset", "lastname_priority", "fuzzy",
+                        "embedding", "ai_verified", or "none"
         """
         normalized_name = self.normalize_name(name)
 
@@ -694,7 +895,28 @@ class CanonicalizationService:
             if normalized_name == canonical_normalized:
                 return canonical, "exact", 1.0
 
-            # 2. Fuzzy matching
+            # 2. Token subset match (handles middle name variations)
+            # e.g., "John Carroll" matches "John Mike Carroll"
+            is_subset, subset_score = self.token_subset_match(name, canonical.full_name)
+            if is_subset:
+                logger.info(
+                    f"Token subset match: '{name}' -> '{canonical.full_name}' "
+                    f"(confidence: {subset_score:.2f})"
+                )
+                return canonical, "token_subset", subset_score
+
+            # 3. Last-name priority match (same last name + first/middle overlap or nickname)
+            # e.g., "Mike Carroll" matches "John Mike Carroll" (Mike is middle name)
+            # e.g., "Mike Carroll" matches "Michael Carroll" (nickname)
+            is_lastname_match, ln_score = self.last_name_priority_match(name, canonical.full_name)
+            if is_lastname_match:
+                logger.info(
+                    f"Last-name priority match: '{name}' -> '{canonical.full_name}' "
+                    f"(confidence: {ln_score:.2f})"
+                )
+                return canonical, "lastname_priority", ln_score
+
+            # 4. Fuzzy matching
             fuzzy_score = self.fuzzy_match_score(name, canonical.full_name)
             if fuzzy_score >= FUZZY_MATCH_THRESHOLD and fuzzy_score > best_score:
                 best_match = canonical
@@ -1165,18 +1387,24 @@ class CanonicalizationService:
                 relevance_reason=witness.relevance_reason
             )
 
-            canonical, _, is_new = await self.create_or_update_canonical(
+            result = await self.create_or_update_canonical(
                 db=db,
                 matter_id=matter_id,
                 witness_input=witness_input,
                 document_id=witness.document_id,
-                filename=witness.document.filename if witness.document else "Unknown"
+                filename=witness.document.filename if witness.document else "Unknown",
+                exclude_case_attorneys=False,  # Don't re-filter during recanonicalization
+                firm_email_domain=None
             )
 
-            # Update the existing witness record with canonical link
-            witness.canonical_witness_id = canonical.id
+            # Skip excluded witnesses (shouldn't happen in recanonicalization)
+            if result.is_excluded or not result.canonical_witness:
+                continue
 
-            if is_new:
+            # Update the existing witness record with canonical link
+            witness.canonical_witness_id = result.canonical_witness.id
+
+            if result.is_new_canonical:
                 stats["canonical_created"] += 1
             else:
                 stats["canonical_merged"] += 1
