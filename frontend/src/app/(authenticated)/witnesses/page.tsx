@@ -95,7 +95,7 @@ export default function WitnessesPage() {
   // Fetch raw witnesses
   const { data: witnessesResponse, isLoading: isLoadingRaw } = useSWR<WitnessListResponse>(
     token && viewMode === "raw" ? ["witnesses", token, filters, selectedMatterId] : null,
-    () => api.getWitnesses(token!, { ...filters, matter_id: selectedMatterId })
+    () => api.getWitnesses(token!, { ...filters, matter_id: selectedMatterId?.toString() })
   );
 
   // Fetch canonical witnesses
