@@ -24,7 +24,7 @@ from sqlalchemy import select
 
 from app.db.models import (
     ProcessingJob, Document, BatchJob, BatchJobType,
-    Witness, User, ClioMatter
+    Witness, User
 )
 from app.services.batch_inference_service import get_batch_inference_service
 from app.services.document_processor import ProcessedAsset, DocumentProcessor
