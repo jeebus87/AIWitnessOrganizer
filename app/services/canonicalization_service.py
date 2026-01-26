@@ -1346,10 +1346,11 @@ class CanonicalizationService:
         Returns statistics about the operation.
         """
         # Get all witnesses for the matter
+        from app.db.models import Document
         result = await db.execute(
             select(Witness)
-            .join(Witness.document)
-            .where(Witness.document.has(matter_id=matter_id))
+            .join(Document, Witness.document_id == Document.id)
+            .where(Document.matter_id == matter_id)
             .options(selectinload(Witness.document))
         )
         witnesses = result.scalars().all()

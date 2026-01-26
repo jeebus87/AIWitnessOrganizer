@@ -377,28 +377,36 @@ async def recanonicalize_witnesses(
     if not matter:
         raise HTTPException(status_code=404, detail="Matter not found")
 
-    # Import and run canonicalization service
-    from app.services.canonicalization_service import CanonicalizationService
+    try:
+        # Import and run canonicalization service
+        from app.services.canonicalization_service import CanonicalizationService
 
-    service = CanonicalizationService()
-    stats = await service.recanonicalize_matter(db, matter_id)
+        service = CanonicalizationService()
+        stats = await service.recanonicalize_matter(db, matter_id)
 
-    logger.info(
-        f"Recanonicalized matter {matter_id} for user {current_user.id}: "
-        f"{stats['total_witnesses']} witnesses -> {stats['canonical_created']} canonical "
-        f"(merged {stats['canonical_merged']})"
-    )
-
-    return {
-        "success": True,
-        "matter_id": matter_id,
-        "matter_name": matter.description,
-        **stats,
-        "message": (
-            f"Merged {stats['total_witnesses']} witness mentions into "
-            f"{stats['canonical_created']} unique witnesses"
+        logger.info(
+            f"Recanonicalized matter {matter_id} for user {current_user.id}: "
+            f"{stats['total_witnesses']} witnesses -> {stats['canonical_created']} canonical "
+            f"(merged {stats['canonical_merged']})"
         )
-    }
+
+        return {
+            "success": True,
+            "matter_id": matter_id,
+            "matter_name": matter.description,
+            **stats,
+            "message": (
+                f"Merged {stats['total_witnesses']} witness mentions into "
+                f"{stats['canonical_created']} unique witnesses"
+            )
+        }
+    except Exception as e:
+        logger.exception(f"Error recanonicalize matter {matter_id}: {e}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to recanonicalize: {str(e)}"
+        )
 
 
 async def _get_firm_name(db: AsyncSession, user: User) -> Optional[str]:
