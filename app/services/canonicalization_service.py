@@ -1226,23 +1226,23 @@ class CanonicalizationService:
             except (ValueError, AttributeError):
                 pass
 
-        # Merge observations
+        # Check if this is a new document for this canonical witness
         new_observations = canonical.merged_observations or []
-        if witness_input.observation:
-            # Check if this observation from this doc already exists
-            existing_doc_ids = [
-                o.get("doc_id") for o in new_observations
-                if isinstance(o, dict)
-            ]
+        existing_doc_ids = [
+            o.get("doc_id") for o in new_observations
+            if isinstance(o, dict)
+        ]
+        is_new_document = document_id not in existing_doc_ids
 
-            if document_id not in existing_doc_ids:
-                new_observations = new_observations + [{
-                    "doc_id": document_id,
-                    "filename": filename,
-                    "page": witness_input.source_page,
-                    "text": witness_input.observation
-                }]
-                updates["merged_observations"] = new_observations
+        # Merge observations if we have one and it's from a new document
+        if witness_input.observation and is_new_document:
+            new_observations = new_observations + [{
+                "doc_id": document_id,
+                "filename": filename,
+                "page": witness_input.source_page,
+                "text": witness_input.observation
+            }]
+            updates["merged_observations"] = new_observations
 
         # Update contact info (prefer non-empty values)
         if witness_input.email and not canonical.email:
@@ -1258,17 +1258,18 @@ class CanonicalizationService:
                witness_input.confidence_score > canonical.max_confidence_score:
                 updates["max_confidence_score"] = witness_input.confidence_score
 
-        # Use atomic SQL UPDATE to increment source_document_count
-        # This prevents deadlocks from concurrent read-modify-write operations
-        await db.execute(
-            text("""
-                UPDATE canonical_witnesses
-                SET source_document_count = source_document_count + 1,
-                    updated_at = NOW()
-                WHERE id = :canonical_id
-            """),
-            {"canonical_id": canonical.id}
-        )
+        # Only increment source_document_count when adding a new document
+        # Use atomic SQL UPDATE to prevent deadlocks from concurrent operations
+        if is_new_document:
+            await db.execute(
+                text("""
+                    UPDATE canonical_witnesses
+                    SET source_document_count = source_document_count + 1,
+                        updated_at = NOW()
+                    WHERE id = :canonical_id
+                """),
+                {"canonical_id": canonical.id}
+            )
 
         # Apply other updates if any
         if updates:
@@ -1370,67 +1371,87 @@ class CanonicalizationService:
 
         await db.flush()
 
-        stats = {"total_witnesses": len(witnesses), "canonical_created": 0, "canonical_merged": 0}
+        stats = {"total_witnesses": len(witnesses), "canonical_created": 0, "canonical_merged": 0, "errors": 0}
+
+        logger.info(f"Starting recanonicalization of matter {matter_id} with {len(witnesses)} witnesses")
 
         # Re-process each witness - find or create canonical, but don't create new witness records
-        for witness in witnesses:
-            # Try to find existing canonical witness
-            canonical, match_type, confidence = await self.find_canonical_witness(
-                db=db,
-                matter_id=matter_id,
-                name=witness.full_name,
-                role=witness.role.value if witness.role else None,
-                observation=witness.observation,
-                use_embeddings=False,  # Skip embeddings for speed
-                use_ai_verification=False  # Skip AI verification for speed
-            )
-
-            if canonical:
-                # Merge into existing canonical
-                canonical = await self._merge_into_canonical(
-                    db=db,
-                    canonical=canonical,
-                    witness_input=WitnessInput(
-                        full_name=witness.full_name,
-                        role=witness.role.value if witness.role else "other",
-                        importance=witness.importance.value if witness.importance else "medium",
-                        observation=witness.observation,
-                        source_page=witness.source_page,
-                        email=witness.email,
-                        phone=witness.phone,
-                        address=witness.address,
-                        confidence_score=witness.confidence_score,
-                        relevance=witness.relevance.value if witness.relevance else None,
-                        relevance_reason=witness.relevance_reason
-                    ),
-                    document_id=witness.document_id,
-                    filename=witness.document.filename if witness.document else "Unknown"
-                )
-                witness.canonical_witness_id = canonical.id
-                stats["canonical_merged"] += 1
-            else:
-                # Create new canonical witness
-                canonical = await self._create_canonical(
+        for idx, witness in enumerate(witnesses):
+            try:
+                # Try to find existing canonical witness
+                canonical, match_type, confidence = await self.find_canonical_witness(
                     db=db,
                     matter_id=matter_id,
-                    witness_input=WitnessInput(
-                        full_name=witness.full_name,
-                        role=witness.role.value if witness.role else "other",
-                        importance=witness.importance.value if witness.importance else "medium",
-                        observation=witness.observation,
-                        source_page=witness.source_page,
-                        email=witness.email,
-                        phone=witness.phone,
-                        address=witness.address,
-                        confidence_score=witness.confidence_score,
-                        relevance=witness.relevance.value if witness.relevance else None,
-                        relevance_reason=witness.relevance_reason
-                    ),
-                    document_id=witness.document_id,
-                    filename=witness.document.filename if witness.document else "Unknown"
+                    name=witness.full_name,
+                    role=witness.role.value if witness.role else None,
+                    observation=witness.observation,
+                    use_embeddings=False,  # Skip embeddings for speed
+                    use_ai_verification=False  # Skip AI verification for speed
                 )
-                witness.canonical_witness_id = canonical.id
-                stats["canonical_created"] += 1
+
+                if canonical:
+                    # Merge into existing canonical
+                    logger.debug(
+                        f"Witness {idx+1}/{len(witnesses)}: '{witness.full_name}' "
+                        f"matched to '{canonical.full_name}' via {match_type} ({confidence:.2f})"
+                    )
+                    canonical = await self._merge_into_canonical(
+                        db=db,
+                        canonical=canonical,
+                        witness_input=WitnessInput(
+                            full_name=witness.full_name,
+                            role=witness.role.value if witness.role else "other",
+                            importance=witness.importance.value if witness.importance else "medium",
+                            observation=witness.observation,
+                            source_page=witness.source_page,
+                            email=witness.email,
+                            phone=witness.phone,
+                            address=witness.address,
+                            confidence_score=witness.confidence_score,
+                            relevance=witness.relevance.value if witness.relevance else None,
+                            relevance_reason=witness.relevance_reason
+                        ),
+                        document_id=witness.document_id,
+                        filename=witness.document.filename if witness.document else "Unknown"
+                    )
+                    witness.canonical_witness_id = canonical.id
+                    stats["canonical_merged"] += 1
+                else:
+                    # Create new canonical witness
+                    logger.debug(
+                        f"Witness {idx+1}/{len(witnesses)}: '{witness.full_name}' "
+                        f"creating new canonical"
+                    )
+                    canonical = await self._create_canonical(
+                        db=db,
+                        matter_id=matter_id,
+                        witness_input=WitnessInput(
+                            full_name=witness.full_name,
+                            role=witness.role.value if witness.role else "other",
+                            importance=witness.importance.value if witness.importance else "medium",
+                            observation=witness.observation,
+                            source_page=witness.source_page,
+                            email=witness.email,
+                            phone=witness.phone,
+                            address=witness.address,
+                            confidence_score=witness.confidence_score,
+                            relevance=witness.relevance.value if witness.relevance else None,
+                            relevance_reason=witness.relevance_reason
+                        ),
+                        document_id=witness.document_id,
+                        filename=witness.document.filename if witness.document else "Unknown"
+                    )
+                    witness.canonical_witness_id = canonical.id
+                    stats["canonical_created"] += 1
+
+            except Exception as e:
+                logger.error(
+                    f"Error processing witness {idx+1}/{len(witnesses)} "
+                    f"(id={witness.id}, name='{witness.full_name}'): {e}"
+                )
+                stats["errors"] += 1
+                # Continue processing other witnesses instead of failing completely
+                continue
 
         await db.commit()
 
