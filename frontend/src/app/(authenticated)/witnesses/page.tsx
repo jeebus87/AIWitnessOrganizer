@@ -157,7 +157,8 @@ export default function WitnessesPage() {
       mutateCanonical();
     } catch (err) {
       console.error("Recanonicalization failed:", err);
-      toast.error("Failed to merge duplicates. Please try again.");
+      const errorMessage = err instanceof Error ? err.message : "Unknown error";
+      toast.error(`Failed to merge duplicates: ${errorMessage}`);
     } finally {
       setIsRecanonicaliizing(false);
     }
