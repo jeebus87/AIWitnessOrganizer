@@ -70,7 +70,17 @@ export function LegalResearchDialog({
         })
         .catch((err) => {
           console.error("Failed to generate legal research:", err);
-          toast.error("Failed to generate legal research results");
+          // Show specific error message based on error type
+          const errorMsg = err?.response?.data?.detail || err?.message || "";
+          if (errorMsg.includes("rate limit") || errorMsg.includes("429")) {
+            toast.error("AI service busy. Please wait a minute and try again.");
+          } else if (errorMsg.includes("unavailable") || errorMsg.includes("503")) {
+            toast.error("Service temporarily unavailable. Please try again in a few minutes.");
+          } else if (errorMsg.includes("timeout") || errorMsg.includes("504")) {
+            toast.error("Request timed out. Please try again.");
+          } else {
+            toast.error("Failed to generate legal research. Please try again.");
+          }
         })
         .finally(() => {
           setLoading(false);

@@ -638,8 +638,32 @@ async def generate_legal_research(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Failed to generate legal research for job {job_id}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate legal research: {str(e)}")
+        error_msg = str(e)
+        logger.exception(f"Failed to generate legal research for job {job_id}: {error_msg}")
+
+        # Provide more specific error messages based on common failure modes
+        if "throttl" in error_msg.lower() or "quota" in error_msg.lower() or "rate" in error_msg.lower():
+            raise HTTPException(
+                status_code=429,
+                detail="AI service rate limit reached. Please wait a minute and try again."
+            )
+        elif "bedrock" in error_msg.lower() or "aws" in error_msg.lower():
+            raise HTTPException(
+                status_code=503,
+                detail="AI service temporarily unavailable. Please try again in a few minutes."
+            )
+        elif "courtlistener" in error_msg.lower() or "httpx" in error_msg.lower():
+            raise HTTPException(
+                status_code=503,
+                detail="Legal research database temporarily unavailable. Please try again."
+            )
+        elif "timeout" in error_msg.lower():
+            raise HTTPException(
+                status_code=504,
+                detail="Request timed out. Please try again."
+            )
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to generate legal research: {error_msg}")
 
 
 @router.post("/{research_id}/approve")
