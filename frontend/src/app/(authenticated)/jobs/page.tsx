@@ -115,6 +115,7 @@ export default function JobsPage() {
   const [showArchived, setShowArchived] = useState(false);
   const [legalResearchJobId, setLegalResearchJobId] = useState<number | null>(null);
   const [pendingResearch, setPendingResearch] = useState<PendingLegalResearchItem[]>([]);
+  const [dismissedJobIds, setDismissedJobIds] = useState<Set<number>>(new Set());
 
   const {
     data: jobsResponse,
@@ -135,22 +136,26 @@ export default function JobsPage() {
 
   const jobs = jobsResponse?.jobs;
 
-  // Check for pending legal research when jobs load
+  // Check for pending legal research when jobs load (only runs once when jobs first load)
   useEffect(() => {
     if (token && jobs) {
       api.getPendingLegalResearch(token)
         .then((response) => {
           setPendingResearch(response.items || []);
-          // Auto-show dialog for the first pending research
-          if (response.items && response.items.length > 0 && !legalResearchJobId) {
-            setLegalResearchJobId(response.items[0].job_id);
+          // Auto-show dialog for the first pending research that hasn't been dismissed
+          if (response.items && response.items.length > 0) {
+            const firstUndismissed = response.items.find(item => !dismissedJobIds.has(item.job_id));
+            if (firstUndismissed && !legalResearchJobId) {
+              setLegalResearchJobId(firstUndismissed.job_id);
+            }
           }
         })
         .catch((err) => {
           console.error("Failed to fetch pending legal research:", err);
         });
     }
-  }, [token, jobs, legalResearchJobId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, jobs]); // Intentionally exclude legalResearchJobId and dismissedJobIds to prevent re-triggering
 
   // Debug logging for job data
   useEffect(() => {
@@ -623,7 +628,11 @@ export default function JobsPage() {
         <LegalResearchDialog
           open={legalResearchJobId !== null}
           onOpenChange={(open) => {
-            if (!open) setLegalResearchJobId(null);
+            if (!open) {
+              // Track this job as dismissed so it won't auto-reopen
+              setDismissedJobIds(prev => new Set(prev).add(legalResearchJobId));
+              setLegalResearchJobId(null);
+            }
           }}
           jobId={legalResearchJobId}
           token={token}
