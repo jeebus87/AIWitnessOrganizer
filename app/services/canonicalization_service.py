@@ -551,6 +551,7 @@ class CanonicalizationService:
         - "John Carroll" vs "John Mike Carroll" (John overlaps)
         - "Mike Carroll" vs "John Mike Carroll" (Mike overlaps as middle name)
         - "Mike Carroll" vs "Michael Carroll" (nickname match)
+        - "FNU Carroll" vs "John Carroll" (FNU = First Name Unknown, wildcard match)
 
         Returns:
             Tuple of (is_match: bool, confidence: float)
@@ -572,6 +573,26 @@ class CanonicalizationService:
         # Remove empty strings
         first1_tokens.discard("")
         first2_tokens.discard("")
+
+        # Check for FNU/LNU (First/Last Name Unknown) - legal placeholders
+        # These act as wildcards - if one name has FNU, match on last name alone
+        unknown_placeholders = {"fnu", "lnu", "nmi", "nmn", "unk", "unknown"}
+        has_placeholder1 = bool(first1_tokens & unknown_placeholders)
+        has_placeholder2 = bool(first2_tokens & unknown_placeholders)
+
+        if has_placeholder1 or has_placeholder2:
+            # One name has FNU/LNU - match based on last name alone
+            # Higher confidence if the other name has actual first name info
+            other_has_real_name = (
+                (has_placeholder1 and first2_tokens - unknown_placeholders) or
+                (has_placeholder2 and first1_tokens - unknown_placeholders)
+            )
+            if other_has_real_name:
+                logger.info(
+                    f"FNU/LNU wildcard match: '{name1}' <-> '{name2}' "
+                    f"(same last name '{parts1['last']}')"
+                )
+                return True, 0.85  # Slightly lower confidence for FNU matches
 
         # Direct token overlap (e.g., "John" in both)
         if first1_tokens & first2_tokens:
