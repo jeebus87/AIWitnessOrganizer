@@ -560,7 +560,19 @@ async def generate_legal_research(
             }
 
         except Exception as batch_error:
-            logger.error(f"Failed to submit batch job: {batch_error}")
+            error_str = str(batch_error)
+            logger.error(f"Failed to submit batch job: {error_str}")
+
+            # Determine specific error message
+            if "BEDROCK_BATCH_ROLE_ARN" in error_str:
+                warning_msg = "AI analysis unavailable - batch processing not configured (missing BEDROCK_BATCH_ROLE_ARN)"
+            elif "AccessDenied" in error_str or "permission" in error_str.lower():
+                warning_msg = "AI analysis unavailable - AWS permissions issue"
+            elif "S3" in error_str or "s3" in error_str:
+                warning_msg = "AI analysis unavailable - S3 storage issue"
+            else:
+                warning_msg = f"AI analysis unavailable - {error_str[:100]}"
+
             # If batch submission fails, fall back to returning preliminary results
             # Update status to READY so user can see something
             research_record.status = LegalResearchStatus.READY
@@ -594,7 +606,7 @@ async def generate_legal_research(
                 "results": formatted_results,
                 "selected_ids": [],
                 "created_at": research_record.created_at.isoformat() if research_record.created_at else None,
-                "warning": "AI analysis unavailable - showing basic results"
+                "warning": warning_msg
             }
 
     except HTTPException:
