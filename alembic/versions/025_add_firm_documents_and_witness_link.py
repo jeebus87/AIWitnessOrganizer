@@ -17,62 +17,72 @@ depends_on = None
 
 
 def upgrade():
-    # Create firm_documents table (shared with AIDiscoveryDrafter)
-    op.create_table(
-        'firm_documents',
-        sa.Column('id', sa.Integer(), primary_key=True, index=True),
-        sa.Column('organization_id', sa.Integer(), sa.ForeignKey('organizations.id'), nullable=False, index=True),
+    # Check if firm_documents table already exists (may be created by AIDiscoveryDrafter)
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_tables = inspector.get_table_names()
 
-        # Clio references
-        sa.Column('clio_document_id', sa.String(255), nullable=False, index=True),
-        sa.Column('clio_matter_id', sa.String(255), nullable=True, index=True),
-        sa.Column('clio_folder_path', sa.String(1000), nullable=True),
+    if 'firm_documents' not in existing_tables:
+        # Create firm_documents table (shared with AIDiscoveryDrafter)
+        op.create_table(
+            'firm_documents',
+            sa.Column('id', sa.Integer(), primary_key=True, index=True),
+            sa.Column('organization_id', sa.Integer(), sa.ForeignKey('organizations.id'), nullable=False, index=True),
 
-        # File metadata
-        sa.Column('file_name', sa.String(500), nullable=False),
-        sa.Column('file_size', sa.Integer(), nullable=True),
-        sa.Column('content_type', sa.String(100), nullable=True),
-        sa.Column('content_hash', sa.String(64), nullable=False),
+            # Clio references
+            sa.Column('clio_document_id', sa.String(255), nullable=False, index=True),
+            sa.Column('clio_matter_id', sa.String(255), nullable=True, index=True),
+            sa.Column('clio_folder_path', sa.String(1000), nullable=True),
 
-        # Parsed content
-        sa.Column('extracted_text', sa.Text(), nullable=True),
-        sa.Column('extraction_method', sa.String(255), nullable=True),
-        sa.Column('page_count', sa.Integer(), nullable=True),
+            # File metadata
+            sa.Column('file_name', sa.String(500), nullable=False),
+            sa.Column('file_size', sa.Integer(), nullable=True),
+            sa.Column('content_type', sa.String(100), nullable=True),
+            sa.Column('content_hash', sa.String(64), nullable=False),
 
-        # Hybrid PDF processing metadata
-        sa.Column('pages_with_text', sa.Integer(), nullable=True),
-        sa.Column('pages_with_ocr', sa.Integer(), nullable=True),
+            # Parsed content
+            sa.Column('extracted_text', sa.Text(), nullable=True),
+            sa.Column('extraction_method', sa.String(255), nullable=True),
+            sa.Column('page_count', sa.Integer(), nullable=True),
 
-        # AI analysis
-        sa.Column('document_summary', sa.Text(), nullable=True),
-        sa.Column('document_type', sa.String(100), nullable=True),
+            # Hybrid PDF processing metadata
+            sa.Column('pages_with_text', sa.Integer(), nullable=True),
+            sa.Column('pages_with_ocr', sa.Integer(), nullable=True),
 
-        # Timestamps from Clio
-        sa.Column('clio_created_at', sa.DateTime(), nullable=True),
-        sa.Column('clio_updated_at', sa.DateTime(), nullable=True),
+            # AI analysis
+            sa.Column('document_summary', sa.Text(), nullable=True),
+            sa.Column('document_type', sa.String(100), nullable=True),
 
-        # Our timestamps
-        sa.Column('parsed_at', sa.DateTime(), nullable=True),
-        sa.Column('created_at', sa.DateTime(), server_default=sa.func.now(), nullable=False),
-        sa.Column('updated_at', sa.DateTime(), server_default=sa.func.now(), nullable=False),
-    )
+            # Timestamps from Clio
+            sa.Column('clio_created_at', sa.DateTime(), nullable=True),
+            sa.Column('clio_updated_at', sa.DateTime(), nullable=True),
 
-    # Add firm_document_id column to witnesses table
-    op.add_column(
-        'witnesses',
-        sa.Column('firm_document_id', sa.Integer(), nullable=True)
-    )
+            # Our timestamps
+            sa.Column('parsed_at', sa.DateTime(), nullable=True),
+            sa.Column('created_at', sa.DateTime(), server_default=sa.func.now(), nullable=False),
+            sa.Column('updated_at', sa.DateTime(), server_default=sa.func.now(), nullable=False),
+        )
 
-    # Add index for the new column
-    op.create_index('ix_witnesses_firm_document_id', 'witnesses', ['firm_document_id'])
+    # Check if column already exists
+    existing_columns = [col['name'] for col in inspector.get_columns('witnesses')]
 
-    # Add foreign key constraint
-    op.create_foreign_key(
-        'fk_witnesses_firm_document_id',
-        'witnesses', 'firm_documents',
-        ['firm_document_id'], ['id'],
-        ondelete='SET NULL'
-    )
+    if 'firm_document_id' not in existing_columns:
+        # Add firm_document_id column to witnesses table
+        op.add_column(
+            'witnesses',
+            sa.Column('firm_document_id', sa.Integer(), nullable=True)
+        )
+
+        # Add index for the new column
+        op.create_index('ix_witnesses_firm_document_id', 'witnesses', ['firm_document_id'])
+
+        # Add foreign key constraint
+        op.create_foreign_key(
+            'fk_witnesses_firm_document_id',
+            'witnesses', 'firm_documents',
+            ['firm_document_id'], ['id'],
+            ondelete='SET NULL'
+        )
 
 
 def downgrade():
